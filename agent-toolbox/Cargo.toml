@@ -1,0 +1,20 @@
+[package]
+name = "agent-toolbox"
+version = "0.1.0"
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+alacritty_terminal = "0.26"
+arboard = "3"
+block2 = "0.6"
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-virtualization = "0.3"
+polling = "3"
+slint = { version = "1.18.1", features = ["unstable-winit-030"] }
+
+[build-dependencies]
+slint-build = "1.18.1"

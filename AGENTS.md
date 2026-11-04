@@ -13,6 +13,9 @@ UI toolkit, native bridge, collector, and network dataplane remain unresolved. D
 
 ARCHITECTURE.md file describes the overall architecture of the application and its architectural decisions, whereas DESIGN.md describes how to implement UI / UX based items in this application. Don't just read the files each time, only if they may be necessary for the task at hand.
 
+## Implementation
+If useful or necessary, use external crates where possible to deliver functionality and features to the app. Rather than reinventing the wheel for each and every functionality. If in doubt, ask the user if a particular crate shall be used or not.
+
 ## Testing and Verification
 If not explicitly requested in a prompt/session, this project does not need the addition of tests. So, no UI/magic tests shall be generated with the exception if specifically requested for a certain feature. This also accounts for general analysis. Checking if the code works shall be done via static analysis as well as local tools such as cargo check or cargo build (preferably cargo check). Along with "no tests": don't run the app to do some verification. Instruct the user how to verify the functionality manually. You are only allowed to run analyzers and build / checks as well as other static analytics tools and formatting tools.
 

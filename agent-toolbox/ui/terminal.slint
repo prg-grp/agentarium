@@ -1,0 +1,265 @@
+// Agent terminal, see design/terminal-running.md.
+
+import { Theme } from "theme.slint";
+import { TermLine, TermSpan } from "types.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+
+// State of the running terminal session, written from Rust (src/terminal.rs).
+export global TerminalSession {
+    in property <[TermLine]> lines;
+    in property <int> cursor-row;
+    in property <int> cursor-col;
+    in property <bool> cursor-visible: true;
+    in property <bool> exited;
+    // Shown in the exit bar when no session is attached.
+    in property <string> exit-message;
+    // Lines scrolled back from the latest output.
+    in property <int> scroll-offset;
+    in property <string> cwd-label: "~";
+    // Highlighted cells of the current mouse selection.
+    in property <[TermSpan]> selection;
+
+    // Raw key event; Rust maps it to bytes. Returns whether the key was used.
+    callback key(text: string, control: bool, alt: bool, meta: bool, shift: bool) -> bool;
+    callback resized(cols: int, rows: int);
+    // Positive values scroll back into older output.
+    callback scrolled(lines: int);
+    callback jump-to-latest();
+    // Mouse position in cell units; the fraction tells which half of the cell.
+    callback select-start(col: float, row: float);
+    callback select-update(col: float, row: float);
+}
+
+export component TerminalView {
+    init => {
+        focus.focus();
+    }
+
+    VerticalLayout {
+        Rectangle {
+            height: 36px;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 22px;
+                spacing: 4px;
+
+                Text {
+                    text: "Agent session in";
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    text: TerminalSession.cwd-label;
+                    color: Theme.tx2;
+                    font-family: Theme.mono;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: "Boot log";
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Rectangle {
+            vertical-stretch: 1;
+            background: Theme.well;
+
+            // 100 glyphs, so the rounded measured width doesn't drift the
+            // cursor away from the text over many columns.
+            measure := Text {
+                text: "MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMM";
+                font-family: Theme.mono;
+                font-size: Theme.font-mono;
+                visible: false;
+            }
+
+            grid := Rectangle {
+                property <length> cell-width: measure.preferred-width / 100;
+                property <length> cell-height: measure.preferred-height;
+                property <int> cols: cell-width > 0 ? max(2, floor(self.width / cell-width)) : 80;
+                property <int> rows: cell-height > 0 ? max(1, floor(self.height / cell-height)) : 24;
+                property <length> scroll-rest;
+
+                x: 22px;
+                y: 18px;
+                width: parent.width - 44px;
+                height: parent.height - 36px;
+                clip: true;
+
+                init => {
+                    TerminalSession.resized(self.cols, self.rows);
+                }
+                changed cols => {
+                    TerminalSession.resized(self.cols, self.rows);
+                }
+                changed rows => {
+                    TerminalSession.resized(self.cols, self.rows);
+                }
+
+                focus := FocusScope {
+                    key-pressed(event) => {
+                        if TerminalSession.key(event.text, event.modifiers.control, event.modifiers.alt, event.modifiers.meta, event.modifiers.shift) {
+                            return accept;
+                        }
+                        return reject;
+                    }
+                }
+
+                for line[row] in TerminalSession.lines: Rectangle {
+                    x: 0;
+                    y: row * grid.cell-height;
+                    width: grid.width;
+                    height: grid.cell-height;
+
+                    for run in line.runs: Rectangle {
+                        x: run.col * grid.cell-width;
+                        y: 0;
+                        width: run.width * grid.cell-width;
+                        height: grid.cell-height;
+                        background: run.bg;
+
+                        Text {
+                            x: 0;
+                            y: 0;
+                            text: run.text;
+                            color: run.fg;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            font-weight: run.bold ? 700 : 400;
+                            font-italic: run.italic;
+                        }
+
+                        if run.underline: Rectangle {
+                            y: parent.height - 2px;
+                            height: 1px;
+                            background: run.fg;
+                        }
+                    }
+                }
+
+                for span in TerminalSession.selection: Rectangle {
+                    x: span.col * grid.cell-width;
+                    y: span.row * grid.cell-height;
+                    width: span.width * grid.cell-width;
+                    height: grid.cell-height;
+                    background: Theme.acc.with-alpha(0.3);
+                }
+
+                if TerminalSession.cursor-visible && TerminalSession.scroll-offset == 0 && !TerminalSession.exited: Rectangle {
+                    x: TerminalSession.cursor-col * grid.cell-width;
+                    y: TerminalSession.cursor-row * grid.cell-height;
+                    width: grid.cell-width;
+                    height: grid.cell-height;
+                    background: focus.has-focus ? Theme.terminal-fg.with-alpha(0.7) : transparent;
+                    border-width: focus.has-focus ? 0px : 1px;
+                    border-color: Theme.terminal-fg;
+                }
+
+                TouchArea {
+                    mouse-cursor: text;
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            focus.focus();
+                            // Shift+click extends the selection, also after scrolling.
+                            if event.modifiers.shift {
+                                TerminalSession.select-update(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
+                            } else {
+                                TerminalSession.select-start(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
+                            }
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            TerminalSession.select-update(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
+                        }
+                    }
+                    scroll-event(event) => {
+                        grid.scroll-rest += event.delta-y;
+                        if grid.scroll-rest >= grid.cell-height || grid.scroll-rest <= -grid.cell-height {
+                            let lines = grid.scroll-rest > 0 ? floor(grid.scroll-rest / grid.cell-height) : -floor(-grid.scroll-rest / grid.cell-height);
+                            grid.scroll-rest -= lines * grid.cell-height;
+                            TerminalSession.scrolled(lines);
+                            // Keep the selection end under the pointer while dragging.
+                            if self.pressed {
+                                TerminalSession.select-update(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
+                            }
+                        }
+                        return accept;
+                    }
+                }
+            }
+
+            if TerminalSession.scroll-offset > 0: AppButton {
+                x: parent.width - self.width - 22px;
+                y: parent.height - self.height - 16px;
+                kind: ButtonKind.neutral;
+                compact: true;
+                text: "Jump to latest";
+                clicked => {
+                    TerminalSession.jump-to-latest();
+                    focus.focus();
+                }
+            }
+        }
+
+        if TerminalSession.exited: Rectangle {
+            height: 64px;
+            background: Theme.panel;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.line2;
+            }
+
+            HorizontalLayout {
+                padding-left: 22px;
+                padding-right: 22px;
+                spacing: 14px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("icons/square-x.svg");
+                        colorize: Theme.tx2;
+                        width: 18px;
+                        height: 18px;
+                        accessible-role: none;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    Text {
+                        text: TerminalSession.exit-message;
+                        color: Theme.tx;
+                    }
+
+                    Text {
+                        text: "Output above is kept until the next start.";
+                        color: Theme.tx3;
+                        font-size: Theme.font-small;
+                    }
+                }
+            }
+        }
+    }
+}

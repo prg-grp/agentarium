@@ -10,3 +10,7 @@ rustflags = [
 rustflags = [
     "-C", "link-arg=/STACK:8000000"
 ]
+
+# Virtualization.framework needs the virtualization entitlement, so sign before running.
+[target.aarch64-apple-darwin]
+runner = "scripts/codesign-run.sh"

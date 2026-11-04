@@ -21,4 +21,28 @@ export struct InstanceItem {
     agent-status: StatusReading,
     monitoring: StatusReading,
     pending-changes: int,
+    has-terminal: bool,
+}
+
+// One styled stretch of terminal text, starting at column `col`.
+export struct TermRun {
+    col: int,
+    width: int,
+    text: string,
+    fg: color,
+    bg: color,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+export struct TermLine {
+    runs: [TermRun],
+}
+
+// Selected cells on one visible row.
+export struct TermSpan {
+    row: int,
+    col: int,
+    width: int,
 }

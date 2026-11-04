@@ -35,6 +35,10 @@ export global Theme {
     out property <length> font-meta: 12px;
     out property <int> weight-regular: 400;
     out property <int> weight-medium: 500;
+    // SF Mono can't be selected by family name on macOS, so the terminal uses Menlo.
+    out property <string> mono: "Menlo";
+    out property <length> font-mono: 12.5px;
+    out property <color> terminal-fg: #D6DCE5;
 
     // Shape and size
     out property <length> radius-window: 12px;

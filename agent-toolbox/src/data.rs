@@ -1,7 +1,8 @@
 //! Temporary in-memory data until real storage exists.
 //!
-//! The app starts with no instances. Set `AGENT_TOOLBOX_MOCK=sample` to load the
-//! sample instances from the design mockups.
+//! The app starts with one predefined instance, the demo VM. Set
+//! `AGENT_TOOLBOX_MOCK=sample` to add the sample instances from the design
+//! mockups, or `AGENT_TOOLBOX_MOCK=empty` to start without instances.
 
 pub enum InstanceState {
     Running,
@@ -31,6 +32,30 @@ pub struct Instance {
     pub agent_status: Reading,
     pub monitoring: Reading,
     pub pending_changes: i32,
+    pub has_terminal: bool,
+}
+
+pub const DEMO_VM_ID: &str = "demo-vm";
+
+/// A statically defined VM, built by `make guest`.
+pub struct VmSpec {
+    pub cpus: usize,
+    pub memory_mib: u64,
+    pub kernel: &'static str,
+    /// Raw ext4 image, attached read-write as the guest's /dev/vda.
+    pub rootfs: &'static str,
+    pub command_line: &'static str,
+}
+
+pub fn demo_vm() -> VmSpec {
+    VmSpec {
+        cpus: 2,
+        memory_mib: 1024,
+        // The guest is built into the workspace target directory, one level above this crate.
+        kernel: concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image"),
+        rootfs: concat!(env!("CARGO_MANIFEST_DIR"), "/../target/rootfs/base.ext4"),
+        command_line: "console=hvc0 root=/dev/vda rw",
+    }
 }
 
 const fn reading(value: &'static str, tone: Tone) -> Reading {
@@ -38,11 +63,28 @@ const fn reading(value: &'static str, tone: Tone) -> Reading {
 }
 
 pub fn instances() -> Vec<Instance> {
-    if std::env::var("AGENT_TOOLBOX_MOCK").as_deref() != Ok("sample") {
+    let mock = std::env::var("AGENT_TOOLBOX_MOCK").unwrap_or_default();
+    if mock == "empty" {
         return Vec::new();
     }
 
-    vec![
+    let mut instances = vec![Instance {
+        id: DEMO_VM_ID,
+        name: DEMO_VM_ID,
+        agent: "Shell (no agent)",
+        state: InstanceState::Stopped,
+        summary: "Stopped",
+        vm: reading("Stopped", Tone::Neutral),
+        agent_status: reading("Not running", Tone::Neutral),
+        monitoring: reading("Not running", Tone::Neutral),
+        pending_changes: 0,
+        has_terminal: true,
+    }];
+    if mock != "sample" {
+        return instances;
+    }
+
+    instances.extend([
         Instance {
             id: "api-refactor",
             name: "api-refactor",
@@ -53,6 +95,7 @@ pub fn instances() -> Vec<Instance> {
             agent_status: reading("Running", Tone::Ok),
             monitoring: reading("Running", Tone::Ok),
             pending_changes: 2,
+            has_terminal: false,
         },
         Instance {
             id: "scraper-lab",
@@ -64,6 +107,7 @@ pub fn instances() -> Vec<Instance> {
             agent_status: reading("Not running in maintenance", Tone::Neutral),
             monitoring: reading("Running", Tone::Ok),
             pending_changes: 0,
+            has_terminal: false,
         },
         Instance {
             id: "infra-audit",
@@ -75,6 +119,7 @@ pub fn instances() -> Vec<Instance> {
             agent_status: reading("Not started", Tone::Neutral),
             monitoring: reading("Failed to start", Tone::Bad),
             pending_changes: 0,
+            has_terminal: false,
         },
         Instance {
             id: "docs-site",
@@ -86,6 +131,8 @@ pub fn instances() -> Vec<Instance> {
             agent_status: reading("Not running", Tone::Neutral),
             monitoring: reading("Not running", Tone::Neutral),
             pending_changes: 0,
+            has_terminal: false,
         },
-    ]
+    ]);
+    instances
 }

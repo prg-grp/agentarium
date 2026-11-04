@@ -1,11 +1,12 @@
 // Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
 import { Theme } from "theme.slint";
-import { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem } from "types.slint";
+import { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
+import { TerminalSession, TerminalView } from "terminal.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem }
+export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, TerminalSession }
 
 // One of the three readings in the instance header.
 component StatusCell {
@@ -476,8 +477,12 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                // Tab content (screens come in later steps)
-                Rectangle {
+                // Tab content (other screens come in later steps)
+                if current-tab == 0 && current.has-terminal: TerminalView {
+                    vertical-stretch: 1;
+                }
+
+                if current-tab != 0 || !current.has-terminal: Rectangle {
                     vertical-stretch: 1;
 
                     Text {
