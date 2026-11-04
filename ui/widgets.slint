@@ -1,0 +1,92 @@
+// Shared controls used across screens.
+
+import { Theme } from "theme.slint";
+
+export enum ButtonKind { primary, neutral, ghost, danger }
+
+// Button styles from DESIGN.md "Buttons and emphasis". At most one primary per view.
+export component AppButton {
+    in property <string> text;
+    in property <image> icon;
+    // Accessible name for icon-only buttons.
+    in property <string> label;
+    in property <ButtonKind> kind: ButtonKind.neutral;
+    in property <bool> compact;
+    callback clicked();
+
+    property <color> fg: kind == ButtonKind.primary ? Theme.on-acc
+        : kind == ButtonKind.danger ? Theme.bad
+        : kind == ButtonKind.ghost ? Theme.tx2
+        : Theme.tx;
+
+    height: compact ? 26px : Theme.control-height;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+    forward-focus: focus;
+    accessible-role: button;
+    accessible-label: label != "" ? label : text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Rectangle {
+        border-radius: Theme.radius-control;
+        border-width: kind == ButtonKind.neutral ? 1px : 0px;
+        border-color: Theme.line2;
+        background: kind == ButtonKind.primary ? (touch.has-hover ? Theme.acc.brighter(8%) : Theme.acc)
+            : kind == ButtonKind.neutral ? (touch.has-hover ? Theme.raise.brighter(15%) : Theme.raise)
+            : (touch.has-hover ? Theme.hover : transparent);
+    }
+
+    Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        visible: focus.has-focus;
+        border-radius: Theme.radius-control + 3px;
+        border-width: 2px;
+        border-color: Theme.acc;
+    }
+
+    HorizontalLayout {
+        padding-left: text == "" ? 6px : (compact ? 10px : 14px);
+        padding-right: self.padding-left;
+        spacing: 7px;
+
+        if icon.width > 0: VerticalLayout {
+            alignment: center;
+            Image {
+                source: icon;
+                colorize: fg;
+                width: 16px;
+                height: 16px;
+            }
+        }
+
+        if text != "": Text {
+            text: root.text;
+            color: fg;
+            font-size: compact ? Theme.font-small : Theme.font-body;
+            font-weight: kind == ButtonKind.ghost || kind == ButtonKind.danger ? Theme.weight-regular : Theme.weight-medium;
+            vertical-alignment: center;
+        }
+    }
+
+    focus := FocusScope {
+        key-pressed(event) => {
+            if event.text == " " || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

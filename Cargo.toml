@@ -6,7 +6,7 @@ edition = "2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-slint = "1.18.1"
+slint = { version = "1.18.1", features = ["unstable-winit-030"] }
 
 [build-dependencies]
 slint-build = "1.18.1"

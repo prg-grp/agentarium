@@ -1,17 +1,493 @@
-import { Button, VerticalBox } from "std-widgets.slint";
+// Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
-export component AppWindow inherits Window {
-    in-out property <int> counter: 42;
-    callback request-increase-value();
-    VerticalBox {
-        Text {
-            text: "Counter: \{root.counter}";
+import { Theme } from "theme.slint";
+import { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem } from "types.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+import { EmptyState } from "empty-state.slint";
+
+export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem }
+
+// One of the three readings in the instance header.
+component StatusCell {
+    in property <image> icon;
+    in property <string> label;
+    in property <StatusReading> reading;
+
+    horizontal-stretch: 0;
+
+    Rectangle {
+        x: 0;
+        width: 1px;
+        height: 36px;
+        background: Theme.line;
+    }
+
+    HorizontalLayout {
+        padding-left: 22px;
+        padding-right: 22px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: icon;
+                colorize: reading.tone == Tone.neutral ? Theme.tx3 : Theme.tone-color(reading.tone);
+                width: 18px;
+                height: 18px;
+                accessible-role: none;
+            }
         }
 
-        Button {
-            text: "Increase value";
-            clicked => {
-                root.request-increase-value();
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: label;
+                font-size: Theme.font-meta;
+                color: Theme.tx3;
+            }
+
+            Text {
+                text: reading.value;
+                font-size: Theme.font-body;
+                color: Theme.tone-color(reading.tone);
+            }
+        }
+    }
+}
+
+export component AppWindow inherits Window {
+    in property <[InstanceItem]> instances;
+    in-out property <int> selected-index: 0;
+    in-out property <int> current-tab: 0;
+
+    callback create-instance();
+    callback instance-action(string, InstanceAction);
+    callback drag-window();
+
+    property <InstanceItem> current: instances[selected-index];
+    property <bool> in-maintenance: current.state == InstanceState.maintenance;
+
+    pure function state-icon(state: InstanceState) -> image {
+        if state == InstanceState.maintenance {
+            return @image-url("icons/tool.svg");
+        }
+        if state == InstanceState.startup-failed {
+            return @image-url("icons/alert-triangle.svg");
+        }
+        if state == InstanceState.agent-exited {
+            return @image-url("icons/square-x.svg");
+        }
+        if state == InstanceState.stopped {
+            return @image-url("icons/circle.svg");
+        }
+        if state == InstanceState.draft {
+            return @image-url("icons/pencil.svg");
+        }
+        return @image-url("icons/circle-dot.svg");
+    }
+
+    pure function state-color(state: InstanceState) -> color {
+        if state == InstanceState.running {
+            return Theme.ok;
+        }
+        if state == InstanceState.maintenance {
+            return Theme.warn;
+        }
+        if state == InstanceState.startup-failed {
+            return Theme.bad;
+        }
+        if state == InstanceState.draft {
+            return Theme.acc;
+        }
+        if state == InstanceState.agent-exited {
+            return Theme.tx2;
+        }
+        return Theme.tx3;
+    }
+
+    title: "Agent Toolbox";
+    background: Theme.bg;
+    default-font-size: Theme.font-body;
+    min-width: 1100px;
+    min-height: 640px;
+    preferred-width: 1280px;
+    preferred-height: 800px;
+
+    // Lets the window be moved by its top edge, since the title bar is transparent on macOS.
+    TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 28px;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.drag-window();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        // Sidebar
+        Rectangle {
+            width: Theme.sidebar-width;
+            background: Theme.panel;
+
+            Rectangle {
+                x: parent.width - 1px;
+                width: 1px;
+                background: Theme.line;
+            }
+
+            VerticalLayout {
+                padding-top: 38px;
+
+                HorizontalLayout {
+                    padding-left: 22px;
+                    padding-right: 14px;
+                    padding-bottom: 10px;
+
+                    Text {
+                        text: "Instances";
+                        color: Theme.tx2;
+                        font-weight: Theme.weight-medium;
+                        vertical-alignment: center;
+                    }
+
+                    AppButton {
+                        kind: ButtonKind.ghost;
+                        compact: true;
+                        icon: @image-url("icons/plus.svg");
+                        label: "New instance";
+                        clicked => {
+                            root.create-instance();
+                        }
+                    }
+                }
+
+                if instances.length == 0: HorizontalLayout {
+                    padding-left: 22px;
+                    padding-top: 6px;
+                    Text {
+                        text: "No instances yet";
+                        color: Theme.tx3;
+                        font-size: Theme.font-small;
+                    }
+                }
+
+                for item[index] in instances: HorizontalLayout {
+                    padding-left: 10px;
+                    padding-right: 10px;
+                    padding-top: 2px;
+                    padding-bottom: 2px;
+                    vertical-stretch: 0;
+
+                    Rectangle {
+                        property <bool> selected: index == root.selected-index;
+
+                        border-radius: Theme.radius-item;
+                        clip: true;
+                        background: selected ? Theme.raise : (item-touch.has-hover ? Theme.hover : transparent);
+                        accessible-role: list-item;
+                        accessible-label: item.name;
+                        accessible-description: item.summary;
+                        accessible-item-selected: selected;
+
+                        Rectangle {
+                            x: 0;
+                            width: 2px;
+                            visible: selected;
+                            background: item.state == InstanceState.maintenance ? Theme.warn : Theme.acc;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 10px;
+                            padding-bottom: 10px;
+                            spacing: 10px;
+
+                            VerticalLayout {
+                                alignment: start;
+                                padding-top: 2px;
+                                Image {
+                                    source: root.state-icon(item.state);
+                                    colorize: root.state-color(item.state);
+                                    width: 16px;
+                                    height: 16px;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            VerticalLayout {
+                                spacing: 3px;
+                                Text {
+                                    text: item.name;
+                                    color: Theme.tx;
+                                    font-weight: selected ? Theme.weight-medium : Theme.weight-regular;
+                                    overflow: elide;
+                                }
+
+                                Text {
+                                    text: item.summary;
+                                    font-size: Theme.font-meta;
+                                    color: item.state == InstanceState.running ? Theme.tx2 : root.state-color(item.state);
+                                    overflow: elide;
+                                }
+                            }
+                        }
+
+                        item-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.selected-index = index;
+                                root.current-tab = 0;
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                Rectangle {
+                    height: 48px;
+
+                    Rectangle {
+                        y: 0;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 22px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: @image-url("icons/adjustments-horizontal.svg");
+                                colorize: Theme.tx2;
+                                width: 16px;
+                                height: 16px;
+                                accessible-role: none;
+                            }
+                        }
+
+                        Text {
+                            text: "Preferences";
+                            color: Theme.tx2;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Main area
+        Rectangle {
+            horizontal-stretch: 1;
+
+            if instances.length == 0: EmptyState {
+                width: parent.width;
+                height: parent.height;
+                create => {
+                    root.create-instance();
+                }
+            }
+
+            if instances.length > 0: VerticalLayout {
+                width: parent.width;
+                height: parent.height;
+
+                // Instance header
+                HorizontalLayout {
+                    padding-left: 28px;
+                    padding-right: 28px;
+                    padding-top: 26px;
+                    padding-bottom: 24px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        padding-right: 24px;
+                        horizontal-stretch: 0;
+
+                        Text {
+                            text: current.name;
+                            font-size: Theme.font-title;
+                            font-weight: Theme.weight-medium;
+                            color: Theme.tx;
+                        }
+
+                        Text {
+                            text: current.agent;
+                            color: Theme.tx2;
+                        }
+                    }
+
+                    StatusCell {
+                        icon: @image-url("icons/server-2.svg");
+                        label: "Virtual machine";
+                        reading: current.vm;
+                    }
+
+                    StatusCell {
+                        icon: current.state == InstanceState.agent-exited ? @image-url("icons/square-x.svg")
+                            : current.state == InstanceState.startup-failed || in-maintenance ? @image-url("icons/player-pause.svg")
+                            : @image-url("icons/sparkles.svg");
+                        label: "Agent";
+                        reading: current.agent-status;
+                    }
+
+                    StatusCell {
+                        icon: @image-url("icons/heartbeat.svg");
+                        label: "Monitoring";
+                        reading: current.monitoring;
+                    }
+
+                    Rectangle {
+                        horizontal-stretch: 1;
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            if current.state == InstanceState.running || current.state == InstanceState.agent-exited || current.state == InstanceState.startup-failed: AppButton {
+                                kind: ButtonKind.ghost;
+                                text: "Restart in maintenance";
+                                icon: @image-url("icons/tool.svg");
+                                clicked => {
+                                    root.instance-action(current.id, InstanceAction.restart-maintenance);
+                                }
+                            }
+
+                            if current.state == InstanceState.stopped: AppButton {
+                                kind: ButtonKind.ghost;
+                                text: "Boot in maintenance";
+                                icon: @image-url("icons/tool.svg");
+                                clicked => {
+                                    root.instance-action(current.id, InstanceAction.boot-maintenance);
+                                }
+                            }
+
+                            if current.state != InstanceState.stopped && current.state != InstanceState.draft: AppButton {
+                                kind: ButtonKind.neutral;
+                                text: "Stop";
+                                icon: @image-url("icons/player-stop.svg");
+                                clicked => {
+                                    root.instance-action(current.id, InstanceAction.stop);
+                                }
+                            }
+
+                            if current.state == InstanceState.stopped: AppButton {
+                                kind: ButtonKind.primary;
+                                text: "Start";
+                                icon: @image-url("icons/player-play.svg");
+                                clicked => {
+                                    root.instance-action(current.id, InstanceAction.start);
+                                }
+                            }
+
+                            if current.state != InstanceState.draft: HorizontalLayout {
+                                padding-left: 4px;
+                                padding-right: 4px;
+                                spacing: 14px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 1px;
+                                        height: 22px;
+                                        background: Theme.line2;
+                                    }
+                                }
+
+                                AppButton {
+                                    kind: ButtonKind.danger;
+                                    text: "Delete";
+                                    icon: @image-url("icons/trash.svg");
+                                    clicked => {
+                                        root.instance-action(current.id, InstanceAction.delete);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Tabs
+                Rectangle {
+                    height: 44px;
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+
+                    HorizontalLayout {
+                        padding-left: 28px;
+                        spacing: 28px;
+                        alignment: start;
+
+                        for tab-name[tab-index] in ["Terminal", "Activity", "Settings"]: Rectangle {
+                            property <bool> active: tab-index == root.current-tab;
+
+                            accessible-role: tab;
+                            accessible-label: tab-name;
+                            accessible-item-selected: active;
+
+                            HorizontalLayout {
+                                spacing: 6px;
+
+                                Text {
+                                    text: tab-name;
+                                    color: active ? Theme.tx : Theme.tx2;
+                                    font-weight: active ? Theme.weight-medium : Theme.weight-regular;
+                                    vertical-alignment: center;
+                                }
+
+                                if tab-index == 2 && current.pending-changes > 0: Text {
+                                    text: "\{current.pending-changes} pending";
+                                    font-size: Theme.font-meta;
+                                    color: Theme.acc;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            Rectangle {
+                                y: parent.height - 2px;
+                                height: 2px;
+                                visible: active;
+                                background: in-maintenance ? Theme.warn : Theme.acc;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.current-tab = tab-index;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Tab content (screens come in later steps)
+                Rectangle {
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: current-tab == 0 ? "Terminal comes in a later step."
+                            : current-tab == 1 ? "Activity comes in a later step."
+                            : "Settings come in a later step.";
+                        color: Theme.tx3;
+                        font-size: Theme.font-small;
+                    }
+                }
             }
         }
     }

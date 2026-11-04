@@ -1,0 +1,64 @@
+// Design tokens from DESIGN.md. Use these instead of literal colors and sizes.
+
+import { Tone } from "types.slint";
+
+export global Theme {
+    // Surfaces
+    out property <color> bg: #101216;
+    out property <color> panel: #171A20;
+    out property <color> raise: #20252D;
+    out property <color> well: #0C0E12;
+    out property <color> hover: #ffffff0f;
+
+    // Lines
+    out property <color> line: #262C36;
+    out property <color> line2: #343C49;
+
+    // Text
+    out property <color> tx: #F0F3F7;
+    out property <color> tx2: #AAB4C3;
+    out property <color> tx3: #7C8696;
+
+    // Accent and status
+    out property <color> acc: #8BA7FF;
+    out property <color> on-acc: #101216;
+    out property <color> ok: #78C99A;
+    out property <color> warn: #E8BC6A;
+    out property <color> bad: #F08C92;
+
+    // Type
+    out property <length> font-title: 22px;
+    out property <length> font-dialog: 17px;
+    out property <length> font-section: 15px;
+    out property <length> font-body: 14px;
+    out property <length> font-small: 13px;
+    out property <length> font-meta: 12px;
+    out property <int> weight-regular: 400;
+    out property <int> weight-medium: 500;
+
+    // Shape and size
+    out property <length> radius-window: 12px;
+    out property <length> radius-item: 8px;
+    out property <length> radius-control: 7px;
+    out property <length> control-height: 32px;
+    out property <length> sidebar-width: 248px;
+
+    public pure function tone-color(tone: Tone) -> color {
+        if tone == Tone.ok {
+            return self.ok;
+        }
+        if tone == Tone.warn {
+            return self.warn;
+        }
+        if tone == Tone.bad {
+            return self.bad;
+        }
+        if tone == Tone.muted {
+            return self.tx3;
+        }
+        if tone == Tone.accent {
+            return self.acc;
+        }
+        return self.tx2;
+    }
+}

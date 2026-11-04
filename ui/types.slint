@@ -1,0 +1,24 @@
+// Data types shared between Rust and the UI. Re-exported from app-window.slint.
+
+export enum Tone { ok, warn, bad, neutral, muted, accent }
+
+export enum InstanceState { running, agent-exited, maintenance, startup-failed, stopped, draft }
+
+export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, delete }
+
+export struct StatusReading {
+    value: string,
+    tone: Tone,
+}
+
+export struct InstanceItem {
+    id: string,
+    name: string,
+    agent: string,
+    state: InstanceState,
+    summary: string,
+    vm: StatusReading,
+    agent-status: StatusReading,
+    monitoring: StatusReading,
+    pending-changes: int,
+}
