@@ -1,0 +1,13 @@
+[Unit]
+Description=Set the clock from the host
+DefaultDependencies=no
+Before=sysinit.target time-set.target
+Wants=time-set.target
+ConditionKernelCommandLine=agent_toolbox.time
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/clock-from-host
+
+[Install]
+WantedBy=sysinit.target

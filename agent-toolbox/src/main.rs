@@ -70,6 +70,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     session.on_resized(move |cols, rows| t.resize(cols, rows));
     let t = terminal.clone();
     session.on_scrolled(move |lines| t.scroll(lines));
+    let t = terminal.clone();
+    session.on_select_start(move |col, row| t.select_start(col, row));
+    let t = terminal.clone();
+    session.on_select_update(move |col, row| t.select_update(col, row));
     session.on_jump_to_latest(move || terminal.jump_to_latest());
 
     let ui_handle = ui.as_weak();

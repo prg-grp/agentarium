@@ -6,6 +6,7 @@
 
 use std::os::fd::{IntoRawFd, OwnedFd};
 use std::path::Path;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use block2::RcBlock;
 use objc2::AllocAnyThread;
@@ -63,7 +64,15 @@ impl Vm {
                 VZLinuxBootLoader::alloc(),
                 &file_url(spec.kernel),
             );
-            boot.setCommandLine(&NSString::from_str(spec.command_line));
+            // Linux guests get no usable hardware clock, so the guest sets its clock from this.
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_secs();
+            boot.setCommandLine(&NSString::from_str(&format!(
+                "{} agent_toolbox.time={now}",
+                spec.command_line
+            )));
 
             let disk = VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
                 VZDiskImageStorageDeviceAttachment::alloc(),

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Virtualization.framework gives Linux guests no usable hardware clock, so the app passes the
+# Mac's time at boot (kernel flag agent_toolbox.time=<unix seconds>). Seconds since the
+# kernel started are added on top.
+t=$(sed -n 's/.*agent_toolbox\.time=\([0-9]*\).*/\1/p' /proc/cmdline)
+[ -n "$t" ] && date -u -s "@$((t + $(cut -d. -f1 /proc/uptime)))" >/dev/null

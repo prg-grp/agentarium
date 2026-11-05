@@ -19,6 +19,8 @@ $(filter-out $(OUT)/base.ext4,$(IMAGES)): $(OUT)/base.ext4
 # Rebuilt when anything in its directory changes. The docker export is unpacked in an
 # Alpine container whose mkfs.ext4 writes a raw ext4 image sized to the contents plus
 # headroom; Virtualization.framework attaches it as a virtio-blk disk (/dev/vda).
+# /.dockerenv is dropped: with it, systemd thinks it runs in a Docker container and skips
+# kernel command line conditions, timesyncd and its clock floor.
 $(OUT)/%.ext4: $$(shell find $$* -type f) Makefile
 	docker build --platform linux/arm64 -t agent-toolbox/$* $*
 	mkdir -p $(OUT)
@@ -27,7 +29,7 @@ $(OUT)/%.ext4: $$(shell find $$* -type f) Makefile
 	trap 'docker rm $$cid >/dev/null' EXIT; \
 	docker export $$cid | docker run --rm -i -v "$(abspath $(OUT))":/out alpine:3.22 sh -euc '\
 	    apk add -q --no-cache e2fsprogs tar; \
-	    mkdir /r; tar -xf - -C /r; \
+	    mkdir /r; tar -xf - -C /r; rm -f /r/.dockerenv; \
 	    kb=$$(( $$(du -sk /r | cut -f1) + $(HEADROOM_MB) * 1024 )); \
 	    mkfs.ext4 -q -F -d /r /out/$*.ext4 $${kb}k'
 
