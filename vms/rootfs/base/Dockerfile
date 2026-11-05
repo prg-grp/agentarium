@@ -26,9 +26,13 @@ RUN mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d && \
     printf '[Service]\nExecStart=\nExecStart=-/usr/local/sbin/console-autologin $TERM\n' \
     > /etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf
 
-# Keep orchestrator's network configuration
-# RUN printf '[Match]\nName=eth0\n\n[Network]\nDHCP=no\nKeepConfiguration=yes\n' \
-#     > /etc/systemd/network/10-eth0.network
+# Network: the app runs the gateway (and DNS) at 192.168.127.1 on the virtio NIC and
+# forwards connections from the host. Static IPv4 only, so the app needs no DHCP server.
+# resolv.conf is a tmpfiles link because Docker bind-mounts it during the build.
+RUN printf '[Match]\nType=ether\n\n[Network]\nAddress=192.168.127.2/24\nGateway=192.168.127.1\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' \
+    > /etc/systemd/network/10-vm.network && \
+    printf 'nameserver 192.168.127.1\n' > /etc/resolv.conf.static && \
+    printf 'L+ /etc/resolv.conf - - - - /etc/resolv.conf.static\n' > /etc/tmpfiles.d/dns.conf
 
 # Install runtimes
 RUN ln -sf /usr/bin/python3 /usr/bin/python
@@ -59,11 +63,6 @@ RUN id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu;
 #     ssh-keygen -t rsa -b 4096 -C john.smith@mymail.com -f .ssh/id_rsa -N "" && \
 #     gpg --batch --passphrase "" --quick-generate-key john.smith@mymail.com
 # USER root
-
-# Fix DNS
-# RUN printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' > /etc/resolv.conf.static && \
-#     printf 'L+ /etc/resolv.conf - - - - /etc/resolv.conf.static\n' > /etc/tmpfiles.d/dns.conf && \
-#     printf 'd /results/executor 0755 root root - -\n' > /etc/tmpfiles.d/executor_logs.conf
 
 # Copy custom files and services
 # COPY files/executor /usr/local/bin/executor

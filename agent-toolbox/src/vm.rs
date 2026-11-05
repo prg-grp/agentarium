@@ -12,13 +12,15 @@ use objc2::AllocAnyThread;
 use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZDiskImageStorageDeviceAttachment, VZFileHandleSerialPortAttachment, VZLinuxBootLoader,
-    VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceSerialPortConfiguration,
-    VZVirtioEntropyDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
+    VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZVirtioBlockDeviceConfiguration,
+    VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
     VZVirtualMachineState,
 };
 
 use crate::data::VmSpec;
+use crate::net::{self, Network};
 use crate::terminal::Console;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -33,6 +35,8 @@ pub enum VmState {
 
 pub struct Vm {
     machine: Retained<VZVirtualMachine>,
+    /// The VM's network stack; dropped after the machine.
+    _network: Network,
 }
 
 impl Vm {
@@ -52,6 +56,7 @@ impl Vm {
         let (host_reads, guest_writes) = std::io::pipe().map_err(|e| e.to_string())?;
         let console =
             Console::new(host_reads.into(), host_writes.into()).map_err(|e| e.to_string())?;
+        let (network, guest_network) = Network::start().map_err(|e| e.to_string())?;
 
         unsafe {
             let boot = VZLinuxBootLoader::initWithKernelURL(
@@ -80,6 +85,14 @@ impl Vm {
             let serial = VZVirtioConsoleDeviceSerialPortConfiguration::new();
             serial.setAttachment(Some(&attachment));
 
+            let network_attachment = VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
+                VZFileHandleNetworkDeviceAttachment::alloc(),
+                &file_handle(guest_network.into()),
+            );
+            network_attachment.setMaximumTransmissionUnit(net::MTU as isize);
+            let nic = VZVirtioNetworkDeviceConfiguration::new();
+            nic.setAttachment(Some(&network_attachment));
+
             let config = VZVirtualMachineConfiguration::new();
             config.setBootLoader(Some(&boot));
             config.setCPUCount(spec.cpus.clamp(
@@ -96,6 +109,7 @@ impl Vm {
             config.setStorageDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 rootfs,
             )]));
+            config.setNetworkDevices(&NSArray::from_retained_slice(&[Retained::into_super(nic)]));
             config.setEntropyDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 VZVirtioEntropyDeviceConfiguration::new(),
             )]));
@@ -105,7 +119,13 @@ impl Vm {
 
             let machine =
                 VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config);
-            Ok((Vm { machine }, console))
+            Ok((
+                Vm {
+                    machine,
+                    _network: network,
+                },
+                console,
+            ))
         }
     }
 
