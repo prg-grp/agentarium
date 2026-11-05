@@ -47,14 +47,20 @@ pub struct VmSpec {
     pub command_line: &'static str,
 }
 
-pub fn demo_vm() -> VmSpec {
+/// In agent mode the guest console logs in `ubuntu` and runs Claude Code; maintenance
+/// mode logs in root without the agent. The guest reads the mode from the kernel flag.
+pub fn demo_vm(maintenance: bool) -> VmSpec {
     VmSpec {
         cpus: 2,
-        memory_mib: 1024,
+        memory_mib: 2048,
         // The guest is built into the workspace target directory, one level above this crate.
         kernel: concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image"),
-        rootfs: concat!(env!("CARGO_MANIFEST_DIR"), "/../target/rootfs/base.ext4"),
-        command_line: "console=hvc0 root=/dev/vda rw",
+        rootfs: concat!(env!("CARGO_MANIFEST_DIR"), "/../target/rootfs/claude.ext4"),
+        command_line: if maintenance {
+            "console=hvc0 root=/dev/vda rw agent_toolbox.mode=maintenance"
+        } else {
+            "console=hvc0 root=/dev/vda rw"
+        },
     }
 }
 
@@ -71,7 +77,7 @@ pub fn instances() -> Vec<Instance> {
     let mut instances = vec![Instance {
         id: DEMO_VM_ID,
         name: DEMO_VM_ID,
-        agent: "Shell (no agent)",
+        agent: "Claude Code",
         state: InstanceState::Stopped,
         summary: "Stopped",
         vm: reading("Stopped", Tone::Neutral),

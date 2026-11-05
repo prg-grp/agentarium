@@ -13,6 +13,13 @@ UI toolkit, native bridge, collector, and network dataplane remain unresolved. D
 
 ARCHITECTURE.md file describes the overall architecture of the application and its architectural decisions, whereas DESIGN.md describes how to implement UI / UX based items in this application. Don't just read the files each time, only if they may be necessary for the task at hand.
 
+## Repository
+- root: contains the workspace and other relevant files
+- design: contains the design specifications and information for each screen according to DESIGN.md
+- scripts: contains hack scripts and helpers
+- vms: contains related resources for the microVMs such as custom kernels and root file systems
+- agent-toolbox: contains the main application for agent toolbox
+
 ## Implementation
 If useful or necessary, use external crates where possible to deliver functionality and features to the app. Rather than reinventing the wheel for each and every functionality. If in doubt, ask the user if a particular crate shall be used or not.
 

@@ -19,9 +19,11 @@ RUN systemctl set-default multi-user.target && \
     e2scrub_reap.service \
     systemd-firstboot.service
 
-# The app's terminal is the virtio console (hvc0): log in as root there without a password.
+# The app's terminal is the virtio console (hvc0), logged in there without a password:
+# ubuntu in agent mode, root in maintenance mode (kernel flag agent_toolbox.mode=maintenance).
+COPY --chmod=755 console-autologin /usr/local/sbin/console-autologin
 RUN mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d && \
-    printf '[Service]\nExecStart=\nExecStart=-/sbin/agetty --autologin root --noclear --keep-baud 115200,57600,38400,9600 - $TERM\n' \
+    printf '[Service]\nExecStart=\nExecStart=-/usr/local/sbin/console-autologin $TERM\n' \
     > /etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf
 
 # Keep orchestrator's network configuration

@@ -46,6 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         terminal: terminal.clone(),
         vm: RefCell::new(None),
         state: Cell::new(VmState::Stopped),
+        maintenance: Cell::new(false),
         poll: Timer::default(),
     });
     ui.on_instance_action(move |id, action| {
@@ -53,8 +54,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             return;
         }
         match action {
-            InstanceAction::Start => VmControl::start(&control),
-            InstanceAction::Stop => VmControl::stop(&control),
+            InstanceAction::Start => VmControl::start(&control, false),
+            InstanceAction::BootMaintenance => VmControl::start(&control, true),
+            InstanceAction::Stop => VmControl::stop(&control, false),
+            InstanceAction::RestartMaintenance => VmControl::stop(&control, true),
             _ => {}
         }
     });
@@ -91,16 +94,19 @@ struct VmControl {
     terminal: Rc<Terminal>,
     vm: RefCell<Option<Vm>>,
     state: Cell<VmState>,
+    /// Whether the current boot is a one-time maintenance boot.
+    maintenance: Cell<bool>,
     /// Checks the VM state, so a shutdown from inside the guest is noticed.
     poll: Timer,
 }
 
 impl VmControl {
-    fn start(this: &Rc<VmControl>) {
+    fn start(this: &Rc<VmControl>, maintenance: bool) {
         if this.vm.borrow().is_some() {
             return;
         }
-        let (vm, console) = match Vm::create(&data::demo_vm()) {
+        this.maintenance.set(maintenance);
+        let (vm, console) = match Vm::create(&data::demo_vm(maintenance)) {
             Ok(created) => created,
             Err(error) => return this.failed(&error),
         };
@@ -131,7 +137,8 @@ impl VmControl {
             });
     }
 
-    fn stop(this: &Rc<VmControl>) {
+    /// Stops the VM, then boots it in maintenance mode if `then_maintenance` is set.
+    fn stop(this: &Rc<VmControl>, then_maintenance: bool) {
         let control = Rc::downgrade(this);
         if let Some(vm) = this.vm.borrow().as_ref() {
             this.show(VmState::Stopping);
@@ -141,6 +148,9 @@ impl VmControl {
                 }
                 if let Some(control) = control.upgrade() {
                     control.check();
+                    if then_maintenance && control.vm.borrow().is_none() {
+                        VmControl::start(&control, true);
+                    }
                 }
             });
         }
@@ -190,24 +200,42 @@ impl VmControl {
             value: value.into(),
             tone,
         };
+        // A maintenance boot runs a root shell instead of the agent.
+        let maintenance = self.maintenance.get();
+        let active = if maintenance {
+            InstanceState::Maintenance
+        } else {
+            InstanceState::Running
+        };
+        let agent_reading = || {
+            if maintenance {
+                reading("Not started", Tone::Neutral)
+            } else {
+                reading("Claude Code", Tone::Ok)
+            }
+        };
         let (instance_state, summary, vm, agent) = match state {
             VmState::Starting => (
-                InstanceState::Running,
+                active,
                 "Starting",
                 reading("Starting", Tone::Neutral),
                 reading("Not running", Tone::Neutral),
             ),
             VmState::Running | VmState::Other => (
-                InstanceState::Running,
-                "Running",
+                active,
+                if maintenance {
+                    "Maintenance"
+                } else {
+                    "Running"
+                },
                 reading("Running", Tone::Ok),
-                reading("Shell", Tone::Ok),
+                agent_reading(),
             ),
             VmState::Stopping => (
-                InstanceState::Running,
+                active,
                 "Stopping",
                 reading("Stopping", Tone::Neutral),
-                reading("Shell", Tone::Ok),
+                agent_reading(),
             ),
             // Stopped, so Start stays available to try again.
             VmState::Error => (

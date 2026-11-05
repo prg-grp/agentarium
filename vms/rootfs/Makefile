@@ -1,7 +1,7 @@
 # Builds every guest root filesystem into target/rootfs/<name>.ext4.
 # Each <name>/Dockerfile becomes the image agent-toolbox/<name>. List new ones in ROOTFS,
 # in build order; base comes first so the others can start FROM agent-toolbox/base.
-ROOTFS := base
+ROOTFS := base claude
 HEADROOM_MB := 1024
 OUT := ../../target/rootfs
 IMAGES := $(ROOTFS:%=$(OUT)/%.ext4)
