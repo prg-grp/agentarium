@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/target/guest"
 WORK="$OUT/work"
 
+# The rootfs installs this kernel's modules (vms/rootfs/base/Dockerfile); change both together.
 KERNEL_URL="https://cloud-images.ubuntu.com/releases/noble/release-20261017/unpacked/ubuntu-24.04-server-cloudimg-arm64-vmlinuz-generic"
 KERNEL_SHA256="353bab8eeaad9caf931dd85fd7a7bf8800d2669d759c0369ffaba7abc03a7aff"
 

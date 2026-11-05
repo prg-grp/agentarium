@@ -2,10 +2,12 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install necessary packages
+# Install necessary packages. linux-modules must match the kernel pinned in
+# scripts/build-guest.sh; change both together.
 RUN apt-get update && \
     apt-get -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef install -y \
     systemd systemd-sysv systemd-timesyncd dbus udev sudo ubuntu-standard \
+    linux-modules-6.8.0-147-generic kmod \
     coreutils curl wget ca-certificates git \
     build-essential pkg-config python3 python3-pip tcpdump g++ cmake make libpcap-dev \
     jq unzip nano
@@ -32,6 +34,10 @@ RUN mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d && \
 COPY --chmod=755 clock-from-host /usr/local/sbin/clock-from-host
 COPY clock-from-host.service /etc/systemd/system/clock-from-host.service
 RUN systemctl enable clock-from-host.service
+
+# The app's Stop presses Virtualization.framework's power button (a PL061 GPIO key);
+# gpio_keys reports it and systemd-logind powers off.
+RUN printf 'gpio_keys\n' > /etc/modules-load.d/power-button.conf
 
 # Network: the app runs the gateway (and DNS) at 192.168.127.1 on the virtio NIC and
 # forwards connections from the host. Static IPv4 only, so the app needs no DHCP server.

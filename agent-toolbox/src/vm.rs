@@ -143,7 +143,20 @@ impl Vm {
         unsafe { self.machine.startWithCompletionHandler(&handler) };
     }
 
-    /// Stops the VM immediately, like pulling the power cord.
+    /// Presses the VM's power button, so the guest shuts down cleanly.
+    pub fn request_stop(&self) -> Result<(), String> {
+        unsafe {
+            if !self.machine.canRequestStop() {
+                return Err("The virtual machine can't be asked to stop.".into());
+            }
+            self.machine
+                .requestStopWithError()
+                .map_err(|error| error.localizedDescription().to_string())
+        }
+    }
+
+    /// Stops the VM immediately, like pulling the power cord. The fallback
+    /// when the guest doesn't shut down after `request_stop`.
     pub fn stop(&self, done: impl Fn(Result<(), String>) + 'static) {
         let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
         unsafe { self.machine.stopWithCompletionHandler(&handler) };

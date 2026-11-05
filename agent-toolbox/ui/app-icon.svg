@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- TerrArIum: a sealed glass case (the VM) with one living sprout (the agent). Colors from DESIGN.md. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#20252D"/>
+      <stop offset="1" stop-color="#0C0E12"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="450" cy="500" r="250" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#78C99A" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#78C99A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="leaf" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#5FB283"/>
+      <stop offset="1" stop-color="#A9E3C1"/>
+    </linearGradient>
+    <linearGradient id="glint" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="case">
+      <path d="M512 270 L742 403 V668 L512 801 L282 668 V403 Z"/>
+    </clipPath>
+  </defs>
+
+  <!-- macOS tile -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="#343C49" stroke-width="3"/>
+
+  <!-- Back edges, seen through the glass -->
+  <g stroke="#8BA7FF" stroke-opacity="0.28" stroke-width="8" stroke-linecap="round" fill="none">
+    <path d="M512 270 V535 M512 535 L282 668 M512 535 L742 668"/>
+  </g>
+
+  <!-- Soil bed -->
+  <path d="M282 598 L512 465 L742 598 L512 731 Z" fill="#343C49"/>
+  <path d="M282 598 L512 731 V801 L282 668 Z" fill="#20252D"/>
+  <path d="M742 598 L512 731 V801 L742 668 Z" fill="#171A20"/>
+
+  <!-- Sprout -->
+  <circle cx="450" cy="500" r="250" fill="url(#glow)" clip-path="url(#case)"/>
+  <g transform="translate(440 585) scale(0.85) translate(-512 -600)">
+  <ellipse cx="512" cy="600" rx="34" ry="18" fill="#262C36"/>
+  <path d="M512 600 C512 540 506 492 516 438" stroke="#78C99A" stroke-width="14" stroke-linecap="round" fill="none"/>
+  <path d="M514 470 C470 474 410 450 392 384 C450 372 506 404 514 470 Z" fill="url(#leaf)"/>
+  <path d="M516 438 C540 400 590 380 640 394 C626 446 570 462 516 438 Z" fill="url(#leaf)"/>
+  <path d="M514 470 C478 450 438 420 414 392" stroke="#4E9A70" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.7"/>
+  <path d="M516 438 C552 424 590 410 622 400" stroke="#4E9A70" stroke-width="5" stroke-linecap="round" fill="none" opacity="0.7"/>
+  </g>
+
+  <!-- Glass faces -->
+  <path d="M512 270 L742 403 L512 536 L282 403 Z" fill="#8BA7FF" fill-opacity="0.16"/>
+  <path d="M282 403 L512 536 V801 L282 668 Z" fill="#8BA7FF" fill-opacity="0.07"/>
+  <path d="M742 403 L512 536 V801 L742 668 Z" fill="#8BA7FF" fill-opacity="0.12"/>
+
+  <!-- Glint on the right pane -->
+  <path d="M680 450 L700 438 V560 L680 572 Z" fill="url(#glint)"/>
+
+  <!-- Front edges -->
+  <g stroke="#8BA7FF" stroke-width="11" stroke-linejoin="round" stroke-linecap="round" fill="none">
+    <path d="M512 270 L742 403 V668 L512 801 L282 668 V403 Z"/>
+    <path d="M282 403 L512 536 L742 403"/>
+  </g>
+  <path d="M512 536 V801" stroke="#C5D3FF" stroke-width="11" stroke-linecap="round"/>
+</svg>
