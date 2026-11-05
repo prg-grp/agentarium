@@ -12,6 +12,7 @@ export component AppButton {
     in property <string> label;
     in property <ButtonKind> kind: ButtonKind.neutral;
     in property <bool> compact;
+    in property <bool> enabled: true;
     callback clicked();
 
     property <color> fg: kind == ButtonKind.primary ? Theme.on-acc
@@ -20,13 +21,17 @@ export component AppButton {
         : Theme.tx;
 
     height: compact ? 26px : Theme.control-height;
+    opacity: enabled ? 1 : 0.45;
     horizontal-stretch: 0;
     vertical-stretch: 0;
     forward-focus: focus;
     accessible-role: button;
     accessible-label: label != "" ? label : text;
+    accessible-enabled: enabled;
     accessible-action-default => {
-        root.clicked();
+        if root.enabled {
+            root.clicked();
+        }
     }
 
     Rectangle {
@@ -75,7 +80,7 @@ export component AppButton {
 
     focus := FocusScope {
         key-pressed(event) => {
-            if event.text == " " || event.text == Key.Return {
+            if root.enabled && (event.text == " " || event.text == Key.Return) {
                 root.clicked();
                 return accept;
             }
@@ -84,9 +89,68 @@ export component AppButton {
     }
 
     touch := TouchArea {
-        mouse-cursor: pointer;
+        enabled: root.enabled;
+        mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             root.clicked();
+        }
+    }
+}
+
+// A row of mutually exclusive options. The owner keeps `selected` and updates it from `changed`.
+export component SegmentedControl {
+    in property <[string]> options;
+    in property <int> selected;
+    callback changed(int);
+
+    height: 30px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    Rectangle {
+        border-radius: Theme.radius-control;
+        border-width: 1px;
+        border-color: Theme.line2;
+        background: Theme.well;
+    }
+
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+
+        for option[index] in root.options: Rectangle {
+            property <bool> active: index == root.selected;
+
+            border-radius: Theme.radius-control - 2px;
+            background: active ? Theme.raise : (touch.has-hover ? Theme.hover : transparent);
+            accessible-role: tab;
+            accessible-label: option;
+            accessible-item-selected: active;
+            accessible-action-default => {
+                root.changed(index);
+            }
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+
+                Text {
+                    text: option;
+                    color: active ? Theme.tx : Theme.tx2;
+                    font-size: Theme.font-small;
+                    font-weight: active ? Theme.weight-medium : Theme.weight-regular;
+                    vertical-alignment: center;
+                }
+            }
+
+            touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    if !active {
+                        root.changed(index);
+                    }
+                }
+            }
         }
     }
 }

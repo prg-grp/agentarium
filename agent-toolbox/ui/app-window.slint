@@ -1,12 +1,13 @@
 // Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
 import { Theme } from "theme.slint";
-import { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine } from "types.slint";
+import { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, AgentKind, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
 import { TerminalSession, TerminalView } from "terminal.slint";
+import { Creation, CreateInstance } from "create-instance.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, TerminalSession }
+export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, TerminalSession, AgentKind, EnvRow, MountRow, RuleRow, CreateIssue, Creation }
 
 // One of the three readings in the instance header.
 component StatusCell {
@@ -58,8 +59,11 @@ component StatusCell {
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
+    // -1 while the creation screen shows a draft that has no sidebar row yet.
     in-out property <int> selected-index: 0;
     in-out property <int> current-tab: 0;
+    // A new instance is being drafted; its screen shows while its row (or no row) is selected.
+    in-out property <bool> creating;
 
     callback create-instance();
     callback instance-action(string, InstanceAction);
@@ -67,6 +71,7 @@ export component AppWindow inherits Window {
 
     property <InstanceItem> current: instances[selected-index];
     property <bool> in-maintenance: current.state == InstanceState.maintenance;
+    property <bool> show-creation: creating && (selected-index < 0 || current.state == InstanceState.draft);
 
     pure function state-icon(state: InstanceState) -> image {
         if state == InstanceState.maintenance {
@@ -291,7 +296,12 @@ export component AppWindow inherits Window {
         Rectangle {
             horizontal-stretch: 1;
 
-            if instances.length == 0: EmptyState {
+            if show-creation: CreateInstance {
+                width: parent.width;
+                height: parent.height;
+            }
+
+            if instances.length == 0 && !creating: EmptyState {
                 width: parent.width;
                 height: parent.height;
                 create => {
@@ -299,7 +309,7 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if instances.length > 0: VerticalLayout {
+            if instances.length > 0 && !show-creation: VerticalLayout {
                 width: parent.width;
                 height: parent.height;
 

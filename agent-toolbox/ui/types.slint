@@ -6,6 +6,8 @@ export enum InstanceState { running, agent-exited, maintenance, startup-failed, 
 
 export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, delete }
 
+export enum AgentKind { claude-code, codex, custom }
+
 export struct StatusReading {
     value: string,
     tone: Tone,
@@ -45,4 +47,34 @@ export struct TermSpan {
     row: int,
     col: int,
     width: int,
+}
+
+// Rows of the creation flow (src/create.rs). Messages are "" when there is nothing to say.
+export struct EnvRow {
+    name: string,
+    value: string,
+    error: string,
+}
+
+export struct MountRow {
+    host-path: string,
+    guest-path: string,
+    writable: bool,
+    missing: bool,
+    problem: string,
+    guest-error: string,
+}
+
+export struct RuleRow {
+    target: string,
+    scope: string,
+    is-domain: bool,
+    conflict: string,
+}
+
+// Keeps the draft from starting, or with blocks-create from being created at all.
+export struct CreateIssue {
+    step: int,
+    text: string,
+    blocks-create: bool,
 }

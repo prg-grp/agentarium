@@ -1,7 +1,8 @@
 // Prevent console window in addition to Slint window in Windows release builds when, e.g., starting the app via file manager. Ignored on other platforms.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod data;
+mod create;
+mod db;
 mod net;
 mod terminal;
 mod vm;
@@ -14,8 +15,9 @@ use std::time::Duration;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{Model, ModelRc, Timer, TimerMode, VecModel};
 
-use terminal::Terminal;
-use vm::{Vm, VmState};
+use db::Db;
+use terminal::{Console, Terminal};
+use vm::{BootMode, Vm, VmSpec, VmState};
 
 slint::include_modules!();
 
@@ -36,18 +38,22 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let ui = AppWindow::new()?;
 
-    let items: Vec<InstanceItem> = data::instances().into_iter().map(to_item).collect();
+    let db = Rc::new(Db::open().map_err(|error| format!("Couldn't open the database: {error}"))?);
+    let items: Vec<InstanceItem> = db.instances()?.into_iter().map(to_item).collect();
     let instances = Rc::new(VecModel::from(items));
     ui.set_instances(ModelRc::from(instances.clone()));
 
-    // The demo VM's console is shown in the Terminal tab.
+    // The running instance's console is shown in the Terminal tab.
+    // TODO(multi-vm): one terminal per running instance, shown for the selected one.
     let terminal = Rc::new(Terminal::start(&ui, STOPPED_MESSAGE));
     let control = Rc::new(VmControl {
-        instances,
+        db: db.clone(),
+        instances: instances.clone(),
+        instance_id: RefCell::new(None),
         terminal: terminal.clone(),
         vm: RefCell::new(None),
         state: Cell::new(VmState::Stopped),
-        maintenance: Cell::new(false),
+        mode: Cell::new(BootMode::Agent),
         poll: Timer::default(),
         stop_request: Cell::new(None),
         stop_fallback: Timer::default(),
@@ -71,15 +77,48 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
+    // New instances are drafted on the creation screen; once created, they get a sorted
+    // sidebar row and, unless the user opted out, start and provision right away.
+    let c = control.clone();
+    let busy = control.clone();
+    let ui_handle = ui.as_weak();
+    let creator = create::Creator::new(
+        &ui,
+        db,
+        instances.clone(),
+        move || busy.vm.borrow().is_some(),
+        move |instance, start| {
+            let Some(ui) = ui_handle.upgrade() else {
+                return;
+            };
+            let id = instance.id.clone();
+            let name = instance.name.to_lowercase();
+            let row = (0..instances.row_count())
+                .find(|&row| {
+                    instances
+                        .row_data(row)
+                        .is_some_and(|item| item.name.to_lowercase() > name)
+                })
+                .unwrap_or(instances.row_count());
+            instances.insert(row, to_item(instance));
+            ui.set_selected_index(row as i32);
+            ui.set_current_tab(0);
+            if start {
+                VmControl::start(&c, &id, BootMode::Agent);
+            }
+        },
+    );
+    ui.on_create_instance(move || creator.open());
+
     ui.on_instance_action(move |id, action| {
-        if id != data::DEMO_VM_ID {
-            return;
-        }
+        let current = control.instance_id.borrow().as_deref() == Some(id.as_str());
         match action {
-            InstanceAction::Start => VmControl::start(&control, false),
-            InstanceAction::BootMaintenance => VmControl::start(&control, true),
-            InstanceAction::Stop => VmControl::stop(&control, false),
-            InstanceAction::RestartMaintenance => VmControl::stop(&control, true),
+            InstanceAction::Start => VmControl::start(&control, &id, BootMode::Agent),
+            InstanceAction::BootMaintenance => {
+                VmControl::start(&control, &id, BootMode::Maintenance)
+            }
+            InstanceAction::Stop if current => VmControl::stop(&control, false),
+            InstanceAction::RestartMaintenance if current => VmControl::stop(&control, true),
             _ => {}
         }
     });
@@ -191,15 +230,20 @@ const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open 
 /// How long the guest gets to shut down before it is stopped hard.
 const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Runs the demo VM and keeps its instance row and terminal in sync.
+/// Runs one instance's VM at a time and keeps its instance row and terminal in sync.
 /// Lives on the main thread, like the VM itself.
+// TODO(multi-vm): several VMs should run at once. Then this holds one VM, state, mode and
+// terminal per instance id instead of the single `instance_id`, `vm` and `terminal`.
 struct VmControl {
+    db: Rc<Db>,
     instances: Rc<VecModel<InstanceItem>>,
+    /// The instance whose VM runs, or ran last.
+    instance_id: RefCell<Option<String>>,
     terminal: Rc<Terminal>,
     vm: RefCell<Option<Vm>>,
     state: Cell<VmState>,
-    /// Whether the current boot is a one-time maintenance boot.
-    maintenance: Cell<bool>,
+    /// The mode of the current boot; maintenance and provision boots are one-time.
+    mode: Cell<BootMode>,
     /// Checks the VM state, so a shutdown from inside the guest is noticed.
     poll: Timer,
     /// Set while a stop is in progress; `Some(true)` boots maintenance mode afterwards.
@@ -211,14 +255,15 @@ struct VmControl {
 }
 
 impl VmControl {
-    fn start(this: &Rc<VmControl>, maintenance: bool) {
+    fn start(this: &Rc<VmControl>, id: &str, mode: BootMode) {
+        // TODO(multi-vm): only refuse when this instance's own VM already runs.
         if this.vm.borrow().is_some() {
             return;
         }
-        this.maintenance.set(maintenance);
-        let (vm, console) = match Vm::create(&data::demo_vm(maintenance)) {
+        *this.instance_id.borrow_mut() = Some(id.to_owned());
+        let (vm, console) = match this.create_vm(id, mode) {
             Ok(created) => created,
-            Err(error) => return this.failed(&error),
+            Err(error) => return this.failed(&error.to_string()),
         };
         if let Err(error) = this.terminal.attach(console) {
             return this.failed(&error.to_string());
@@ -245,6 +290,43 @@ impl VmControl {
                     VmControl::check(&control);
                 }
             });
+    }
+
+    /// Configures the VM from the instance's latest revision, which this boot freezes.
+    /// An instance that isn't provisioned yet boots in provision mode instead of agent mode.
+    fn create_vm(&self, id: &str, mode: BootMode) -> db::Result<(Vm, Console)> {
+        let instance = self.db.instance(id)?;
+        let revision = self.db.latest_revision(id)?;
+        let mode = if mode == BootMode::Agent && !instance.provisioned {
+            BootMode::Provision
+        } else {
+            mode
+        };
+        self.mode.set(mode);
+        // The guest runs provision.sh from the shared folder and leaves its exit code in status.
+        let share = if mode == BootMode::Provision {
+            let dir = db::instance_dir(id)?.join("provision");
+            std::fs::create_dir_all(&dir)?;
+            std::fs::write(dir.join("provision.sh"), &revision.config.provision_script)?;
+            match std::fs::remove_file(dir.join("status")) {
+                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+                    return Err(error.into());
+                }
+                _ => {}
+            }
+            Some(dir)
+        } else {
+            None
+        };
+        let created = Vm::create(&VmSpec {
+            cpus: revision.config.cpus as usize,
+            memory_mib: revision.config.memory_mib.into(),
+            rootfs: instance.disk_path,
+            mode,
+            share,
+        })?;
+        self.db.mark_booted(id, revision.number)?;
+        Ok(created)
     }
 
     /// Asks the guest to shut down, then boots it in maintenance mode if
@@ -319,20 +401,47 @@ impl VmControl {
         };
         match state {
             VmState::Stopped => {
-                let then_maintenance = this.stop_request.get() == Some(true);
+                let requested = this.stop_request.get();
                 this.end();
+                let id = this.instance_id.borrow().clone();
+                // A provisioning run powers off by itself once its script is done.
+                if this.mode.get() == BootMode::Provision
+                    && requested.is_none()
+                    && !this.quitting.get()
+                    && let Some(id) = id.as_deref()
+                {
+                    return VmControl::finish_provisioning(this, id);
+                }
                 this.terminal.detach("The virtual machine stopped.");
                 this.show(VmState::Stopped);
                 if this.quitting.get() {
                     let _ = slint::quit_event_loop();
-                } else if then_maintenance {
-                    VmControl::start(this, true);
+                } else if requested == Some(true)
+                    && let Some(id) = id
+                {
+                    VmControl::start(this, &id, BootMode::Maintenance);
                 }
             }
             VmState::Error => this.failed("The virtual machine stopped because of an error."),
             // The guest keeps running while it shuts down.
             _ if this.stop_request.get().is_some() => this.show(VmState::Stopping),
             _ => this.show(state),
+        }
+    }
+
+    /// Reads the exit code the provisioning script left in the shared folder. On success
+    /// the instance counts as provisioned and boots in agent mode.
+    fn finish_provisioning(this: &Rc<VmControl>, id: &str) {
+        let status = db::instance_dir(id)
+            .ok()
+            .and_then(|dir| std::fs::read_to_string(dir.join("provision").join("status")).ok());
+        match status.as_deref().map(str::trim) {
+            Some("0") => match this.db.mark_provisioned(id) {
+                Ok(()) => VmControl::start(this, id, BootMode::Agent),
+                Err(error) => this.failed(&format!("couldn't record the provisioning: {error}")),
+            },
+            Some(code) => this.failed(&format!("the provisioning script exited with {code}.")),
+            None => this.failed("the provisioning script didn't finish."),
         }
     }
 
@@ -353,14 +462,17 @@ impl VmControl {
         self.vm.borrow_mut().take();
     }
 
-    /// Updates the demo VM's sidebar summary and header readings.
+    /// Updates the instance's sidebar summary and header readings.
     fn show(&self, state: VmState) {
         if self.state.replace(state) == state && state != VmState::Error {
             return;
         }
+        let Some(id) = self.instance_id.borrow().clone() else {
+            return;
+        };
         let Some((row, mut item)) = (0..self.instances.row_count())
             .filter_map(|row| Some((row, self.instances.row_data(row)?)))
-            .find(|(_, item)| item.id == data::DEMO_VM_ID)
+            .find(|(_, item)| item.id == id.as_str())
         else {
             return;
         };
@@ -368,18 +480,19 @@ impl VmControl {
             value: value.into(),
             tone,
         };
-        // A maintenance boot runs a root shell instead of the agent.
-        let maintenance = self.maintenance.get();
-        let active = if maintenance {
+        let agent_name = item.agent.clone();
+        // Maintenance and provision boots don't start the agent.
+        let mode = self.mode.get();
+        let active = if mode == BootMode::Maintenance {
             InstanceState::Maintenance
         } else {
             InstanceState::Running
         };
         let agent_reading = || {
-            if maintenance {
-                reading("Not started", Tone::Neutral)
+            if mode == BootMode::Agent {
+                reading(&agent_name, Tone::Ok)
             } else {
-                reading("Claude Code", Tone::Ok)
+                reading("Not started", Tone::Neutral)
             }
         };
         let (instance_state, summary, vm, agent) = match state {
@@ -391,10 +504,10 @@ impl VmControl {
             ),
             VmState::Running | VmState::Other => (
                 active,
-                if maintenance {
-                    "Maintenance"
-                } else {
-                    "Running"
+                match mode {
+                    BootMode::Agent => "Running",
+                    BootMode::Maintenance => "Maintenance",
+                    BootMode::Provision => "Provisioning",
                 },
                 reading("Running", Tone::Ok),
                 agent_reading(),
@@ -427,31 +540,23 @@ impl VmControl {
     }
 }
 
-fn to_item(instance: data::Instance) -> InstanceItem {
-    let reading = |reading: data::Reading| StatusReading {
-        value: reading.value.into(),
-        tone: match reading.tone {
-            data::Tone::Ok => Tone::Ok,
-            data::Tone::Bad => Tone::Bad,
-            data::Tone::Neutral => Tone::Neutral,
-        },
+/// A sidebar row for a stored instance; it shows as stopped until its VM runs.
+fn to_item(instance: db::Instance) -> InstanceItem {
+    let reading = |value: &str| StatusReading {
+        value: value.into(),
+        tone: Tone::Neutral,
     };
-
     InstanceItem {
         id: instance.id.into(),
         name: instance.name.into(),
-        agent: instance.agent.into(),
-        state: match instance.state {
-            data::InstanceState::Running => InstanceState::Running,
-            data::InstanceState::Maintenance => InstanceState::Maintenance,
-            data::InstanceState::StartupFailed => InstanceState::StartupFailed,
-            data::InstanceState::Stopped => InstanceState::Stopped,
-        },
-        summary: instance.summary.into(),
-        vm: reading(instance.vm),
-        agent_status: reading(instance.agent_status),
-        monitoring: reading(instance.monitoring),
-        pending_changes: instance.pending_changes,
-        has_terminal: instance.has_terminal,
+        agent: instance.agent.name().into(),
+        state: InstanceState::Stopped,
+        summary: "Stopped".into(),
+        vm: reading("Stopped"),
+        agent_status: reading("Not running"),
+        monitoring: reading("Not running"),
+        // Counting saved but inactive changes comes with the settings screen.
+        pending_changes: 0,
+        has_terminal: true,
     }
 }

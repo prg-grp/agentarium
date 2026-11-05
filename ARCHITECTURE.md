@@ -31,7 +31,7 @@ The initial agent integration is Claude Code. The architecture must accommodate 
 | Configuration | Launch command, arguments, working directory, mounts, environment variables, network policy |
 | File access | Live access to explicitly shared host directories |
 | Network access | Configurable domain allow/deny policies using DNS resolution |
-| Boot modes | Normal agent mode and maintenance mode |
+| Boot modes | Normal agent mode, maintenance mode, and provision mode |
 | Interaction | Embedded interactive terminal |
 | Observability | Live and historical activity for each instance |
 | Guest communication | Protobuf messages over virtio-vsock |
@@ -83,6 +83,13 @@ Normal agent execution should use an unprivileged guest user. The privileged ser
 
 Linux is the proposed guest operating system. Later Linux host support is a separate product target.
 
+Decided:
+
+- One harness-agnostic base root filesystem (`vms/rootfs/base`, Ubuntu 24.04 arm64) is built as a sparse raw ext4 image at its full virtual size of 64 GiB. Inode tables and journal stay unwritten (mke2fs lazy init, guest mounts root with `noinit_itable`), so the image only takes the space of its contents. There is no resize step.
+- Each instance disk is an APFS `clonefile` of the base: created instantly, sharing the base's blocks until the guest writes, and growing on the Mac only by what the guest writes. Without a clone (another volume) creation fails; there is no copy fallback.
+- The agent harness is not part of the base. Each instance's provisioning script installs it in provision mode (see below).
+- During development, `make run` names the base image with `AGENT_TOOLBOX_BASE_ROOTFS`. How a released app obtains the kernel and base image (e.g. a pinned, downloaded guest bundle) remains open.
+
 ### Rust and Apple integration
 
 Requirement: Rust owns the application’s main logic.
@@ -95,7 +102,7 @@ Open decisions:
 - Direct bindings versus a native bridge.
 - Minimum macOS version.
 - Supported Mac architectures.
-- Guest distribution, kernel, image production, and update process.
+- Distribution and update process of the kernel and base image.
 - Signing, distribution, and entitlement configuration.
 
 Virtualization.framework requires the virtualization entitlement for the process using its APIs. Packaging must account for this requirement. [Apple entitlement documentation](https://developer.apple.com/documentation/virtualization/adding-the-virtualization-entitlement-to-your-project).
@@ -104,7 +111,7 @@ An Apple silicon first release with an arm64 Linux guest is a proposed scope red
 
 ## Instance configuration and lifecycle
 
-Persist an instance identifier, display name, agent type, VM resources, disk location, mount definitions, network policy, launch settings, environment configuration, and configuration revision.
+Persist an instance identifier, display name, agent type, VM resources, disk location, mount definitions, network policy, launch settings, environment configuration, provisioning script, and configuration revision.
 
 Represent launch settings as executable plus argument vector, working directory, and environment. If shell-command execution is supported, make it explicit rather than silently interpreting every command through a shell.
 
@@ -152,6 +159,18 @@ Proposed safeguards:
 
 The exact maintenance networking exception remains to be specified; “internet restrictions lifted” must not silently become access to every host service.
 
+### Provision mode
+
+The provisioning script installs and sets up the agent harness. It is part of the instance configuration, stored per revision, and defaults to a script for the selected agent (`vms/provision/`); the user can customize it per instance. Defaults for other harnesses follow later.
+
+Decided:
+
+- Starting an instance whose disk has not been provisioned successfully boots provision mode first (kernel flag `agent_toolbox.mode=provision`). On success the instance is marked provisioned and boots in agent mode; on failure it stays unprovisioned, the script's output stays visible, and the next start provisions again. Scripts must therefore be safe to run again.
+- The app writes the script to `instances/<id>/provision/provision.sh` and shares that folder over virtio-fs. A guest service runs it as root with its output on the console, writes the exit code to `status` in the same folder, and powers off. No login runs in provision mode.
+- Provision mode gets the same internet exception as maintenance mode.
+- The harness is chosen at creation: Claude Code (`claude-code`) or a custom agent (`custom`); Codex follows later. The default scripts in `vms/provision/` are compiled into the app (`include_str!`). A custom agent starts from the template `vms/provision/custom.sh`, which the user fills in; an unchanged template can be saved but not started.
+- A new instance starts right after creation unless the user opts out, so its first boot provisions it.
+
 ## Live host-directory access
 
 Requirement: explicitly selected host directories are shared directly with the guest. Guest modifications to writable shares affect the original host files immediately.
@@ -179,7 +198,7 @@ Deferred: copied workspaces, isolated change sets, diff review, and selective ap
 
 ### Required behavior
 
-Users configure domain allow/deny rules during creation and later editing. The application resolves domains and applies the resulting access policy.
+Users configure allow/deny rules during creation and later editing. A rule targets either a domain (exact name, or including subdomains) or an IPv4/IPv6 address range in CIDR form; a single address is a /32 or /128. The application resolves domains and applies the resulting access policy; address rules match destinations directly. Rules are stored per revision in `network_rules` but are not enforced yet (`net::allowed` still allows everything).
 
 Policy enforcement must sit outside the agent’s control. Guest firewall configuration alone cannot provide that boundary when maintenance grants guest root access.
 
@@ -305,6 +324,14 @@ Proposed logical records:
 - DNS observations.
 - Derived correlations and aggregate buckets.
 - Collector health and known gaps.
+
+Decided:
+
+- The app's files live in `~/Library/Application Support/com.programming-group.terrarium/`: the database `terrarium.sqlite`, and per instance `instances/<id>/` with its root disk `root.ext4` and provisioning folder `provision/`.
+- The database is accessed with `rusqlite` (bundled SQLite) on the main thread.
+- `rusqlite_migration` upgrades the schema on start, tracked in `PRAGMA user_version`. Migrations are append-only SQL files; a shipped migration is never edited, reordered or deleted. An existing database is copied to `terrarium.sqlite.v<version>.bak` before an upgrade. A database newer than the app is refused.
+- Instance configuration is stored as revisions. The latest revision is editable while pending; the first boot that uses it freezes it. List-valued settings (arguments, environment, mounts, network rules) are JSON columns.
+- Launch settings (command, arguments, working directory, environment), mounts, and network rules are stored but not yet applied at boot; delivering them to the guest needs the guest command channel.
 
 Preserve received source events separately from later enrichment. Enrichment must retain provenance and remain reproducible; do not overwrite the original destination with a guessed domain.
 

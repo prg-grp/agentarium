@@ -190,7 +190,7 @@ Every mockup and design-time fixture shows the text "Sample data" in a quiet foo
 
 ### Credentials
 
-Credential setup is separate from environment variables. Secrets are stored in macOS Keychain, masked in the UI, and never included in activity, configuration history, or copied diagnostics.
+Credential setup is separate from environment variables. Secrets are stored in macOS Keychain, masked in the UI, and never included in activity, configuration history, or copied diagnostics. Not built yet: for now the agent signs in inside the terminal, and environment variables are stored and passed as plain values. A secret mode for variables comes later.
 
 ### Terminal recording
 
@@ -210,10 +210,11 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 |---|---|---|
 | App shell | [design/app-shell.md](design/app-shell.md) | Sidebar, instance header, tabs, shared frame |
 | Empty application | [design/empty-state.md](design/empty-state.md) | No instances yet |
-| Create: agent | [design/create-agent.md](design/create-agent.md) | Name, agent, launch, sign-in, environment |
+| Create: harness | [design/create-harness.md](design/create-harness.md) | Creation flow, name, harness choice, provisioning script |
+| Create: agent | [design/create-agent.md](design/create-agent.md) | Launch, sign-in, environment |
 | Create: shared folders | [design/create-shared-folders.md](design/create-shared-folders.md) | Folder table, access levels, direct-write warning |
-| Create: network | [design/create-network.md](design/create-network.md) | Default action, allow/deny lists, conflicts |
-| Create: review | [design/create-review.md](design/create-review.md) | Read-back, resources, create actions |
+| Create: network | [design/create-network.md](design/create-network.md) | Default action, domain and address allow/deny lists, conflicts |
+| Create: review | [design/create-review.md](design/create-review.md) | Read-back, resources, start choice, create |
 | Running instance (terminal) | [design/terminal-running.md](design/terminal-running.md) | Agent terminal with live activity rail |
 | Activity timeline | [design/activity-timeline.md](design/activity-timeline.md) | Filters, counts, timeline, gap rows, event details |
 | Activity network view | [design/activity-network.md](design/activity-network.md) | Destinations, blocked and ambiguous attribution |
@@ -242,7 +243,7 @@ These patterns appear on more than one screen. They are flagged here, per [AGENT
 | Counts bar | Timeline, network view, stopped history |
 | Segmented control | Folder access, network default action, Timeline / Network switch |
 | Domain rule row (domain, scope, change mark, remove) | Create network, settings |
-| Step indicator | All four creation steps |
+| Step indicator | All five creation steps |
 | Confirmation dialog layout (title, intro, icon list, actions) | Maintenance and delete confirmations |
 | Notice bar (icon, sentence, action) | Degraded monitoring, maintenance banner, pending changes |
 

@@ -23,10 +23,19 @@ RUN systemctl set-default multi-user.target && \
 
 # The app's terminal is the virtio console (hvc0), logged in there without a password:
 # ubuntu in agent mode, root in maintenance mode (kernel flag agent_toolbox.mode=maintenance).
+# Provision mode (agent_toolbox.mode=provision) runs no login; the provisioning script's
+# output goes to the console instead.
 COPY --chmod=755 console-autologin /usr/local/sbin/console-autologin
 RUN mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d && \
-    printf '[Service]\nExecStart=\nExecStart=-/usr/local/sbin/console-autologin $TERM\n' \
+    printf '[Unit]\nConditionKernelCommandLine=!agent_toolbox.mode=provision\n\n[Service]\nExecStart=\nExecStart=-/usr/local/sbin/console-autologin $TERM\n' \
     > /etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf
+
+# Provision mode runs the instance's provisioning script from a folder the app shares,
+# then powers off. The app boots it before the first agent boot; the script installs
+# the agent harness.
+COPY --chmod=755 agent-toolbox-provision /usr/local/sbin/agent-toolbox-provision
+COPY agent-toolbox-provision.service /etc/systemd/system/agent-toolbox-provision.service
+RUN systemctl enable agent-toolbox-provision.service
 
 # Virtualization.framework gives Linux guests no usable hardware clock. The clock is set
 # early at boot from the Mac's time on the kernel command line; timesyncd keeps it right
@@ -52,7 +61,7 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python
 RUN curl -fsSL https://releases.astral.sh/github/uv/releases/download/0.10.11/uv-aarch64-unknown-linux-gnu.tar.gz \
     | tar -xz -C /usr/bin --strip-components=1 \
     uv-aarch64-unknown-linux-gnu/uv uv-aarch64-unknown-linux-gnu/uvx
-# No node: images that need it install their own.
+# No node: provisioning scripts that need it install their own.
 
 # The unprivileged user that runs the agent (ubuntu:24.04 already ships it).
 RUN id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu
