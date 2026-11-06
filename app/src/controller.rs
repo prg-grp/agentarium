@@ -7,7 +7,9 @@
 //!
 //! The controller also holds the command plane to the guest supervisor: it connects once
 //! the VM runs, answers the supervisor's Hello with Start (the boot mode), and sends the
-//! session terminal's size (Resize) and Stop.
+//! session terminal's size (Resize) and Stop. In agent mode it passes the supervisor's
+//! Status reports on, with CPU use computed from two reports, and notices when they stop
+//! arriving. Only the latest report is kept; nothing is stored.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -20,8 +22,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use command_plane::{
-    EnvVar, GuestMessage, HostMessage, Launch, Mode, Mount, PORT, PROTOCOL_VERSION, Resize, Start,
-    Stop, guest_message, host_message,
+    AgentExit, CollectorState, EnvVar, GuestMessage, HostMessage, Launch, Mode, Mount, PORT,
+    PROTOCOL_VERSION, Resize, Start, Status, Stop, guest_message, host_message,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -29,7 +31,7 @@ use crate::create::{FolderProblem, display_path, env_errors, folder_problem, gue
 use crate::db::{self, Db};
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
-use crate::{AppWindow, Deletion, InstanceItem, InstanceState, StatusReading, Tone};
+use crate::{AppWindow, Deletion, InstanceItem, InstanceState, StatusReading, Tone, Usage};
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
 
@@ -44,6 +46,21 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How long to wait before connecting to the supervisor again while it doesn't listen yet.
 const CONNECT_RETRY: Duration = Duration::from_millis(250);
+
+/// How long an agent-mode boot may go without a Status report before it counts as lost.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The shortest interval CPU use is computed over. Reports sent when the agent starts or
+/// exits can follow the previous one closely; they don't move the baseline.
+const CPU_WINDOW: Duration = Duration::from_secs(1);
+
+/// CPU use between two Status reports, as a share of all vCPUs (0 to 1).
+#[derive(Clone, Copy)]
+struct Cpu {
+    vm: f32,
+    /// None if the agent's cgroup isn't measured.
+    agent: Option<f32>,
+}
 
 /// Messages to a controller thread: from the UI, its VM's completion handlers, and the
 /// command plane's reader thread.
@@ -77,6 +94,11 @@ enum Event {
     Ready,
     /// The provisioning script finished with this exit code.
     Provisioned(i32),
+    /// The supervisor's latest Status, with the CPU use since an earlier one if enough
+    /// time has passed.
+    Status(Status, Option<Cpu>),
+    /// No Status arrived for `STATUS_TIMEOUT`.
+    StatusLost,
     /// The controller ended: the VM stopped, or failed with the error.
     Ended(Result<(), String>),
 }
@@ -189,6 +211,12 @@ fn run(
     let mut failure: Option<String> = None;
     // The session terminal's latest size, sent again on every new connection.
     let mut size: Option<Resize> = None;
+    // Agent mode only: when the last Status arrived (or Start was sent), whether it's
+    // overdue, and the report CPU use is computed against.
+    let agent_mode = start.mode() == Mode::Agent;
+    let mut last_status: Option<Instant> = None;
+    let mut status_lost = false;
+    let mut baseline: Option<Status> = None;
     let mut last = VmState::Starting;
     loop {
         let wait = [deadline, next_connect]
@@ -199,6 +227,7 @@ fn run(
         match received.recv_timeout(wait) {
             Ok(Command::Stop) if deadline.is_none() => {
                 hello_deadline = None;
+                last_status = None;
                 deadline = Some(Instant::now() + STOP_TIMEOUT);
                 // Before the supervisor answers, the power button asks the guest instead.
                 let sent = channel
@@ -244,7 +273,12 @@ fn run(
                             sent = channel.send(host_message::Kind::Resize(size));
                         }
                         match sent {
-                            Ok(()) => report(Event::Ready),
+                            Ok(()) => {
+                                if agent_mode {
+                                    last_status = Some(Instant::now());
+                                }
+                                report(Event::Ready);
+                            }
                             Err(error) => {
                                 eprintln!("Couldn't send Start to the guest supervisor: {error}")
                             }
@@ -258,6 +292,36 @@ fn run(
                 Some(guest_message::Kind::StartFailed(failed)) => {
                     failure = Some(failed.reason);
                 }
+                Some(guest_message::Kind::Status(status)) if deadline.is_none() => {
+                    last_status = Some(Instant::now());
+                    status_lost = false;
+                    let cpu = baseline
+                        .map(|before| {
+                            let elapsed =
+                                status.monotonic_usec.saturating_sub(before.monotonic_usec);
+                            (before, elapsed)
+                        })
+                        .filter(|&(_, elapsed)| elapsed >= CPU_WINDOW.as_micros() as u64)
+                        .map(|(before, elapsed)| {
+                            let total = elapsed as f64 * spec.cpus.max(1) as f64;
+                            let share = |now: u64, then: u64| {
+                                (now.saturating_sub(then) as f64 / total).min(1.0) as f32
+                            };
+                            Cpu {
+                                vm: share(status.vm_cpu_usec, before.vm_cpu_usec),
+                                agent: status
+                                    .agent_usage
+                                    .zip(before.agent_usage)
+                                    .map(|(now, then)| share(now.cpu_usec, then.cpu_usec)),
+                            }
+                        });
+                    if cpu.is_some() || baseline.is_none() {
+                        baseline = Some(status);
+                    }
+                    report(Event::Status(status, cpu));
+                }
+                // While the guest shuts down, the last reports no longer matter.
+                Some(guest_message::Kind::Status(_)) => {}
                 None => eprintln!("Ignoring a message from the guest supervisor."),
             },
             Ok(Command::Resize { columns, rows }) => {
@@ -290,6 +354,10 @@ fn run(
             vm.connect(PORT, move |result| {
                 let _ = connected.send(Command::Connected(result));
             });
+        }
+        if !status_lost && last_status.is_some_and(|at| now >= at + STATUS_TIMEOUT) {
+            status_lost = true;
+            report(Event::StatusLost);
         }
         if hello_deadline.is_some_and(|at| now >= at) {
             hello_deadline = None;
@@ -332,12 +400,19 @@ struct Running {
     mode: BootMode,
     /// The configuration revision this boot uses.
     revision: i64,
+    /// The VM's vCPUs.
+    cpus: usize,
     /// Set while a stop is in progress, with what happens afterwards.
     stop: Option<AfterStop>,
     /// Set once the guest supervisor got Start; until then the boot is still starting.
     ready: bool,
     /// The provisioning script's exit code, once the supervisor reported it.
     provisioned: Option<i32>,
+    /// Agent mode: the supervisor's latest Status and the latest CPU use computed.
+    status: Option<Status>,
+    cpu: Option<Cpu>,
+    /// Set while Status reports are overdue.
+    status_lost: bool,
 }
 
 /// Which of an instance's terminals is shown: the session (Terminal tab) or the boot log
@@ -400,6 +475,7 @@ impl VmControl {
             Ok(prepared) => prepared,
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
+        let cpus = spec.cpus;
         let event_id = id.to_owned();
         let spawned = spawn(spec, start, move |event| {
             let id = event_id.clone();
@@ -419,9 +495,13 @@ impl VmControl {
                 commands,
                 mode,
                 revision,
+                cpus,
                 stop: None,
                 ready: false,
                 provisioned: None,
+                status: None,
+                cpu: None,
+                status_lost: false,
             },
         );
         self.show(id, mode, VmState::Starting);
@@ -722,6 +802,31 @@ impl VmControl {
                     run.provisioned = Some(code);
                 }
             }
+            Event::Status(..) | Event::StatusLost => {
+                let Some((mode, stopping)) = self.running.borrow_mut().get_mut(id).map(|run| {
+                    match event {
+                        Event::Status(status, cpu) => {
+                            run.status = Some(status);
+                            run.cpu = cpu.or(run.cpu);
+                            run.status_lost = false;
+                        }
+                        _ => run.status_lost = true,
+                    }
+                    (run.mode, run.stop.is_some())
+                }) else {
+                    return;
+                };
+                // Reports arrive only once the session runs.
+                self.show(
+                    id,
+                    mode,
+                    if stopping {
+                        VmState::Stopping
+                    } else {
+                        VmState::Running
+                    },
+                );
+            }
             Event::Ended(result) => {
                 let Some(run) = self.running.borrow_mut().remove(id) else {
                     return;
@@ -846,7 +951,8 @@ impl VmControl {
         log.resize(cols, rows);
     }
 
-    /// Updates the instance's sidebar summary and header readings.
+    /// Updates the instance's sidebar summary and its Status tab: the readings and, in
+    /// agent mode, the latest resource use.
     fn show(&self, id: &str, mode: BootMode, state: VmState) {
         let Some((row, mut item)) = (0..self.instances.row_count())
             .filter_map(|row| Some((row, self.instances.row_data(row)?)))
@@ -858,18 +964,114 @@ impl VmControl {
             value: value.into(),
             tone,
         };
-        let agent_name = item.agent.clone();
+        let (status, cpu, lost, cpus) = self
+            .running
+            .borrow()
+            .get(id)
+            .map_or((None, None, false, 0), |run| {
+                (run.status, run.cpu, run.status_lost, run.cpus)
+            });
+        let exit = |exit: AgentExit| {
+            if exit.signal != 0 {
+                format!("Signal {}", exit.signal)
+            } else {
+                format!("Status {}", exit.code)
+            }
+        };
         // Maintenance and provision boots don't start the agent.
         let active = if mode == BootMode::Maintenance {
             InstanceState::Maintenance
         } else {
             InstanceState::Running
         };
-        let agent_reading = || {
-            if mode == BootMode::Agent {
-                reading(&agent_name, Tone::Ok)
-            } else {
-                reading("Not started", Tone::Neutral)
+        let agent_reading = || match (mode, status) {
+            (BootMode::Maintenance, _) => reading("Not running in maintenance", Tone::Neutral),
+            (BootMode::Provision, _) => reading("Not started", Tone::Neutral),
+            _ if lost => reading("Unknown", Tone::Warn),
+            (_, None) => reading("Starting", Tone::Neutral),
+            (_, Some(status)) if status.agent_running => reading("Running", Tone::Ok),
+            (_, Some(status)) => match status.agent_last_exit {
+                Some(last) => reading(
+                    &format!("Exited, {}", exit(last).to_lowercase()),
+                    Tone::Neutral,
+                ),
+                None => reading("Not running", Tone::Neutral),
+            },
+        };
+        let monitoring = match status {
+            _ if mode != BootMode::Agent => reading("Not running", Tone::Neutral),
+            _ if lost => reading("Unknown", Tone::Warn),
+            None => reading("Not running", Tone::Neutral),
+            Some(status) => match status.collector() {
+                CollectorState::Running => reading("Running", Tone::Ok),
+                CollectorState::Stalled => reading("Degraded", Tone::Warn),
+                CollectorState::Stopped => reading("Not running", Tone::Warn),
+                CollectorState::NotInstalled | CollectorState::Unspecified => {
+                    reading("Not installed", Tone::Neutral)
+                }
+            },
+        };
+        let note = |text: &str| Usage {
+            note: text.into(),
+            ..Usage::default()
+        };
+        let usage = match (state, mode, status) {
+            (VmState::Stopped | VmState::Error, ..) => {
+                note("Start the instance to see its resource use.")
+            }
+            (VmState::Stopping, ..) => note("The virtual machine is stopping."),
+            (_, BootMode::Maintenance, _) => note("Resource use is reported in agent mode only."),
+            (_, BootMode::Provision, _) => {
+                note("Resource use is reported once provisioning has finished.")
+            }
+            (_, BootMode::Agent, None) => note("Waiting for the first status report."),
+            (_, BootMode::Agent, Some(status)) => {
+                let size = |bytes: u64| {
+                    let gib = bytes as f64 / f64::from(1 << 30);
+                    if gib >= 1.0 {
+                        format!("{gib:.1} GB")
+                    } else {
+                        format!("{} MB", bytes >> 20)
+                    }
+                };
+                let percent = |share: f32| format!("{:.0}%", share * 100.0);
+                let total = status.vm_memory_total_bytes.max(1);
+                let fraction = |bytes: u64| (bytes as f64 / total as f64).min(1.0) as f32;
+                let agent = status.agent_usage;
+                let vcpus = format!("{cpus} vCPU{}", if cpus == 1 { "" } else { "s" });
+                let vm_memory = size(status.vm_memory_used_bytes);
+                Usage {
+                    note: "".into(),
+                    live: !lost,
+                    measured: agent.is_some(),
+                    agent_cpu: cpu.and_then(|cpu| cpu.agent).unwrap_or(0.0),
+                    vm_cpu: cpu.map_or(0.0, |cpu| cpu.vm),
+                    cpu_text: match cpu {
+                        None => "Measuring…".into(),
+                        Some(Cpu {
+                            vm,
+                            agent: Some(agent),
+                        }) => format!("Agent {} · VM {} of {vcpus}", percent(agent), percent(vm)),
+                        Some(Cpu { vm, agent: None }) => format!("VM {} of {vcpus}", percent(vm)),
+                    }
+                    .into(),
+                    agent_memory: agent.map_or(0.0, |agent| fraction(agent.memory_bytes)),
+                    vm_memory: fraction(status.vm_memory_used_bytes),
+                    memory_text: match agent {
+                        Some(agent) => format!(
+                            "Agent {} · VM {vm_memory} of {}",
+                            size(agent.memory_bytes),
+                            size(total)
+                        ),
+                        None => format!("VM {vm_memory} of {}", size(total)),
+                    }
+                    .into(),
+                    memory_warning: status.vm_memory_used_bytes >= total / 10 * 9
+                        || agent.is_some_and(|agent| agent.oom_kills > 0),
+                    restarts: status.agent_restarts as i32,
+                    last_exit: status.agent_last_exit.map_or("None".into(), exit).into(),
+                    oom_kills: agent.map_or(0, |agent| agent.oom_kills as i32),
+                }
             }
         };
         let (instance_state, summary, vm, agent) = match state {
@@ -928,6 +1130,8 @@ impl VmControl {
         item.transition = transition.into();
         item.vm = vm;
         item.agent_status = agent;
+        item.monitoring = monitoring;
+        item.usage = usage;
         self.instances.set_row_data(row, item);
     }
 }

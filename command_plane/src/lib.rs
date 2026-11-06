@@ -3,6 +3,7 @@
 //! generated types and the framing both sides use.
 
 use std::io::{self, Read, Write};
+use std::time::Duration;
 
 pub use prost::Message;
 
@@ -20,6 +21,9 @@ pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The tag of the virtio-fs device that holds an instance's shared folders.
 pub const SHARE_TAG: &str = "terrarium-shares";
+
+/// How often the supervisor reports `Status` in agent mode.
+pub const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 
 /// The largest encoded message either side sends or accepts.
 pub const MAX_MESSAGE: usize = 1 << 20;

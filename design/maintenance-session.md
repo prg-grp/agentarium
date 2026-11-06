@@ -9,10 +9,10 @@ A running instance booted in maintenance mode: no agent, a root shell, internet 
 │ Instances    [+] │ ⚒ Maintenance session  Internet open, your Mac and local network blocked.      │
 │  ● api-refactor  │   Shared folders stay writable.                        [↻ Return to agent mode] │
 │ ▌⚒ scraper-lab   ├─────────────────────────────────────────────────────────────────────────────────┤
-│   Maintenance,   │ scraper-lab  │ VM Running │ Agent Not running in maintenance │ Monitoring Running │
+│   Maintenance,   │ scraper-lab                                                                     │
 │   internet open  │ Claude Code                                                   [Stop] │ Delete   │
 │  ○ docs-site     ├─────────────────────────────────────────────────────────────────────────────────┤
-│                  │ Terminal (amber underline)   Activity   Settings              [Live activity]  │
+│                  │ Terminal (amber underline)   Logs   Status   Activity   Settings  [Live activity] │
 │                  ├─────────────────────────────────────────────────────────────────────────────────┤
 │                  │ Root shell in scraper-lab                    Boot log │ Live activity    Pause  │
 │                  │ root@scraper-lab:~# apt-get install -y chromium      │ 10:41:20 /usr/lib/…     │
@@ -36,10 +36,10 @@ Maintenance must be unmistakable on every tab for the whole session:
 
 The banner cannot be dismissed.
 
-## Header
+## Header and Status tab
 
-- Agent reading: pause icon in `tx3`, "Not running in maintenance" in `tx2`.
-- Monitoring reading reflects the real state. If the collector is changed or stopped by root, it switches to Degraded or Not running immediately, with the notice from [agent-exited-degraded.md](agent-exited-degraded.md#degraded-monitoring-notice).
+- Status tab, Agent reading: pause icon in `tx3`, "Not running in maintenance" in `tx2`. Resource use is not reported in maintenance; the tab says "Resource use is reported in agent mode only." (see [status-tab.md](status-tab.md)).
+- Status tab, Monitoring reading reflects the real state. If the collector is changed or stopped by root, it switches to Degraded or Not running immediately, with the notice from [agent-exited-degraded.md](agent-exited-degraded.md#degraded-monitoring-notice).
 - Actions: "Restart in agent mode" (ghost, sparkles icon), "Stop" and "Delete". No "Restart in maintenance" while already in maintenance. "Restart in agent mode" does the same as the banner's "Return to agent mode"; the header button exists until the banner is built.
 
 ## Terminal

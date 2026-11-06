@@ -256,6 +256,10 @@ fn to_item(instance: db::Instance) -> InstanceItem {
         vm: reading("Stopped"),
         agent_status: reading("Not running"),
         monitoring: reading("Not running"),
+        usage: Usage {
+            note: "Start the instance to see its resource use.".into(),
+            ..Usage::default()
+        },
         // Counting saved but inactive changes comes with the settings screen.
         pending_changes: 0,
         has_terminal: true,

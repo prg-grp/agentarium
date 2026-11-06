@@ -5,10 +5,10 @@ The main working screen: a running instance in agent mode with the Terminal tab 
 ## Layout
 
 ```
-api-refactor   │ VM Running │ Agent Running │ Monitoring Running │ [Restart in maintenance] [Stop] │ Delete
+api-refactor                                                    [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Logs   Activity   Settings 2 pending                                   [Live activity]
+Terminal   Logs   Status   Activity   Settings 2 pending                                   [Live activity]
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Agent session in /work/api                         Boot log │ Live activity                 Pause
 ─────────────────────────────────────────────────────────── │ ───────────────────────────────────

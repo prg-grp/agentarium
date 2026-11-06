@@ -132,13 +132,13 @@ Stop is deliberately neutral, not primary: a filled blue button always means "go
 
 ## Status vocabulary
 
-The instance header always shows three separate readings. Never collapse them into one indicator.
+The Status tab always shows three separate readings ([design/status-tab.md](design/status-tab.md)); the instance header shows none. Never collapse them into one indicator.
 
 | Reading | Values |
 |---|---|
 | Virtual machine | Running, Starting, Stopping, Stopped, Failed |
-| Agent | Running, Not started, Exited, status *n*, Not running, Not running in maintenance |
-| Monitoring | Running, Degraded, Failed to start, Not running |
+| Agent | Running, Starting, Not started, Exited, status *n*, Not running, Not running in maintenance, Unknown (status reports overdue) |
+| Monitoring | Running, Degraded, Failed to start, Not running, Not installed (no collector in the guest yet), Unknown (status reports overdue) |
 
 Boot mode is not a fourth reading. Maintenance is shown through the window-level amber treatment ([design/maintenance-session.md](design/maintenance-session.md)).
 
@@ -216,6 +216,7 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 | Create: network | [design/create-network.md](design/create-network.md) | Default action, domain and address allow/deny lists, conflicts |
 | Create: review | [design/create-review.md](design/create-review.md) | Read-back, resources, start choice, create |
 | Running instance (terminal) | [design/terminal-running.md](design/terminal-running.md) | Agent terminal with live activity rail |
+| Status tab | [design/status-tab.md](design/status-tab.md) | Readings, live CPU and memory meters, agent restarts |
 | Activity timeline | [design/activity-timeline.md](design/activity-timeline.md) | Filters, counts, timeline, gap rows, event details |
 | Activity network view | [design/activity-network.md](design/activity-network.md) | Destinations, blocked and ambiguous attribution |
 | Startup failure | [design/startup-failure.md](design/startup-failure.md) | Boot stages, withheld agent, boot log |
@@ -233,8 +234,7 @@ These patterns appear on more than one screen. They are flagged here, per [AGENT
 | Composition | Appears in |
 |---|---|
 | Sidebar instance item (icon, name, summary line, selected bar) | All instance screens, creation |
-| Instance header (name, agent, three status readings, actions) | Terminal, Activity, Settings, failure, maintenance, stopped |
-| Status reading (icon, label, value) | Instance header on every instance screen |
+| Instance header (name, agent, actions) | Terminal, Status, Activity, Settings, failure, maintenance, stopped |
 | Tab bar with pending count and optional live-activity toggle | All instance screens |
 | Live activity row (time, icon, target, result line) | Terminal, degraded, maintenance |
 | Monitoring gap row (hatched) | Timeline, live activity rail |

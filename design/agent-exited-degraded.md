@@ -5,10 +5,10 @@ A running VM whose agent process exited, while monitoring is partly working. It 
 ## Layout
 
 ```
-api-refactor  │ VM Running │ Agent Exited, status 1 │ Monitoring Degraded │ [Restart in maintenance] [Stop] │ Delete
+api-refactor                                                   [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Logs   Activity   Settings                                                 [Live activity]
+Terminal   Logs   Status   Activity   Settings                                       [Live activity]
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 ⚠ Monitoring is degraded since 14:19:40. 1,040 file events were dropped because the buffer filled.
   Process and network events are still recorded, and network rules are still enforced.  Show affected interval
@@ -25,11 +25,11 @@ claude exited                                                │ ▨ 14:19:40 to
                         [Reboot instance] [▶ Restart agent]  │ Sample data
 ```
 
-## Header
+## Status tab readings
 
 - Agent: square-x icon in `tx2`, value "Exited, status 1" in `tx`. An exit is not automatically an error; status 0 reads "Exited, status 0".
 - Monitoring: heartbeat in `warn`, "Degraded".
-- Sidebar summary: "Agent exited". If monitoring is also degraded, the sidebar icon stays the running VM icon; details live in the header.
+- Sidebar summary: "Agent exited". If monitoring is also degraded, the sidebar icon stays the running VM icon; details live in the Status tab.
 
 ## Degraded monitoring notice
 

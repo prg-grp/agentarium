@@ -7,6 +7,10 @@
 //! then, nothing logs in or runs there. Stop shuts the guest down; Resize passes on the
 //! size of the app's terminal view.
 //!
+//! In agent mode the agent runs in a cgroup of its own, and the supervisor reports Status
+//! (the guest's and the agent's resource use, and whether the agent runs) every
+//! STATUS_INTERVAL and whenever the agent starts or exits.
+//!
 //! The supervisor logs with `tracing` to stdout, which systemd sends to the journal and
 //! to the kernel console (`hvc0`, the app's read-only Logs tab). Logs name programs and
 //! variables but never contain argument or variable values or the provisioning script.
@@ -26,8 +30,9 @@ use std::thread;
 use std::time::Duration;
 
 use command_plane::{
-    EnvVar, GuestMessage, Hello, HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION,
-    ProvisionFinished, SHARE_TAG, Start, StartFailed, guest_message, host_message,
+    AgentExit, AgentUsage, CollectorState, EnvVar, GuestMessage, Hello, HostMessage, Mode, Mount,
+    PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, STATUS_INTERVAL, Start, StartFailed,
+    Status, guest_message, host_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -44,6 +49,47 @@ const SHARES_DIR: &str = "/run/terrarium/shares";
 
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
+
+/// The agent's state during an agent-mode boot, as Status reports it.
+#[derive(Default)]
+struct AgentState {
+    started: bool,
+    running: bool,
+    restarts: u32,
+    last_exit: Option<AgentExit>,
+}
+
+/// The agent's cgroup (v2), beside the supervisor's own in the service's cgroup, which
+/// systemd delegates to it (`Delegate=` in terrarium-supervisor.service).
+struct AgentCgroup {
+    dir: PathBuf,
+    /// Its `cgroup.procs`; a new session writes to it before exec, which moves it in.
+    procs: File,
+}
+
+impl AgentCgroup {
+    fn create() -> io::Result<AgentCgroup> {
+        let own = fs::read_to_string("/proc/self/cgroup")?;
+        let path = own
+            .lines()
+            .find_map(|line| line.strip_prefix("0::"))
+            .ok_or_else(|| io::Error::other("the guest has no cgroup v2 hierarchy"))?;
+        // systemd starts the supervisor in a subgroup of the service's cgroup
+        // (`DelegateSubgroup=`), because a cgroup that hands controllers to its children
+        // can't hold processes itself.
+        let own = Path::new("/sys/fs/cgroup").join(path.trim_start_matches('/'));
+        let base = own
+            .parent()
+            .ok_or_else(|| io::Error::other("the supervisor runs in the root cgroup"))?;
+        fs::write(base.join("cgroup.subtree_control"), "+cpu +memory")?;
+        let dir = base.join("agent");
+        fs::create_dir_all(&dir)?;
+        let procs = OpenOptions::new()
+            .write(true)
+            .open(dir.join("cgroup.procs"))?;
+        Ok(AgentCgroup { dir, procs })
+    }
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -196,8 +242,36 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                 return tty.notify("The app sent no command to start.");
             };
             info!("starting agent mode");
+            let cgroup = AgentCgroup::create()
+                .inspect_err(|error| {
+                    warn!(%error, "couldn't set up the agent's cgroup; its resource use isn't reported");
+                })
+                .ok();
+            let cgroup_dir = cgroup.as_ref().map(|cgroup| cgroup.dir.clone());
+            let agent = Arc::new(Mutex::new(AgentState::default()));
+            let report = {
+                let (channel, agent) = (channel.clone(), agent.clone());
+                move || {
+                    let status = status(&agent.lock().unwrap(), cgroup_dir.as_deref());
+                    send(&channel, guest_message::Kind::Status(status));
+                }
+            };
+            let periodic = report.clone();
+            thread::spawn(move || {
+                loop {
+                    thread::sleep(STATUS_INTERVAL);
+                    periodic();
+                }
+            });
             repeat(tty, &launch.command, || {
-                session(
+                {
+                    let mut state = agent.lock().unwrap();
+                    state.restarts += u32::from(state.started);
+                    state.started = true;
+                    state.running = true;
+                }
+                report();
+                let result = session(
                     tty,
                     "ubuntu",
                     &launch.command,
@@ -205,7 +279,20 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                     &launch.working_directory,
                     &start.environment,
                     true,
-                )
+                    cgroup.as_ref().map(|cgroup| &cgroup.procs),
+                );
+                {
+                    let mut state = agent.lock().unwrap();
+                    state.running = false;
+                    if let Ok(status) = &result {
+                        state.last_exit = Some(AgentExit {
+                            code: status.code().unwrap_or(-1),
+                            signal: status.signal().unwrap_or(0),
+                        });
+                    }
+                }
+                report();
+                result
             });
         }
         Mode::Maintenance => {
@@ -219,6 +306,7 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                     "",
                     &start.environment,
                     true,
+                    None,
                 )
             });
         }
@@ -386,7 +474,7 @@ fn provision(tty: &Tty, script: &str) -> i32 {
         return -1;
     }
     info!(path, bytes = script.len(), "wrote the provisioning script");
-    match session(tty, "root", "/bin/bash", &[path], "", &[], false) {
+    match session(tty, "root", "/bin/bash", &[path], "", &[], false, None) {
         Ok(status) => status.code().unwrap_or(-1),
         Err(error) => {
             error!(%error, "couldn't run the provisioning script");
@@ -398,7 +486,9 @@ fn provision(tty: &Tty, script: &str) -> i32 {
 
 /// Runs `program` as `user` on the session console and waits for it. An interactive
 /// session reads the console and gets it as its controlling terminal; otherwise stdin is
-/// empty. An empty `directory` means the user's home folder.
+/// empty. An empty `directory` means the user's home folder. With `cgroup` (a
+/// `cgroup.procs` file), the session runs in that cgroup.
+#[allow(clippy::too_many_arguments)]
 fn session(
     tty: &Tty,
     user: &str,
@@ -407,6 +497,7 @@ fn session(
     directory: &str,
     environment: &[EnvVar],
     interactive: bool,
+    cgroup: Option<&File>,
 ) -> io::Result<ExitStatus> {
     let account = Account::find(user)
         .inspect_err(|error| error!(user, %error, "couldn't look up the user"))?;
@@ -454,9 +545,10 @@ fn session(
     let Account {
         uid, gid, groups, ..
     } = account;
+    let cgroup = cgroup.map(AsRawFd::as_raw_fd);
     // Runs in the child between fork and exec, so only async-signal-safe calls. The new
-    // session takes the console while still root, so it can take it over from a session
-    // that left processes behind.
+    // session takes the console and joins its cgroup while still root, so it can take the
+    // console over from a session that left processes behind.
     unsafe {
         command.pre_exec(move || {
             let check = |result: libc::c_int| {
@@ -466,6 +558,11 @@ fn session(
                     Ok(())
                 }
             };
+            // "0" moves the writing process. Without the move the session still runs;
+            // its use just isn't counted.
+            if let Some(fd) = cgroup {
+                libc::write(fd, b"0".as_ptr().cast(), 1);
+            }
             check(libc::setsid())?;
             if interactive {
                 check(libc::ioctl(0, libc::TIOCSCTTY, 1))?;
@@ -621,6 +718,67 @@ impl Account {
             home,
             groups,
         })
+    }
+}
+
+/// Takes a Status report: the guest's counters, the agent's state, and the usage of the
+/// agent's cgroup in `cgroup`. A counter that can't be read is 0.
+fn status(agent: &AgentState, cgroup: Option<&Path>) -> Status {
+    let read = |path: &Path| fs::read_to_string(path).unwrap_or_default();
+    // The number after `key` on its line, in files like /proc/meminfo or cpu.stat.
+    let field = |text: &str, key: &str| -> u64 {
+        text.lines()
+            .find_map(|line| {
+                line.strip_prefix(key)?
+                    .split_whitespace()
+                    .next()?
+                    .parse()
+                    .ok()
+            })
+            .unwrap_or(0)
+    };
+    let meminfo = read(Path::new("/proc/meminfo"));
+    let (total, available) = (
+        field(&meminfo, "MemTotal:") * 1024,
+        field(&meminfo, "MemAvailable:") * 1024,
+    );
+    // The first line adds up all CPUs' ticks by kind: user nice system idle iowait irq
+    // softirq steal (guest time is already in user). Everything but idle and iowait is busy.
+    let ticks: u64 = read(Path::new("/proc/stat"))
+        .lines()
+        .next()
+        .map(|line| {
+            line.split_whitespace()
+                .skip(1)
+                .take(8)
+                .enumerate()
+                .filter(|(kind, _)| !matches!(kind, 3 | 4))
+                .filter_map(|(_, value)| value.parse::<u64>().ok())
+                .sum()
+        })
+        .unwrap_or(0);
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) };
+    Status {
+        monotonic_usec: now.tv_sec as u64 * 1_000_000 + now.tv_nsec as u64 / 1_000,
+        vm_cpu_usec: ticks * 1_000_000 / hz,
+        vm_memory_used_bytes: total.saturating_sub(available),
+        vm_memory_total_bytes: total,
+        agent_running: agent.running,
+        agent_restarts: agent.restarts,
+        agent_last_exit: agent.last_exit,
+        // Like the VM's figure, the agent's memory leaves out cache the kernel can reclaim.
+        agent_usage: cgroup.map(|dir| AgentUsage {
+            cpu_usec: field(&read(&dir.join("cpu.stat")), "usage_usec "),
+            memory_bytes: read(&dir.join("memory.current"))
+                .trim()
+                .parse::<u64>()
+                .unwrap_or(0)
+                .saturating_sub(field(&read(&dir.join("memory.stat")), "inactive_file ")),
+            oom_kills: field(&read(&dir.join("memory.events")), "oom_kill "),
+        }),
+        collector: CollectorState::NotInstalled.into(),
     }
 }
 

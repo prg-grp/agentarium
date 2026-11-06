@@ -1,0 +1,334 @@
+// Status tab: the instance's three readings and, in agent mode, its live resource use.
+// See design/status-tab.md.
+
+import { Theme } from "theme.slint";
+import { Tone, StatusReading, InstanceItem, InstanceState } from "types.slint";
+
+// One reading: icon, label, value in the state's color.
+component StatusCell {
+    in property <image> icon;
+    in property <string> label;
+    in property <StatusReading> reading;
+
+    HorizontalLayout {
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: center;
+            Image {
+                source: icon;
+                colorize: reading.tone == Tone.neutral ? Theme.tx3 : Theme.tone-color(reading.tone);
+                width: 18px;
+                height: 18px;
+                accessible-role: none;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: label;
+                font-size: Theme.font-meta;
+                color: Theme.tx3;
+            }
+
+            Text {
+                text: reading.value;
+                font-size: Theme.font-body;
+                color: Theme.tone-color(reading.tone);
+            }
+        }
+    }
+}
+
+// A stacked meter: the agent's part, then the rest of the VM, on the free track.
+component Meter {
+    in property <string> label;
+    in property <string> value;
+    in property <float> agent;
+    in property <float> vm;
+    in property <bool> live;
+    in property <bool> warning;
+
+    // The agent is part of the VM, so the VM's part is never shorter.
+    property <float> whole: max(vm, agent);
+    property <length> gap: agent > 0 && whole > agent ? 2px : 0px;
+
+    accessible-role: text;
+    accessible-label: label;
+    accessible-value: value;
+
+    VerticalLayout {
+        spacing: 8px;
+
+        HorizontalLayout {
+            Text {
+                text: label;
+                color: Theme.tx;
+                font-weight: Theme.weight-medium;
+            }
+
+            Text {
+                text: value;
+                color: live ? Theme.tx2 : Theme.tx3;
+                font-size: Theme.font-small;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        track := Rectangle {
+            height: 10px;
+            border-radius: 4px;
+            clip: true;
+            background: Theme.raise;
+            opacity: live ? 1 : 0.4;
+
+            Rectangle {
+                x: 0;
+                width: track.width * agent;
+                background: warning ? Theme.warn : Theme.tx2;
+            }
+
+            Rectangle {
+                x: track.width * agent + gap;
+                width: max(0px, track.width * (whole - agent) - gap);
+                background: Theme.tx3;
+            }
+        }
+    }
+}
+
+// A key/value row with a hairline below.
+component DetailRow {
+    in property <string> label;
+    in property <string> value;
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding-top: 10px;
+            padding-bottom: 10px;
+
+            Text {
+                text: label;
+                color: Theme.tx2;
+                font-size: Theme.font-small;
+            }
+
+            Text {
+                text: value;
+                color: Theme.tx;
+                font-size: Theme.font-small;
+                horizontal-alignment: right;
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+    }
+}
+
+component LegendKey {
+    in property <color> swatch;
+    in property <string> text;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 10px;
+                height: 10px;
+                border-radius: 2px;
+                background: swatch;
+            }
+        }
+
+        Text {
+            text: text;
+            color: Theme.tx3;
+            font-size: Theme.font-meta;
+        }
+    }
+}
+
+export component StatusTab {
+    in property <InstanceItem> item;
+
+    VerticalLayout {
+        padding-left: 28px;
+        padding-right: 28px;
+        padding-top: 24px;
+        spacing: 28px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 48px;
+            alignment: start;
+
+            StatusCell {
+                icon: @image-url("icons/server-2.svg");
+                label: "Virtual machine";
+                reading: item.vm;
+            }
+
+            StatusCell {
+                // Running or starting; reports overdue; exited (agent mode with reports);
+                // otherwise not started.
+                icon: item.agent-status.tone == Tone.ok || item.agent-status.value == "Starting" ? @image-url("icons/sparkles.svg")
+                    : item.agent-status.tone == Tone.warn ? @image-url("icons/alert-triangle.svg")
+                    : item.state == InstanceState.running && item.usage.note == "" ? @image-url("icons/square-x.svg")
+                    : @image-url("icons/player-pause.svg");
+                label: "Agent";
+                reading: item.agent-status;
+            }
+
+            StatusCell {
+                icon: @image-url("icons/heartbeat.svg");
+                label: "Monitoring";
+                reading: item.monitoring;
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        if item.usage.note != "": Text {
+            text: item.usage.note;
+            color: Theme.tx3;
+            font-size: Theme.font-small;
+        }
+
+        if item.usage.note == "": VerticalLayout {
+            spacing: 20px;
+            max-width: 720px;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Text {
+                    text: "Resource use";
+                    font-size: Theme.font-section;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.tx;
+                }
+
+                if !item.usage.live: VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("icons/alert-triangle.svg");
+                        colorize: Theme.warn;
+                        width: 14px;
+                        height: 14px;
+                        accessible-role: none;
+                    }
+                }
+
+                Text {
+                    text: item.usage.live ? "Updated every 2 s" : "No status received for over 10 s";
+                    color: item.usage.live ? Theme.tx3 : Theme.warn;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+            }
+
+            Meter {
+                label: "CPU";
+                value: item.usage.cpu-text;
+                agent: item.usage.agent-cpu;
+                vm: item.usage.vm-cpu;
+                live: item.usage.live;
+            }
+
+            Meter {
+                label: "Memory";
+                value: item.usage.memory-text;
+                agent: item.usage.agent-memory;
+                vm: item.usage.vm-memory;
+                live: item.usage.live;
+                warning: item.usage.memory-warning;
+            }
+
+            HorizontalLayout {
+                spacing: 18px;
+                alignment: start;
+
+                if item.usage.measured: LegendKey {
+                    swatch: item.usage.memory-warning ? Theme.warn : Theme.tx2;
+                    text: "Agent";
+                }
+
+                LegendKey {
+                    swatch: Theme.tx3;
+                    text: item.usage.measured ? "Rest of the VM" : "VM";
+                }
+
+                LegendKey {
+                    swatch: Theme.raise;
+                    text: "Free";
+                }
+            }
+
+            if !item.usage.measured: Text {
+                text: "The agent's own use can't be measured in this instance; the meters show the whole VM.";
+                color: Theme.tx3;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            if item.usage.memory-warning: HorizontalLayout {
+                spacing: 8px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("icons/alert-triangle.svg");
+                        colorize: Theme.warn;
+                        width: 14px;
+                        height: 14px;
+                        accessible-role: none;
+                    }
+                }
+
+                Text {
+                    text: item.usage.oom-kills > 0 ? "The agent ran out of memory. Give the instance more memory in its settings."
+                        : "The VM's memory is almost full.";
+                    color: Theme.warn;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+
+            VerticalLayout {
+                padding-top: 8px;
+
+                Text {
+                    text: "Agent";
+                    font-size: Theme.font-section;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.tx;
+                }
+
+                DetailRow {
+                    label: "Restarts this boot";
+                    value: item.usage.restarts;
+                }
+
+                DetailRow {
+                    label: "Last exit";
+                    value: item.usage.last-exit;
+                }
+
+                if item.usage.measured: DetailRow {
+                    label: "Processes ended for lack of memory";
+                    value: item.usage.oom-kills;
+                }
+            }
+        }
+    }
+}

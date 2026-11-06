@@ -5,10 +5,10 @@ A stopped instance with the Activity tab open and the run picker expanded. Frame
 ## Layout
 
 ```
-docs-site   │ VM Stopped │ Agent Not running │ Monitoring Not running │ [Boot in maintenance] [▶ Start] │ Delete
+docs-site                                                       [Boot in maintenance] [▶ Start] │ Delete
 Claude Code
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Logs   Activity   Settings
+Terminal   Logs   Status   Activity   Settings
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 [Timeline|Network]  [⟲ Run 23, Nov 2 at 09:12 ▴]  [⌕ Search paths, commands and addresses     ]
            ┌────────────────────────────────────────────────────────────┐
@@ -28,9 +28,9 @@ Time       │   Agent mode, configuration revision 4                     │
            └────────────────────────────────────────────────────────────┘
 ```
 
-## Header
+## Header and Status tab
 
-- All three readings in `tx2` with `tx3` icons: "Stopped", "Not running", "Not running".
+- Status tab: all three readings in `tx2` with `tx3` icons: "Stopped", "Not running", "Not running".
 - Actions: "Boot in maintenance" (ghost, opens [maintenance-confirmation.md](maintenance-confirmation.md)), "Start" (primary, play icon), divider, "Delete".
 - Sidebar: hollow circle in `tx3`, "Stopped 2 days ago".
 

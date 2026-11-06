@@ -7,6 +7,10 @@ ExecStart=/usr/local/sbin/terrarium-supervisor
 # Its logs (and stderr, which follows stdout) also go to hvc0, the app's Logs tab.
 StandardOutput=journal+console
 Restart=on-failure
+# The supervisor runs the agent in a cgroup of its own (agent/, beside its own
+# supervisor/) and reads its CPU and memory use.
+Delegate=cpu memory
+DelegateSubgroup=supervisor
 # Stopping sends SIGTERM to the supervisor and its session, which share this cgroup.
 # Interactive shells ignore SIGTERM; SIGHUP (the terminal hung up) ends them, like a logout.
 SendSIGHUP=yes

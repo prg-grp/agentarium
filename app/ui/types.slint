@@ -13,6 +13,28 @@ export struct StatusReading {
     tone: Tone,
 }
 
+// The resource use the guest supervisor last reported, for the Status tab (src/controller.rs).
+// Fractions are 0 to 1, of all vCPUs or of the guest's memory. Nothing is stored.
+export struct Usage {
+    // Shown instead of the meters when there is nothing to report; "" when there is.
+    note: string,
+    // False while reports are overdue.
+    live: bool,
+    // Whether the agent's own use is measured (its cgroup could be set up).
+    measured: bool,
+    agent-cpu: float,
+    vm-cpu: float,
+    cpu-text: string,
+    agent-memory: float,
+    vm-memory: float,
+    memory-text: string,
+    // The guest's memory is almost full, or the agent ran out of memory.
+    memory-warning: bool,
+    restarts: int,
+    last-exit: string,
+    oom-kills: int,
+}
+
 export struct InstanceItem {
     id: string,
     name: string,
@@ -22,6 +44,7 @@ export struct InstanceItem {
     vm: StatusReading,
     agent-status: StatusReading,
     monitoring: StatusReading,
+    usage: Usage,
     pending-changes: int,
     has-terminal: bool,
     // Label of the start, stop or restart in progress, shown over the terminal; "" when none.

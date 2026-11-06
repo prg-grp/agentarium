@@ -7,6 +7,10 @@
 //
 // The guest has two serial consoles: the session runs alone on hvc1 (the app's Terminal
 // tab); hvc0 carries the kernel, systemd and supervisor output (the read-only Logs tab).
+//
+// In agent mode the supervisor also reports Status every STATUS_INTERVAL (see
+// src/lib.rs) and at once when the agent starts or exits. The app keeps only the latest
+// report; nothing is stored.
 syntax = "proto3";
 
 package agent_toolbox.command_plane.v1;
@@ -26,6 +30,7 @@ message GuestMessage {
     Hello hello = 1;
     ProvisionFinished provision_finished = 2;
     StartFailed start_failed = 3;
+    Status status = 4;
   }
 }
 
@@ -100,4 +105,52 @@ message ProvisionFinished {
 // was started. The supervisor powers off after sending it.
 message StartFailed {
   string reason = 1;
+}
+
+// Agent mode only: the guest's resource use and the state of its processes. CPU times
+// are running totals; the app computes rates from two consecutive reports.
+message Status {
+  // The guest's CLOCK_MONOTONIC when the report was taken, in microseconds.
+  uint64 monotonic_usec = 1;
+  // Busy time of all vCPUs together, since boot.
+  uint64 vm_cpu_usec = 2;
+  // MemTotal - MemAvailable.
+  uint64 vm_memory_used_bytes = 3;
+  // MemTotal: what the guest sees, a little less than the VM's memory.
+  uint64 vm_memory_total_bytes = 4;
+  bool agent_running = 5;
+  // How often the agent was started again during this boot.
+  uint32 agent_restarts = 6;
+  // Absent until the agent first exits.
+  AgentExit agent_last_exit = 7;
+  // The agent's cgroup; absent if it couldn't be set up.
+  AgentUsage agent_usage = 8;
+  CollectorState collector = 9;
+}
+
+message AgentExit {
+  // -1 if it was ended by a signal.
+  int32 code = 1;
+  // 0 if it exited by itself.
+  int32 signal = 2;
+}
+
+// The agent's cgroup: the agent and every process it started, wherever they moved.
+message AgentUsage {
+  // CPU time since the boot's first agent start.
+  uint64 cpu_usec = 1;
+  // memory.current without inactive file cache, which the kernel can reclaim.
+  uint64 memory_bytes = 2;
+  // Processes the kernel ended because the cgroup ran out of memory.
+  uint64 oom_kills = 3;
+}
+
+// The activity collector. There is none yet, so the supervisor reports NOT_INSTALLED.
+enum CollectorState {
+  COLLECTOR_STATE_UNSPECIFIED = 0;
+  COLLECTOR_STATE_NOT_INSTALLED = 1;
+  COLLECTOR_STATE_RUNNING = 2;
+  // Running, but its events stopped advancing.
+  COLLECTOR_STATE_STALLED = 3;
+  COLLECTOR_STATE_STOPPED = 4;
 }

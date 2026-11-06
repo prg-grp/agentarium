@@ -6,11 +6,11 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 
 ```
 ┌──────────────────┬──────────────────────────────────────────────────────────────────────┐
-│ ● ● ●            │ api-refactor       │ VM        │ Agent     │ Monitoring │ [Restart in  │
-│                  │ Claude Code        │ Running   │ Running   │ Running    │  maintenance]│
-│ Instances    [+] │                                                         [Stop] │ Delete │
+│ ● ● ●            │ api-refactor                     [Restart in maintenance] [Stop] │ Delete │
+│                  │ Claude Code                                                          │
+│ Instances    [+] │                                                                      │
 │ ▌● api-refactor  ├──────────────────────────────────────────────────────────────────────┤
-│    Running       │ Terminal   Logs   Activity   Settings 2 pending   [Live activity]    │
+│    Running       │ Terminal   Logs   Status   Activity   Settings 2 pending  [Live act.] │
 │  ⚒ scraper-lab   ├──────────────────────────────────────────────────────────────────────┤
 │    Maintenance,  │                                                                      │
 │    internet open │                      tab content                                     │
@@ -41,22 +41,22 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 Left to right:
 
 1. Instance name (22 / 28, 500) with the agent name below in `tx2` ("Claude Code").
-2. Three status readings, each separated by a 1 px `line` left border and 22 px padding: icon (18 px), label in `tx3` 12 / 16, value 14 / 20 in the state color. Readings: Virtual machine, Agent, Monitoring. Values are listed in [DESIGN.md](../DESIGN.md#status-vocabulary).
-3. Flexible space.
-4. Actions, right-aligned with 10 px gaps:
+2. Flexible space.
+3. Actions, right-aligned with 10 px gaps:
    - Running: "Restart in maintenance" (ghost, tool icon), "Stop" (neutral, stop icon).
    - Stopped: "Boot in maintenance" (ghost), "Start" (primary).
    - Maintenance session: "Stop" only; "Return to agent mode" lives in the maintenance banner.
    - Then a 1 px × 22 px `line2` divider and "Delete" (danger ghost, trash icon).
 
-Do not add a separate mode reading. Maintenance is shown by the amber window treatment ([maintenance-session.md](maintenance-session.md)).
+The header carries no status readings; the Virtual machine, Agent and Monitoring readings live in the Status tab ([status-tab.md](status-tab.md)). Maintenance is shown by the amber window treatment ([maintenance-session.md](maintenance-session.md)), not by a mode reading.
 
 ## Tab bar
 
 - 44 px tall, 28 px gaps, 1 px `line` bottom border.
-- Tabs: Terminal, Logs, Activity, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
+- Tabs: Terminal, Logs, Status, Activity, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
 - Settings shows "2 pending" in `acc` 12 px when saved changes wait for the next boot.
 - Logs shows the instance's boot log in the same terminal view, read-only: kernel, systemd and supervisor output from boot to shutdown. Header: "Boot log" (`tx2`, 500) and "Serial console, not the agent session" (`tx3`). No cursor; typing and pasting do nothing, while selecting, copying, scrolling and "Jump to latest" work as in the Terminal tab. Output is kept until the next start.
+- Status shows the readings and the live resource use; see [status-tab.md](status-tab.md).
 - On the Terminal tab only, a "Live activity" toggle sits at the right end (ghost, compact, sidebar-right icon). Pressed state: `raise` background and `tx` text. It shows or hides the live activity rail; the terminal takes the full width when hidden. Remember the choice per instance.
 
 ## Removed on purpose

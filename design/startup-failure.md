@@ -5,10 +5,10 @@ An instance whose boot stopped before the agent launched. Frame: [app-shell.md](
 ## Layout
 
 ```
-infra-audit   │ VM Running │ Agent Not started │ Monitoring Failed to start │ [Restart in maintenance] [Stop] │ Delete
+infra-audit                                                     [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Logs   Activity   Settings
+Terminal   Logs   Status   Activity   Settings
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
 The agent wasn't started                           │ Boot log      Serial console, not the agent session
 Monitoring didn't come up, so nothing ran without  │ [    0.000000] Linux version 6.12.4-toolbox (arm64)
@@ -29,9 +29,9 @@ running.                                           │ [    2.003117] toolbox-su
 
 - Two columns: stages (max 520 px, 28 px padding) and the boot log (flexible, `well` background, 1 px `line` left border).
 
-## Header
+## Header and Status tab
 
-- Readings are independent: Virtual machine "Running" (`ok`), Agent "Not started" (`tx2`, pause icon in `tx3`), Monitoring "Failed to start" (`bad`).
+- The Status tab's readings are independent: Virtual machine "Running" (`ok`), Agent "Not started" (`tx2`, pause icon in `tx3`), Monitoring "Failed to start" (`bad`).
 - If the VM process is gone, Virtual machine reads "Failed" in `bad` and the actions become "Start" / "Boot in maintenance".
 - Sidebar item: alert-triangle in `bad`, "Startup failed".
 
