@@ -1,0 +1,81 @@
+// The command plane between the app (host) and the guest supervisor.
+//
+// The app connects to the supervisor on vsock port 700 (see PORT in src/lib.rs); only
+// root can listen on ports up to 1023 in the guest. Each message is a big-endian u32
+// length followed by the encoded message. The guest says Hello first; the app answers
+// with Start, which decides what the boot runs. Nothing runs before that.
+//
+// The guest has two serial consoles: the session runs alone on hvc1 (the app's Terminal
+// tab); hvc0 carries the kernel, systemd and supervisor output (the read-only Logs tab).
+syntax = "proto3";
+
+package agent_toolbox.command_plane.v1;
+
+// App to guest.
+message HostMessage {
+  oneof kind {
+    Start start = 1;
+    Stop stop = 2;
+    Resize resize = 3;
+  }
+}
+
+// Guest to app.
+message GuestMessage {
+  oneof kind {
+    Hello hello = 1;
+    ProvisionFinished provision_finished = 2;
+  }
+}
+
+// Sent by the supervisor on every new connection.
+message Hello {
+  uint32 protocol_version = 1;
+}
+
+enum Mode {
+  MODE_UNSPECIFIED = 0;
+  // Runs the launch command as the unprivileged user, again whenever it exits.
+  MODE_AGENT = 1;
+  // Runs a root login shell, again whenever it exits.
+  MODE_MAINTENANCE = 2;
+  // Runs the provisioning script as root, reports ProvisionFinished, then powers off.
+  MODE_PROVISION = 3;
+}
+
+// What this boot runs. Only the first Start of a boot counts.
+message Start {
+  Mode mode = 1;
+  // Agent mode only.
+  Launch launch = 2;
+  // Provision mode only: a bash script.
+  string provision_script = 3;
+}
+
+// The agent's command, run directly (not through a shell).
+message Launch {
+  string command = 1;
+  repeated string arguments = 2;
+  string working_directory = 3;
+  repeated EnvVar environment = 4;
+}
+
+message EnvVar {
+  string name = 1;
+  string value = 2;
+}
+
+// Shuts the guest down cleanly.
+message Stop {}
+
+// The size of the app's terminal view, for the session console (hvc1). May arrive
+// before or after Start; the latest one counts.
+message Resize {
+  uint32 columns = 1;
+  uint32 rows = 2;
+}
+
+message ProvisionFinished {
+  // The script's exit code; -1 if it couldn't run or was killed by a signal.
+  int32 exit_code = 1;
+}

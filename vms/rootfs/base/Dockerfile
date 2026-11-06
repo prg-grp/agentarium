@@ -21,21 +21,18 @@ RUN systemctl set-default multi-user.target && \
     e2scrub_reap.service \
     systemd-firstboot.service
 
-# The app's terminal is the virtio console (hvc0), logged in there without a password:
-# ubuntu in agent mode, root in maintenance mode (kernel flag agent_toolbox.mode=maintenance).
-# Provision mode (agent_toolbox.mode=provision) runs no login; the provisioning script's
-# output goes to the console instead.
-COPY --chmod=755 console-autologin /usr/local/sbin/console-autologin
-RUN mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d && \
-    printf '[Unit]\nConditionKernelCommandLine=!agent_toolbox.mode=provision\n\n[Service]\nExecStart=\nExecStart=-/usr/local/sbin/console-autologin $TERM\n' \
-    > /etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf
+# The app's terminal is the virtio console (hvc0). No login runs on it, or anywhere:
+# the supervisor alone starts what a boot runs there, once the app sends Start over the
+# command plane (vsock): the agent's command as ubuntu, a root shell in maintenance mode,
+# or the provisioning script in provision mode. The binary is built from guest_supervisor
+# and handed in as the build context "supervisor" (see vms/rootfs/Makefile).
+RUN systemctl mask serial-getty@hvc0.service getty@tty1.service
+COPY --from=supervisor --chmod=755 terrarium-supervisor /usr/local/sbin/terrarium-supervisor
+COPY terrarium-supervisor.service /etc/systemd/system/terrarium-supervisor.service
+RUN systemctl enable terrarium-supervisor.service
 
-# Provision mode runs the instance's provisioning script from a folder the app shares,
-# then powers off. The app boots it before the first agent boot; the script installs
-# the agent harness.
-COPY --chmod=755 agent-toolbox-provision /usr/local/sbin/agent-toolbox-provision
-COPY agent-toolbox-provision.service /etc/systemd/system/agent-toolbox-provision.service
-RUN systemctl enable agent-toolbox-provision.service
+# The command plane's vsock transport, loaded early so the supervisor can listen right away.
+RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf
 
 # Virtualization.framework gives Linux guests no usable hardware clock. The clock is set
 # early at boot from the Mac's time on the kernel command line; timesyncd keeps it right
@@ -44,7 +41,8 @@ COPY --chmod=755 clock-from-host /usr/local/sbin/clock-from-host
 COPY clock-from-host.service /etc/systemd/system/clock-from-host.service
 RUN systemctl enable clock-from-host.service
 
-# The app's Stop presses Virtualization.framework's power button (a PL061 GPIO key);
+# The app's Stop goes to the supervisor over the command plane. Before the supervisor
+# answers, it presses Virtualization.framework's power button (a PL061 GPIO key) instead;
 # gpio_keys reports it and systemd-logind powers off.
 RUN printf 'gpio_keys\n' > /etc/modules-load.d/power-button.conf
 

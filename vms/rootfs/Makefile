@@ -4,23 +4,30 @@
 SIZE := 64G
 OUT := ../../target/rootfs
 
+# The guest supervisor binary (terrarium-supervisor); the root Makefile builds and sets it.
+SUPERVISOR ?=
+
 SHELL := /bin/bash
 .PHONY: all clean
 .DELETE_ON_ERROR:
 
 all: $(OUT)/base.ext4
 
-# Rebuilt when anything in base/ changes. The docker export is unpacked in an Alpine
-# container whose mkfs.ext4 writes a sparse raw ext4 image at its full virtual size, so
-# guests never need a resize: the file only takes the space of the blocks written to it.
+# Rebuilt when anything in base/ or the supervisor changes. The docker export is unpacked
+# in an Alpine container whose mkfs.ext4 writes a sparse raw ext4 image at its full virtual
+# size, so guests never need a resize: the file only takes the space of the blocks written
+# to it.
 # Inode tables and journal are left unwritten (lazy init); the guest mounts root with
 # noinit_itable, so they stay unwritten. Virtualization.framework attaches the image as a
 # virtio-blk disk (/dev/vda).
 # /.dockerenv is dropped: with it, systemd thinks it runs in a Docker container and skips
 # kernel command line conditions, timesyncd and its clock floor.
-$(OUT)/base.ext4: $(shell find base -type f) Makefile
-	docker build --platform linux/arm64 -t agent-toolbox/base base
-	mkdir -p $(OUT)
+# The supervisor binary is handed to Docker as the named build context "supervisor".
+$(OUT)/base.ext4: $(shell find base -type f) Makefile $(SUPERVISOR)
+	@test -n "$(SUPERVISOR)" || { echo 'SUPERVISOR is not set; run `make rootfs` from the repository root.' >&2; exit 1; }
+	mkdir -p $(OUT)/supervisor
+	cp $(SUPERVISOR) $(OUT)/supervisor/terrarium-supervisor
+	docker build --platform linux/arm64 --build-context supervisor=$(OUT)/supervisor -t agent-toolbox/base base
 	set -euo pipefail; \
 	cid=$$(docker create --platform linux/arm64 agent-toolbox/base); \
 	trap 'docker rm $$cid >/dev/null' EXIT; \

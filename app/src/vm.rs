@@ -4,7 +4,8 @@
 //! other and of the UI thread. `Vm`'s methods can be called from any thread; they run
 //! on that queue, where completion handlers also run.
 
-use std::os::fd::{IntoRawFd, OwnedFd};
+use std::fs::File;
+use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,10 +16,10 @@ use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
     VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
-    VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZSharedDirectory, VZSingleDirectoryShare,
-    VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceSerialPortConfiguration,
-    VZVirtioEntropyDeviceConfiguration, VZVirtioFileSystemDeviceConfiguration,
-    VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZVirtioBlockDeviceConfiguration,
+    VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
+    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
     VZVirtualMachineState,
 };
 
@@ -31,30 +32,24 @@ const KERNEL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image
 /// Names the base root filesystem that instance disks are cloned from; `make run` sets it.
 const BASE_ROOTFS_VAR: &str = "AGENT_TOOLBOX_BASE_ROOTFS";
 
-/// The virtio-fs tag of the shared provisioning folder; the guest mounts it in provision mode.
-const PROVISION_TAG: &str = "agent-toolbox-provision";
-
-/// What the guest does after booting; it reads the mode from a kernel flag.
+/// What the guest does after booting. The app sends it to the guest supervisor over the
+/// command plane (`Start`); nothing runs on the console before that.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BootMode {
-    /// The console logs in `ubuntu`, whose login starts the agent.
+    /// The supervisor runs the instance's launch command as `ubuntu`.
     Agent,
-    /// The console logs in root without the agent.
+    /// The supervisor runs a root shell, without the agent.
     Maintenance,
-    /// The guest runs the provisioning script from the shared folder, then powers off.
+    /// The supervisor runs the provisioning script, reports its exit code, then powers off.
     Provision,
 }
 
-/// What to boot: an instance's resources and disk, in one of the boot modes.
+/// What to boot: an instance's resources and disk.
 pub struct VmSpec {
     pub cpus: usize,
     pub memory_mib: u64,
     /// Raw ext4 image, attached read-write as the guest's /dev/vda.
     pub rootfs: PathBuf,
-    pub mode: BootMode,
-    /// Host folder shared read-write with the guest as `PROVISION_TAG`. Provision mode
-    /// reads `provision.sh` from it and writes the script's exit code to `status`.
-    pub share: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -112,16 +107,10 @@ impl Vm {
                 .duration_since(UNIX_EPOCH)
                 .map_err(|e| e.to_string())?
                 .as_secs();
-            // The guest reads the boot mode from this flag.
-            let mode = match spec.mode {
-                BootMode::Agent => "",
-                BootMode::Maintenance => " agent_toolbox.mode=maintenance",
-                BootMode::Provision => " agent_toolbox.mode=provision",
-            };
             // noinit_itable: the base rootfs is sparse with unwritten inode tables, and
             // zeroing them in the background would allocate their space on the Mac.
             boot.setCommandLine(&NSString::from_str(&format!(
-                "console=hvc0 root=/dev/vda rootflags=noinit_itable rw{mode} agent_toolbox.time={now}"
+                "console=hvc0 root=/dev/vda rootflags=noinit_itable rw agent_toolbox.time={now}"
             )));
 
             let disk = VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
@@ -172,25 +161,10 @@ impl Vm {
             config.setEntropyDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 VZVirtioEntropyDeviceConfiguration::new(),
             )]));
-            if let Some(share) = &spec.share {
-                let directory = VZSharedDirectory::initWithURL_readOnly(
-                    VZSharedDirectory::alloc(),
-                    &file_url(share),
-                    false,
-                );
-                let single = VZSingleDirectoryShare::initWithDirectory(
-                    VZSingleDirectoryShare::alloc(),
-                    &directory,
-                );
-                let device = VZVirtioFileSystemDeviceConfiguration::initWithTag(
-                    VZVirtioFileSystemDeviceConfiguration::alloc(),
-                    &NSString::from_str(PROVISION_TAG),
-                );
-                device.setShare(Some(&single));
-                config.setDirectorySharingDevices(&NSArray::from_retained_slice(&[
-                    Retained::into_super(device),
-                ]));
-            }
+            // The command plane to the guest supervisor (see `connect`).
+            config.setSocketDevices(&NSArray::from_retained_slice(&[Retained::into_super(
+                VZVirtioSocketDeviceConfiguration::new(),
+            )]));
             config
                 .validateWithError()
                 .map_err(|error| error.localizedDescription().to_string())?;
@@ -241,6 +215,35 @@ impl Vm {
         self.queue.exec_sync(|| {
             let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
             unsafe { self.machine.stopWithCompletionHandler(&handler) };
+        });
+    }
+
+    /// Connects to the guest's vsock `port`; `done` runs on the VM's queue with the
+    /// connection, or an error while nothing listens there yet.
+    pub fn connect(&self, port: u32, done: impl Fn(Result<File, String>) + Send + 'static) {
+        self.queue.exec_sync(|| {
+            let handler = RcBlock::new(
+                move |connection: *mut VZVirtioSocketConnection, error: *mut NSError| {
+                    done(match unsafe { connection.as_ref() } {
+                        // The connection closes its descriptor when it is released after
+                        // this handler, so keep a duplicate.
+                        Some(connection) => {
+                            match unsafe { libc::dup(connection.fileDescriptor()) } {
+                                fd if fd >= 0 => Ok(unsafe { File::from_raw_fd(fd) }),
+                                _ => Err(std::io::Error::last_os_error().to_string()),
+                            }
+                        }
+                        None => result(error).and(Err("no connection".into())),
+                    })
+                },
+            );
+            let device = unsafe { self.machine.socketDevices() }
+                .firstObject()
+                .and_then(|device| device.downcast::<VZVirtioSocketDevice>().ok());
+            match device {
+                Some(device) => unsafe { device.connectToPort_completionHandler(port, &handler) },
+                None => handler.call((std::ptr::null_mut(), std::ptr::null_mut())),
+            }
         });
     }
 

@@ -1,7 +1,15 @@
 [package]
 name = "guest_supervisor"
+description = "The guest supervisor (terrarium-supervisor), baked into the base rootfs: starts the boot mode the app sends over the command plane."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
+# Linux guest only: built for aarch64-unknown-linux-musl by `make rootfs`.
+[[bin]]
+name = "terrarium-supervisor"
+path = "src/main.rs"
+
 [dependencies]
+command_plane = { path = "../command_plane" }
+libc = "0.2"

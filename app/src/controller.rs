@@ -4,13 +4,23 @@
 //! state and stops it; the VM itself operates on its own dispatch queue (see `vm.rs`).
 //! Controllers report to `VmControl` on the UI thread, which owns the database and keeps
 //! the sidebar rows and each instance's terminal in sync.
+//!
+//! The controller also holds the command plane to the guest supervisor: it connects once
+//! the VM runs, answers the supervisor's Hello with Start (the boot mode), and sends Stop.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io;
+use std::os::fd::AsRawFd;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use command_plane::{
+    EnvVar, GuestMessage, HostMessage, Launch, Mode, PORT, PROTOCOL_VERSION, Start, Stop,
+    guest_message, host_message,
+};
 use slint::{ComponentHandle, Model, VecModel};
 
 use crate::db::{self, Db};
@@ -26,12 +36,25 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(20);
 /// How often a controller reads its VM's state, so a shutdown from inside the guest is noticed.
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Messages to a controller thread: from the UI, and from its VM's completion handlers.
+/// How long the guest supervisor gets from the VM's start to its first Hello.
+const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to wait before connecting to the supervisor again while it doesn't listen yet.
+const CONNECT_RETRY: Duration = Duration::from_millis(250);
+
+/// Messages to a controller thread: from the UI, its VM's completion handlers, and the
+/// command plane's reader thread.
 enum Command {
     /// Asks the guest to shut down; it is stopped hard after `STOP_TIMEOUT`.
     Stop,
     Started(Result<(), String>),
     ForceStopped(Result<(), String>),
+    /// A connection attempt to the supervisor finished.
+    Connected(Result<File, String>),
+    /// A message from the supervisor.
+    Guest(GuestMessage),
+    /// The supervisor's connection closed.
+    Disconnected,
 }
 
 /// What a controller thread reports to the UI thread.
@@ -39,27 +62,79 @@ enum Event {
     /// The VM is configured and starting; this is the host end of its console.
     Created(Console),
     State(VmState),
+    /// The provisioning script finished with this exit code.
+    Provisioned(i32),
     /// The controller ended: the VM stopped, or failed with the error.
     Ended(Result<(), String>),
 }
 
-/// Runs a VM configured from `spec` on a new thread until it stops. Returns the sender
-/// for asking it to stop.
+/// The command plane connection to the guest supervisor. Dropping it shuts the socket
+/// down, which ends its reader thread.
+struct Channel(File);
+
+impl Channel {
+    /// Reads the supervisor's messages on a thread of their own and passes them on to the
+    /// controller as `Command::Guest`, then `Command::Disconnected` once the connection ends.
+    fn open(socket: File, commands: &Sender<Command>) -> io::Result<Channel> {
+        let mut reader = socket.try_clone()?;
+        let commands = commands.clone();
+        std::thread::Builder::new()
+            .name("vm-command-plane".into())
+            .spawn(move || {
+                loop {
+                    match command_plane::read_message::<GuestMessage>(&mut reader) {
+                        Ok(message) => {
+                            if commands.send(Command::Guest(message)).is_err() {
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            if error.kind() != io::ErrorKind::UnexpectedEof {
+                                eprintln!("Couldn't read from the guest supervisor: {error}");
+                            }
+                            let _ = commands.send(Command::Disconnected);
+                            return;
+                        }
+                    }
+                }
+            })?;
+        Ok(Channel(socket))
+    }
+
+    fn send(&mut self, kind: host_message::Kind) -> io::Result<()> {
+        command_plane::write_message(&mut self.0, &HostMessage { kind: Some(kind) })
+    }
+}
+
+impl Drop for Channel {
+    fn drop(&mut self) {
+        unsafe { libc::shutdown(self.0.as_raw_fd(), libc::SHUT_RDWR) };
+    }
+}
+
+/// Runs a VM configured from `spec` on a new thread until it stops; its guest supervisor
+/// gets `start`. Returns the sender for asking it to stop.
 fn spawn(
     spec: VmSpec,
+    start: Start,
     report: impl Fn(Event) + Send + 'static,
 ) -> std::io::Result<Sender<Command>> {
     let (commands, received) = mpsc::channel();
     let handlers = commands.clone();
     std::thread::Builder::new()
         .name("vm-control".into())
-        .spawn(move || report(Event::Ended(run(&spec, &handlers, &received, &report))))?;
+        .spawn(move || {
+            report(Event::Ended(run(
+                &spec, start, &handlers, &received, &report,
+            )))
+        })?;
     Ok(commands)
 }
 
 /// The controller thread's loop; returns once the VM has stopped.
 fn run(
     spec: &VmSpec,
+    start: Start,
     commands: &Sender<Command>,
     received: &Receiver<Command>,
     report: &impl Fn(Event),
@@ -83,33 +158,106 @@ fn run(
             });
         }
     };
+    // The command plane. Once the VM runs, the controller connects to the supervisor,
+    // again every CONNECT_RETRY until it listens, and after the connection closes.
+    let mut channel: Option<Channel> = None;
+    let mut connecting = false;
+    let mut next_connect: Option<Instant> = None;
+    // Until the supervisor's first Hello; the boot fails without one.
+    let mut hello_deadline: Option<Instant> = None;
+    // Why the VM is being stopped, if the boot failed while it ran.
+    let mut failure: Option<String> = None;
     let mut last = VmState::Starting;
     loop {
-        let wait = deadline.map_or(POLL_INTERVAL, |deadline| {
-            deadline
-                .saturating_duration_since(Instant::now())
-                .min(POLL_INTERVAL)
-        });
+        let wait = [deadline, next_connect]
+            .into_iter()
+            .flatten()
+            .map(|at| at.saturating_duration_since(Instant::now()))
+            .fold(POLL_INTERVAL, Duration::min);
         match received.recv_timeout(wait) {
-            Ok(Command::Stop) if deadline.is_none() => match vm.request_stop() {
-                Ok(()) => deadline = Some(Instant::now() + STOP_TIMEOUT),
-                Err(error) => {
+            Ok(Command::Stop) if deadline.is_none() => {
+                hello_deadline = None;
+                deadline = Some(Instant::now() + STOP_TIMEOUT);
+                // Before the supervisor answers, the power button asks the guest instead.
+                let sent = channel
+                    .as_mut()
+                    .map(|channel| channel.send(host_message::Kind::Stop(Stop {})));
+                if !matches!(sent, Some(Ok(())))
+                    && let Err(error) = vm.request_stop()
+                {
                     eprintln!("Couldn't ask the virtual machine to stop: {error}");
                     force_stop(&vm);
                 }
-            },
+            }
+            Ok(Command::Started(Ok(()))) => {
+                next_connect = Some(Instant::now());
+                hello_deadline = Some(Instant::now() + HELLO_TIMEOUT);
+            }
             Ok(Command::Started(Err(error))) => return Err(error),
             Ok(Command::ForceStopped(Err(error))) => {
                 return Err(format!("couldn't stop it: {error}"));
             }
+            Ok(Command::Connected(connected)) => {
+                connecting = false;
+                match connected.and_then(|socket| {
+                    Channel::open(socket, commands).map_err(|error| error.to_string())
+                }) {
+                    Ok(opened) => channel = Some(opened),
+                    // Nothing listens yet while the guest boots.
+                    Err(_) => next_connect = Some(Instant::now() + CONNECT_RETRY),
+                }
+            }
+            Ok(Command::Guest(message)) => match message.kind {
+                Some(guest_message::Kind::Hello(hello)) => {
+                    hello_deadline = None;
+                    if hello.protocol_version != PROTOCOL_VERSION {
+                        failure =
+                            Some("The instance's guest supervisor doesn't match this app.".into());
+                        force_stop(&vm);
+                    } else if deadline.is_none()
+                        && let Some(channel) = channel.as_mut()
+                        && let Err(error) = channel.send(host_message::Kind::Start(start.clone()))
+                    {
+                        eprintln!("Couldn't send Start to the guest supervisor: {error}");
+                    }
+                }
+                Some(guest_message::Kind::ProvisionFinished(finished)) => {
+                    report(Event::Provisioned(finished.exit_code));
+                }
+                None => eprintln!("Ignoring a message from the guest supervisor."),
+            },
+            Ok(Command::Disconnected) => {
+                channel = None;
+                if deadline.is_none() {
+                    next_connect = Some(Instant::now() + CONNECT_RETRY);
+                }
+            }
             // A repeated stop request, a completion without error, or the poll interval.
             Ok(_) | Err(_) => {}
         }
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        let now = Instant::now();
+        if !connecting
+            && channel.is_none()
+            && deadline.is_none()
+            && next_connect.is_some_and(|at| now >= at)
+        {
+            next_connect = None;
+            connecting = true;
+            let connected = commands.clone();
+            vm.connect(PORT, move |result| {
+                let _ = connected.send(Command::Connected(result));
+            });
+        }
+        if hello_deadline.is_some_and(|at| now >= at) {
+            hello_deadline = None;
+            failure = Some("The guest supervisor didn't answer.".into());
+            force_stop(&vm);
+        }
+        if deadline.is_some_and(|deadline| now >= deadline) {
             force_stop(&vm);
         }
         match vm.state() {
-            VmState::Stopped => return Ok(()),
+            VmState::Stopped => return failure.map_or(Ok(()), Err),
             VmState::Error => return Err("The virtual machine stopped because of an error.".into()),
             state if state != last => {
                 last = state;
@@ -134,6 +282,8 @@ struct Running {
     revision: i64,
     /// Set while a stop is in progress; `Some(true)` boots maintenance mode afterwards.
     stop: Option<bool>,
+    /// The provisioning script's exit code, once the supervisor reported it.
+    provisioned: Option<i32>,
 }
 
 /// Starts and stops the instances' VMs and keeps their sidebar rows and terminals in sync.
@@ -174,13 +324,12 @@ impl VmControl {
         if self.running.borrow().contains_key(id) {
             return;
         }
-        let (spec, revision) = match self.prepare(id, mode) {
+        let (spec, start, mode, revision) = match self.prepare(id, mode) {
             Ok(prepared) => prepared,
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
-        let mode = spec.mode;
         let event_id = id.to_owned();
-        let spawned = spawn(spec, move |event| {
+        let spawned = spawn(spec, start, move |event| {
             let id = event_id.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(control) = CONTROL.with_borrow(Weak::upgrade) {
@@ -199,14 +348,17 @@ impl VmControl {
                 mode,
                 revision,
                 stop: None,
+                provisioned: None,
             },
         );
         self.show(id, mode, VmState::Starting);
     }
 
-    /// Describes the VM from the instance's latest revision, which this boot freezes.
-    /// An instance that isn't provisioned yet boots in provision mode instead of agent mode.
-    fn prepare(&self, id: &str, mode: BootMode) -> db::Result<(VmSpec, i64)> {
+    /// Describes the VM and the Start message for its guest supervisor from the instance's
+    /// latest revision, which this boot freezes. Also returns the boot mode and revision
+    /// number. An instance that isn't provisioned yet boots in provision mode instead of
+    /// agent mode.
+    fn prepare(&self, id: &str, mode: BootMode) -> db::Result<(VmSpec, Start, BootMode, i64)> {
         let instance = self.db.instance(id)?;
         let revision = self.db.latest_revision(id)?;
         let mode = if mode == BootMode::Agent && !instance.provisioned {
@@ -214,29 +366,41 @@ impl VmControl {
         } else {
             mode
         };
-        // The guest runs provision.sh from the shared folder and leaves its exit code in status.
-        let share = if mode == BootMode::Provision {
-            let dir = db::instance_dir(id)?.join("provision");
-            std::fs::create_dir_all(&dir)?;
-            std::fs::write(dir.join("provision.sh"), &revision.config.provision_script)?;
-            match std::fs::remove_file(dir.join("status")) {
-                Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(error.into());
-                }
-                _ => {}
-            }
-            Some(dir)
-        } else {
-            None
+        let config = revision.config;
+        let start = match mode {
+            BootMode::Agent => Start {
+                mode: Mode::Agent.into(),
+                launch: Some(Launch {
+                    command: config.command,
+                    arguments: config.arguments,
+                    working_directory: config.working_directory,
+                    environment: config
+                        .environment
+                        .into_iter()
+                        .map(|var| EnvVar {
+                            name: var.name,
+                            value: var.value,
+                        })
+                        .collect(),
+                }),
+                ..Start::default()
+            },
+            BootMode::Maintenance => Start {
+                mode: Mode::Maintenance.into(),
+                ..Start::default()
+            },
+            BootMode::Provision => Start {
+                mode: Mode::Provision.into(),
+                provision_script: config.provision_script,
+                ..Start::default()
+            },
         };
         let spec = VmSpec {
-            cpus: revision.config.cpus as usize,
-            memory_mib: revision.config.memory_mib.into(),
+            cpus: config.cpus as usize,
+            memory_mib: config.memory_mib.into(),
             rootfs: instance.disk_path,
-            mode,
-            share,
         };
-        Ok((spec, revision.number))
+        Ok((spec, start, mode, revision.number))
     }
 
     /// Asks the instance's guest to shut down, then boots it in maintenance mode if
@@ -304,6 +468,11 @@ impl VmControl {
                 // The guest keeps running while it shuts down.
                 self.show(id, mode, if stopping { VmState::Stopping } else { state });
             }
+            Event::Provisioned(code) => {
+                if let Some(run) = self.running.borrow_mut().get_mut(id) {
+                    run.provisioned = Some(code);
+                }
+            }
             Event::Ended(result) => {
                 let Some(run) = self.running.borrow_mut().remove(id) else {
                     return;
@@ -315,7 +484,7 @@ impl VmControl {
                     Ok(())
                         if run.mode == BootMode::Provision && run.stop.is_none() && !quitting =>
                     {
-                        self.finish_provisioning(id)
+                        self.finish_provisioning(id, run.provisioned)
                     }
                     Ok(()) => {
                         self.terminal(id).detach("The virtual machine stopped.");
@@ -332,15 +501,12 @@ impl VmControl {
         }
     }
 
-    /// Reads the exit code the provisioning script left in the shared folder. On success
-    /// the instance counts as provisioned and boots in agent mode.
-    fn finish_provisioning(&self, id: &str) {
-        let status = db::instance_dir(id)
-            .ok()
-            .and_then(|dir| std::fs::read_to_string(dir.join("provision").join("status")).ok());
+    /// Handles the end of a provisioning run with the exit code the supervisor reported.
+    /// On success the instance counts as provisioned and boots in agent mode.
+    fn finish_provisioning(&self, id: &str, exit_code: Option<i32>) {
         let failed = |error: &str| self.failed(id, BootMode::Provision, error);
-        match status.as_deref().map(str::trim) {
-            Some("0") => match self.db.mark_provisioned(id) {
+        match exit_code {
+            Some(0) => match self.db.mark_provisioned(id) {
                 Ok(()) => self.start(id, BootMode::Agent),
                 Err(error) => failed(&format!("couldn't record the provisioning: {error}")),
             },

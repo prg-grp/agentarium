@@ -1,7 +1,13 @@
 [package]
 name = "command_plane"
+description = "The protobuf protocol between the app and the guest supervisor, sent over virtio-vsock."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+prost = "0.14.4"
+
+[build-dependencies]
+prost-build = "0.14.4"
+protox = "0.10.0"

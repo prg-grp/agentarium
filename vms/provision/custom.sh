@@ -9,7 +9,9 @@ set -euo pipefail
 # System packages, installed as root. For example:
 # apt-get update && apt-get install -y --no-install-recommends ripgrep
 
-# Everything below is set up for the unprivileged ubuntu user, which runs the agent.
+# Everything below is set up for the unprivileged ubuntu user. In agent mode the app has the
+# guest supervisor start the instance's command (set in the Agent step) as ubuntu, in
+# ~/workspace by default.
 sudo -u ubuntu -H bash -euo pipefail -s <<'EOF'
 cd ~
 
@@ -18,11 +20,4 @@ cd ~
 
 # The agent's working folder; shared folders are mounted below it.
 mkdir -p workspace
-
-# Agent mode: the console logs in ubuntu, whose login starts the agent in ~/workspace.
-# When it exits, the console logs in again and starts it anew. Maintenance and provision
-# mode never run this. TODO: replace my-agent with your agent's command.
-if ! grep -q '# Agent mode: run the agent on login.' .profile; then
-    printf '\n# Agent mode: run the agent on login.\ngrep -qwE "agent_toolbox.mode=(maintenance|provision)" /proc/cmdline || { cd "$HOME/workspace" && exec my-agent; }\n' >> .profile
-fi
 EOF

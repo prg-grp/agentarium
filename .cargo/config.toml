@@ -14,3 +14,8 @@ rustflags = [
 # Virtualization.framework needs the virtualization entitlement, so sign before running.
 [target.aarch64-apple-darwin]
 runner = "scripts/codesign-run.sh"
+
+# The guest supervisor is a static musl binary for the Linux guest. rust-lld ships with
+# Rust and links it with Rust's bundled musl, so no cross toolchain is needed.
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"

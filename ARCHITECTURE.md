@@ -89,6 +89,9 @@ Decided:
 - Each instance disk is an APFS `clonefile` of the base: created instantly, sharing the base's blocks until the guest writes, and growing on the Mac only by what the guest writes. Without a clone (another volume) creation fails; there is no copy fallback.
 - The agent harness is not part of the base. Each instance's provisioning script installs it in provision mode (see below).
 - During development, `make run` names the base image with `AGENT_TOOLBOX_BASE_ROOTFS`. How a released app obtains the kernel and base image (e.g. a pinned, downloaded guest bundle) remains open.
+- The guest supervisor (`terrarium-supervisor`, crate `guest_supervisor`) is the boot authority in the guest. It is a static Rust binary for `aarch64-unknown-linux-musl`, cross-compiled on the Mac and baked into the base rootfs as a systemd service. No login runs on any console; nothing runs on the app's console until the app sends Start over the command plane (see [Protobuf over vsock](#protobuf-over-vsock)). Each mode gives access to exactly one thing: the instance's launch command (agent), a root shell (maintenance), or the provisioning script (provision). The boot mode is no longer on the kernel command line.
+- Disks are cloned once, so instances created from an older base keep the supervisor they were created with; a protocol mismatch fails the boot.
+- Follow-up: a rescue path for a broken supervisor (for example a kernel flag that starts a plain root console without it). Root in maintenance mode can break the supervisor on the instance's disk, and without it the instance can't boot into any mode.
 
 ### Rust and Apple integration
 
@@ -127,6 +130,8 @@ Proposed initial editing behavior: save configuration changes for the next boot.
 
 Graceful stop should request guest shutdown. Force stop should be a separate action with a clear indication that unsaved guest writes may be lost.
 
+Decided: Stop sends `Stop` over the command plane; the supervisor powers the guest off with systemd. Before the supervisor has connected, the app presses Virtualization.framework's power button instead. Either way the VM is stopped hard after 20 seconds. During the shutdown, systemd ends the session with the supervisor's unit: `SIGTERM`, right away `SIGHUP` (interactive shells ignore `SIGTERM`), and `SIGKILL` after 5 seconds, so the guest powers off well within that limit.
+
 ## Agent and maintenance modes
 
 ### Agent mode
@@ -139,6 +144,8 @@ Normal startup must:
 - Attach the terminal to its interactive session.
 
 Proposed behavior: do not launch the agent until required policy enforcement and monitoring initialization succeed. Distinguish startup failure from degraded monitoring during a run.
+
+Decided: the app sends the launch settings of the boot's revision (command, arguments, working directory, environment variables) in Start. The supervisor runs the command directly, without a shell, as the unprivileged `ubuntu` user on the console, and starts it again two seconds after it exits. It never falls back to a shell. The supervisor has no default command: an empty command starts nothing.
 
 ### Maintenance mode
 
@@ -165,8 +172,9 @@ The provisioning script installs and sets up the agent harness. It is part of th
 
 Decided:
 
-- Starting an instance whose disk has not been provisioned successfully boots provision mode first (kernel flag `agent_toolbox.mode=provision`). On success the instance is marked provisioned and boots in agent mode; on failure it stays unprovisioned, the script's output stays visible, and the next start provisions again. Scripts must therefore be safe to run again.
-- The app writes the script to `instances/<id>/provision/provision.sh` and shares that folder over virtio-fs. A guest service runs it as root with its output on the console, writes the exit code to `status` in the same folder, and powers off. No login runs in provision mode.
+- Starting an instance whose disk has not been provisioned successfully boots provision mode first. On success the instance is marked provisioned and boots in agent mode; on failure it stays unprovisioned, the script's output stays visible, and the next start provisions again. Scripts must therefore be safe to run again.
+- The app sends the script in Start. The supervisor runs it as root with its output on the console, reports the exit code (`ProvisionFinished`), and powers off. No login runs in provision mode.
+- Provisioning stays a separate one-time boot rather than a step of the agent boot: the agent boot starts fresh with the network policy, and nothing the script started (with open internet) carries over. The app's `provisioned_at` is the authority; there is no marker in the guest.
 - Provision mode gets the same internet exception as maintenance mode.
 - The harness is chosen at creation: Claude Code (`claude-code`) or a custom agent (`custom`); Codex follows later. The default scripts in `vms/provision/` are compiled into the app (`include_str!`). A custom agent starts from the template `vms/provision/custom.sh`, which the user fills in; an unchanged template can be saved but not started.
 - A new instance starts right after creation unless the user opts out, so its first boot provisions it.
@@ -307,6 +315,13 @@ Proposed protocol:
 - Terminal input, output, resize, and session-close messages.
 
 Protobuf supplies serialization; framing, acknowledgments, authorization, and recovery are application responsibilities.
+
+Decided (first version, crate `command_plane`, `command_plane/proto/command_plane.proto`):
+
+- The app connects to the supervisor on vsock port 700, retrying every 250 ms while the guest boots, and again if the connection closes. Only root can listen on ports up to 1023 in a Linux guest, so the agent user can't pose as the supervisor.
+- Frames are a big-endian u32 length followed by the encoded message, at most 1 MiB. Both sides use blocking I/O on their own threads.
+- Messages: `Hello` (guest, with the protocol version) → `Start` (host: mode, plus launch settings in agent mode or the script in provision mode; only the first per boot counts) → `ProvisionFinished` (guest) and `Stop` (host). Without a Hello within 60 seconds of the VM's start, the app stops the VM and reports the failure.
+- Terminal I/O still runs on the virtio console (`hvc0`) together with boot output. Moving sessions to a guest PTY with their own vsock stream, resize, and session-exit messages is the next step; separate channels, request IDs, and telemetry follow.
 
 Bind each connection to the host-managed VM and current run. Do not trust an instance ID supplied in an arbitrary guest message as authority. Validate all guest input and avoid a generic host-command execution endpoint.
 

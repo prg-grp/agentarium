@@ -1,6 +1,0 @@
-#!/bin/sh
-# Console login for hvc0: agent mode logs in the unprivileged ubuntu user,
-# maintenance mode (kernel flag agent_toolbox.mode=maintenance) logs in root.
-user=ubuntu
-grep -qw 'agent_toolbox.mode=maintenance' /proc/cmdline && user=root
-exec /sbin/agetty --autologin "$user" --noclear --keep-baud 115200,57600,38400,9600 - "$1"

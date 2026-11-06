@@ -53,7 +53,7 @@ pub struct Instance {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Agent {
     ClaudeCode,
-    /// Installed and started by the user's own provisioning script.
+    /// Installed by the user's own provisioning script and started with its launch command.
     Custom,
 }
 
@@ -184,7 +184,7 @@ pub fn app_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// An instance's folder: its root disk (`root.ext4`) and provisioning folder (`provision`).
+/// An instance's folder, holding its root disk (`root.ext4`).
 pub fn instance_dir(id: &str) -> Result<PathBuf> {
     Ok(app_dir()?.join("instances").join(id))
 }

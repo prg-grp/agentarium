@@ -1,0 +1,15 @@
+[Unit]
+Description=Terrarium guest supervisor: starts the boot mode the app sends over vsock
+After=systemd-networkd.service clock-from-host.service systemd-tmpfiles-setup.service
+
+[Service]
+ExecStart=/usr/local/sbin/terrarium-supervisor
+Restart=on-failure
+# Stopping sends SIGTERM to the supervisor and its session, which share this cgroup.
+# Interactive shells ignore SIGTERM; SIGHUP (the terminal hung up) ends them, like a logout.
+SendSIGHUP=yes
+# Bound the wait well below the app's 20 s hard stop; whatever still runs is killed.
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target
