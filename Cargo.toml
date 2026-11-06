@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["agent-toolbox"]
+members = ["app", "command_plane", "data_plane", "guest_supervisor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
 
 [profile.release]
 codegen-units = 1

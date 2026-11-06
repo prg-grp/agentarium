@@ -2,7 +2,7 @@
 # filesystem is built into target/rootfs (workspace target dir). The app clones instance
 # disks from the base rootfs named by AGENT_TOOLBOX_BASE_ROOTFS.
 
-APP := agent-toolbox
+APP := app
 GUEST_DIR := target/guest
 KERNEL := $(GUEST_DIR)/Image
 BASE_ROOTFS := $(abspath target/rootfs/base.ext4)

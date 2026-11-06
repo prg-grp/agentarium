@@ -1,6 +1,6 @@
 # Create: harness (step 1 of 5)
 
-First step of instance creation. It names the instance, picks the agent harness, and holds the provisioning script that installs the harness. Implemented in `agent-toolbox/ui/create-instance.slint` and `agent-toolbox/src/create.rs`.
+First step of instance creation. It names the instance, picks the agent harness, and holds the provisioning script that installs the harness. Implemented in `app/ui/create-instance.slint` and `app/src/create.rs`.
 
 ## Creation flow (shared by all five steps)
 

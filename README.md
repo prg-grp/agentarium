@@ -11,7 +11,7 @@ for UI/UX guidelines.
 
 ## Repository
 
-- `agent-toolbox/` – the desktop app (Rust + [Slint](https://slint.dev) UI)
+- `app/` – the desktop app (Rust + [Slint](https://slint.dev) UI)
 - `design/` – per-screen design specs (see DESIGN.md)
 - `vms/rootfs/` – Dockerfile for the base guest root filesystem, cloned for every instance
 - `vms/provision/` – default provisioning scripts that install an agent harness in an instance

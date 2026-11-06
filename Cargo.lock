@@ -133,32 +133,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-toolbox"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "arboard",
- "block2 0.6.2",
- "etherparse 0.21.0",
- "futures",
- "libc",
- "netstack-smoltcp",
- "objc2 0.6.5",
- "objc2-foundation 0.3.2",
- "objc2-virtualization",
- "polling",
- "rfd",
- "rusqlite",
- "rusqlite_migration",
- "serde",
- "serde_json",
- "slint",
- "slint-build",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -261,6 +235,32 @@ name = "anstyle"
 version = "1.0.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
+
+[[package]]
+name = "app"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "arboard",
+ "block2 0.6.2",
+ "etherparse 0.21.0",
+ "futures",
+ "libc",
+ "netstack-smoltcp",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-virtualization",
+ "polling",
+ "rfd",
+ "rusqlite",
+ "rusqlite_migration",
+ "serde",
+ "serde_json",
+ "slint",
+ "slint-build",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "arboard"
@@ -810,6 +810,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "command_plane"
+version = "0.1.0"
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -978,6 +982,10 @@ name = "data-url"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be1e0bca6c3637f992fc1cc7cbc52a78c1ef6db076dbf1059c4323d6a2048376"
+
+[[package]]
+name = "data_plane"
+version = "0.1.0"
 
 [[package]]
 name = "defmt"
@@ -1740,6 +1748,10 @@ name = "grid"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b40ca9252762c466af32d0b1002e91e4e1bc5398f77455e55474deb466355ff5"
+
+[[package]]
+name = "guest_supervisor"
+version = "0.1.0"
 
 [[package]]
 name = "half"
