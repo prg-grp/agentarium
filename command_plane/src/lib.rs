@@ -18,6 +18,9 @@ pub const PORT: u32 = 700;
 /// Sent in `Hello`; the app refuses a supervisor that speaks another version.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// The tag of the virtio-fs device that holds an instance's shared folders.
+pub const SHARE_TAG: &str = "terrarium-shares";
+
 /// The largest encoded message either side sends or accepts.
 pub const MAX_MESSAGE: usize = 1 << 20;
 

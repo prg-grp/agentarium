@@ -19,14 +19,15 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use command_plane::{
-    EnvVar, GuestMessage, HostMessage, Launch, Mode, PORT, PROTOCOL_VERSION, Resize, Start, Stop,
-    guest_message, host_message,
+    EnvVar, GuestMessage, HostMessage, Launch, Mode, Mount, PORT, PROTOCOL_VERSION, Resize, Start,
+    Stop, guest_message, host_message,
 };
 use slint::{ComponentHandle, Model, VecModel};
 
+use crate::create::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
 use crate::db::{self, Db};
 use crate::terminal::{Console, Terminal};
-use crate::vm::{BootMode, Vm, VmSpec, VmState};
+use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
 use crate::{AppWindow, InstanceItem, InstanceState, StatusReading, Tone};
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
@@ -247,6 +248,10 @@ fn run(
                 Some(guest_message::Kind::ProvisionFinished(finished)) => {
                     report(Event::Provisioned(finished.exit_code));
                 }
+                // The supervisor powers off by itself; the boot ends with this reason.
+                Some(guest_message::Kind::StartFailed(failed)) => {
+                    failure = Some(failed.reason);
+                }
                 None => eprintln!("Ignoring a message from the guest supervisor."),
             },
             Ok(Command::Resize { columns, rows }) => {
@@ -407,7 +412,8 @@ impl VmControl {
     /// Describes the VM and the Start message for its guest supervisor from the instance's
     /// latest revision, which this boot freezes. Also returns the boot mode and revision
     /// number. An instance that isn't provisioned yet boots in provision mode instead of
-    /// agent mode.
+    /// agent mode. Agent and maintenance boots get the enabled shared folders and the
+    /// environment; a missing folder or invalid setting fails the boot before the VM starts.
     fn prepare(&self, id: &str, mode: BootMode) -> db::Result<(VmSpec, Start, BootMode, i64)> {
         let instance = self.db.instance(id)?;
         let revision = self.db.latest_revision(id)?;
@@ -417,21 +423,19 @@ impl VmControl {
             mode
         };
         let config = revision.config;
-        let start = match mode {
+        let mut spec = VmSpec {
+            cpus: config.cpus as usize,
+            memory_mib: config.memory_mib.into(),
+            rootfs: instance.disk_path,
+            shares: Vec::new(),
+        };
+        let mut start = match mode {
             BootMode::Agent => Start {
                 mode: Mode::Agent.into(),
                 launch: Some(Launch {
                     command: config.command,
                     arguments: config.arguments,
                     working_directory: config.working_directory,
-                    environment: config
-                        .environment
-                        .into_iter()
-                        .map(|var| EnvVar {
-                            name: var.name,
-                            value: var.value,
-                        })
-                        .collect(),
                 }),
                 ..Start::default()
             },
@@ -445,11 +449,62 @@ impl VmControl {
                 ..Start::default()
             },
         };
-        let spec = VmSpec {
-            cpus: config.cpus as usize,
-            memory_mib: config.memory_mib.into(),
-            rootfs: instance.disk_path,
-        };
+        // Provisioning runs with open internet, so it gets neither the shared folders nor
+        // the agent's environment.
+        if mode == BootMode::Provision {
+            return Ok((spec, start, mode, revision.number));
+        }
+
+        // Checked again here: a folder may have gone since the configuration was saved.
+        if env_errors(&config.environment)
+            .iter()
+            .any(|error| !error.is_empty())
+        {
+            return Err("some environment variables need a fix in the settings.".into());
+        }
+        let mounts: Vec<db::Mount> = config
+            .mounts
+            .into_iter()
+            .filter(|mount| mount.enabled)
+            .collect();
+        for (mount, guest_error) in mounts.iter().zip(guest_path_errors(&mounts)) {
+            let path = display_path(&mount.host_path);
+            match folder_problem(&mount.host_path) {
+                Some(FolderProblem::Missing) => {
+                    return Err(format!("{path} no longer exists on your Mac.").into());
+                }
+                Some(FolderProblem::Unreadable) => {
+                    return Err(format!("the app can't read {path}.").into());
+                }
+                None if !guest_error.is_empty() => {
+                    return Err(format!("{}: {guest_error}", mount.guest_path).into());
+                }
+                None => {}
+            }
+        }
+
+        start.environment = config
+            .environment
+            .into_iter()
+            .filter(|var| !var.name.is_empty())
+            .map(|var| EnvVar {
+                name: var.name,
+                value: var.value,
+            })
+            .collect();
+        for (index, mount) in mounts.into_iter().enumerate() {
+            let name = index.to_string();
+            start.mounts.push(Mount {
+                share: name.clone(),
+                guest_path: mount.guest_path,
+                read_only: !mount.writable,
+            });
+            spec.shares.push(SharedFolder {
+                name,
+                host_path: mount.host_path,
+                read_only: !mount.writable,
+            });
+        }
         Ok((spec, start, mode, revision.number))
     }
 

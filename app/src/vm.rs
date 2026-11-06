@@ -13,14 +13,15 @@ use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
+use objc2_foundation::{NSArray, NSDictionary, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
     VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
-    VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZVirtioBlockDeviceConfiguration,
+    VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZMultipleDirectoryShare,
+    VZSharedDirectory, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
-    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
-    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
-    VZVirtualMachineState,
+    VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration,
+    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
+    VZVirtualMachine, VZVirtualMachineConfiguration, VZVirtualMachineState,
 };
 
 use crate::net::{self, Network};
@@ -50,6 +51,18 @@ pub struct VmSpec {
     pub memory_mib: u64,
     /// Raw ext4 image, attached read-write as the guest's /dev/vda.
     pub rootfs: PathBuf,
+    /// Host folders shared live through one virtio-fs device (`SHARE_TAG`); the guest
+    /// supervisor mounts them where `Start.mounts` says.
+    pub shares: Vec<SharedFolder>,
+}
+
+/// A host folder in the instance's virtio-fs share.
+pub struct SharedFolder {
+    /// Its name inside the share, as `Mount.share` names it to the guest.
+    pub name: String,
+    pub host_path: PathBuf,
+    /// Enforced by the Mac, so nothing in the guest can write to it.
+    pub read_only: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -177,6 +190,37 @@ impl Vm {
             config.setSocketDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 VZVirtioSocketDeviceConfiguration::new(),
             )]));
+            if !spec.shares.is_empty() {
+                let names: Vec<_> = spec
+                    .shares
+                    .iter()
+                    .map(|share| NSString::from_str(&share.name))
+                    .collect();
+                let directories: Vec<_> = spec
+                    .shares
+                    .iter()
+                    .map(|share| {
+                        VZSharedDirectory::initWithURL_readOnly(
+                            VZSharedDirectory::alloc(),
+                            &file_url(&share.host_path),
+                            share.read_only,
+                        )
+                    })
+                    .collect();
+                let names: Vec<&NSString> = names.iter().map(|name| &**name).collect();
+                let share = VZMultipleDirectoryShare::initWithDirectories(
+                    VZMultipleDirectoryShare::alloc(),
+                    &NSDictionary::from_retained_objects(&names, &directories),
+                );
+                let device = VZVirtioFileSystemDeviceConfiguration::initWithTag(
+                    VZVirtioFileSystemDeviceConfiguration::alloc(),
+                    &NSString::from_str(command_plane::SHARE_TAG),
+                );
+                device.setShare(Some(&share));
+                config.setDirectorySharingDevices(&NSArray::from_retained_slice(&[
+                    Retained::into_super(device),
+                ]));
+            }
             config
                 .validateWithError()
                 .map_err(|error| error.localizedDescription().to_string())?;

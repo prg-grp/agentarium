@@ -16,16 +16,18 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use command_plane::{
-    EnvVar, GuestMessage, Hello, HostMessage, Mode, PORT, PROTOCOL_VERSION, ProvisionFinished,
-    Start, guest_message, host_message,
+    EnvVar, GuestMessage, Hello, HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION,
+    ProvisionFinished, SHARE_TAG, Start, StartFailed, guest_message, host_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -36,6 +38,9 @@ const SESSION_TTY: &str = "/dev/hvc1";
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 /// Where the provisioning script is written; a tmpfs, gone after the boot.
 const RUN_DIR: &str = "/run/terrarium";
+/// Where the virtio-fs share with all shared folders is mounted. Root only: the session
+/// reaches each folder only where it is mounted.
+const SHARES_DIR: &str = "/run/terrarium/shares";
 
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
@@ -166,6 +171,24 @@ fn send(channel: &Channel, kind: guest_message::Kind) -> bool {
 fn run(start: Start, channel: &Channel, tty: &Tty) {
     let mode = start.mode();
     let _span = info_span!("mode", ?mode).entered();
+    // Nothing starts without all of its shared folders.
+    if matches!(mode, Mode::Agent | Mode::Maintenance)
+        && let Err(error) = mount_shares(&start.mounts)
+    {
+        error!("not starting: the shared folders aren't all mounted, powering off");
+        tty.notify(&format!(
+            "Couldn't mount the shared folders: {error}. Nothing was started. Powering off."
+        ));
+        let failed = guest_message::Kind::StartFailed(StartFailed {
+            reason: format!("couldn't mount the shared folders: {error}"),
+        });
+        if send(channel, failed) {
+            debug!("sent StartFailed");
+        } else {
+            warn!("couldn't report the failed start: the app isn't connected");
+        }
+        return power_off();
+    }
     match mode {
         Mode::Agent => {
             let Some(launch) = start.launch.filter(|launch| !launch.command.is_empty()) else {
@@ -180,7 +203,7 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                     &launch.command,
                     &launch.arguments,
                     &launch.working_directory,
-                    &launch.environment,
+                    &start.environment,
                     true,
                 )
             });
@@ -188,7 +211,15 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
         Mode::Maintenance => {
             info!("starting maintenance mode");
             repeat(tty, "The root shell", || {
-                session(tty, "root", "/bin/bash", &["--login".into()], "", &[], true)
+                session(
+                    tty,
+                    "root",
+                    "/bin/bash",
+                    &["--login".into()],
+                    "",
+                    &start.environment,
+                    true,
+                )
             });
         }
         Mode::Provision => {
@@ -215,6 +246,111 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
             tty.notify("The app sent no mode to start.");
         }
     }
+}
+
+/// Mounts the virtio-fs share at `SHARES_DIR`, then binds each shared folder to its guest
+/// path, parents before folders nested in them. Read-only folders are also mounted
+/// read-only, though the Mac already enforces it. The mounts last for this boot only.
+fn mount_shares(mounts: &[Mount]) -> io::Result<()> {
+    if mounts.is_empty() {
+        return Ok(());
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(SHARES_DIR)
+        .and_then(|()| {
+            mount(
+                Path::new(SHARE_TAG),
+                Path::new(SHARES_DIR),
+                Some("virtiofs"),
+                0,
+            )
+        })
+        .inspect_err(|error| error!(tag = SHARE_TAG, %error, "couldn't mount the share"))?;
+    info!(tag = SHARE_TAG, path = SHARES_DIR, "mounted the share");
+
+    // Mount points the supervisor creates belong to the agent, like the rest of its home.
+    let agent = Account::find("ubuntu")?;
+    let mut mounts: Vec<&Mount> = mounts.iter().collect();
+    mounts.sort_by_key(|mount| Path::new(&mount.guest_path).components().count());
+    for folder in mounts {
+        let (share, guest_path, read_only) = (&folder.share, &folder.guest_path, folder.read_only);
+        let fail = |step: &str, error: io::Error| {
+            error!(%share, %guest_path, %error, "couldn't {step}");
+            io::Error::new(
+                error.kind(),
+                format!("{guest_path}: couldn't {step}: {error}"),
+            )
+        };
+        // The agent may have left a symbolic link at the path on the persistent disk;
+        // following it would mount the folder somewhere else.
+        let mut target = PathBuf::from("/");
+        for part in Path::new(guest_path).components() {
+            let Component::Normal(part) = part else {
+                continue;
+            };
+            target.push(part);
+            match fs::symlink_metadata(&target) {
+                Ok(meta) if meta.file_type().is_symlink() => {
+                    return Err(fail(
+                        "create the mount point",
+                        io::Error::other(format!("{} is a symbolic link", target.display())),
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    fs::create_dir(&target)
+                        .and_then(|()| {
+                            std::os::unix::fs::chown(&target, Some(agent.uid), Some(agent.gid))
+                        })
+                        .map_err(|error| fail("create the mount point", error))?;
+                }
+                Err(error) => return Err(fail("create the mount point", error)),
+            }
+        }
+        let source = Path::new(SHARES_DIR).join(share);
+        mount(&source, &target, None, libc::MS_BIND)
+            .map_err(|error| fail("bind the shared folder", error))?;
+        if read_only {
+            mount(
+                &source,
+                &target,
+                None,
+                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
+            )
+            .map_err(|error| fail("make it read-only", error))?;
+        }
+        info!(%share, %guest_path, read_only, "mounted a shared folder");
+    }
+    Ok(())
+}
+
+/// mount(2).
+fn mount(
+    source: &Path,
+    target: &Path,
+    fstype: Option<&str>,
+    flags: libc::c_ulong,
+) -> io::Result<()> {
+    let source = CString::new(source.as_os_str().as_bytes())?;
+    let target = CString::new(target.as_os_str().as_bytes())?;
+    let fstype = fstype.map(CString::new).transpose()?;
+    let mounted = unsafe {
+        libc::mount(
+            source.as_ptr(),
+            target.as_ptr(),
+            fstype
+                .as_ref()
+                .map_or(std::ptr::null(), |fstype| fstype.as_ptr()),
+            flags,
+            std::ptr::null(),
+        )
+    };
+    if mounted < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 /// Starts a session again and again, a little after each exit, and tells the user so on

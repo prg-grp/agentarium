@@ -25,6 +25,7 @@ message GuestMessage {
   oneof kind {
     Hello hello = 1;
     ProvisionFinished provision_finished = 2;
+    StartFailed start_failed = 3;
   }
 }
 
@@ -35,9 +36,10 @@ message Hello {
 
 enum Mode {
   MODE_UNSPECIFIED = 0;
-  // Runs the launch command as the unprivileged user, again whenever it exits.
+  // Mounts the shared folders, then runs the launch command as the unprivileged user,
+  // again whenever it exits.
   MODE_AGENT = 1;
-  // Runs a root login shell, again whenever it exits.
+  // Mounts the shared folders, then runs a root login shell, again whenever it exits.
   MODE_MAINTENANCE = 2;
   // Runs the provisioning script as root, reports ProvisionFinished, then powers off.
   MODE_PROVISION = 3;
@@ -50,6 +52,11 @@ message Start {
   Launch launch = 2;
   // Provision mode only: a bash script.
   string provision_script = 3;
+  // Agent and maintenance modes: set for the session, after the supervisor's defaults.
+  repeated EnvVar environment = 4;
+  // Agent and maintenance modes: the shared folders, mounted before the session starts.
+  // If one can't be mounted, the supervisor sends StartFailed and powers off.
+  repeated Mount mounts = 5;
 }
 
 // The agent's command, run directly (not through a shell).
@@ -57,12 +64,21 @@ message Launch {
   string command = 1;
   repeated string arguments = 2;
   string working_directory = 3;
-  repeated EnvVar environment = 4;
 }
 
 message EnvVar {
   string name = 1;
   string value = 2;
+}
+
+// A host folder, shared through the virtio-fs device tagged SHARE_TAG (see src/lib.rs).
+message Mount {
+  // The folder's name inside that share.
+  string share = 1;
+  // Where it appears in the guest; absolute.
+  string guest_path = 2;
+  // The Mac enforces read-only access; the guest mounts it read-only too.
+  bool read_only = 3;
 }
 
 // Shuts the guest down cleanly.
@@ -78,4 +94,10 @@ message Resize {
 message ProvisionFinished {
   // The script's exit code; -1 if it couldn't run or was killed by a signal.
   int32 exit_code = 1;
+}
+
+// The boot couldn't prepare its session (e.g. a shared folder didn't mount), so nothing
+// was started. The supervisor powers off after sending it.
+message StartFailed {
+  string reason = 1;
 }

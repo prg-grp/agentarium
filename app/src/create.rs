@@ -675,12 +675,12 @@ impl Host {
 }
 
 #[derive(Clone, Copy)]
-enum FolderProblem {
+pub(crate) enum FolderProblem {
     Missing,
     Unreadable,
 }
 
-fn folder_problem(path: &Path) -> Option<FolderProblem> {
+pub(crate) fn folder_problem(path: &Path) -> Option<FolderProblem> {
     match std::fs::read_dir(path) {
         Ok(_) => None,
         Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
@@ -706,7 +706,7 @@ fn working_directory_error(dir: &str) -> &'static str {
     }
 }
 
-fn env_errors(vars: &[EnvVar]) -> Vec<&'static str> {
+pub(crate) fn env_errors(vars: &[EnvVar]) -> Vec<&'static str> {
     vars.iter()
         .enumerate()
         .map(|(i, var)| {
@@ -730,7 +730,7 @@ fn env_errors(vars: &[EnvVar]) -> Vec<&'static str> {
         .collect()
 }
 
-fn guest_path_errors(mounts: &[Mount]) -> Vec<&'static str> {
+pub(crate) fn guest_path_errors(mounts: &[Mount]) -> Vec<&'static str> {
     let normalized = |path: &str| path.trim_end_matches('/').to_owned();
     mounts
         .iter()
@@ -781,7 +781,7 @@ fn pick_folder() -> Option<PathBuf> {
 }
 
 /// A host path with the home folder shortened to `~`.
-fn display_path(path: &Path) -> String {
+pub(crate) fn display_path(path: &Path) -> String {
     if let Some(home) = std::env::var_os("HOME")
         && let Ok(rest) = path.strip_prefix(&home)
     {

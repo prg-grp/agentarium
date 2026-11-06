@@ -148,7 +148,7 @@ Normal startup must:
 
 Proposed behavior: do not launch the agent until required policy enforcement and monitoring initialization succeed. Distinguish startup failure from degraded monitoring during a run.
 
-Decided: the app sends the launch settings of the boot's revision (command, arguments, working directory, environment variables) in Start. The supervisor runs the command directly, without a shell, as the unprivileged `ubuntu` user on the console, and starts it again two seconds after it exits. It never falls back to a shell. The supervisor has no default command: an empty command starts nothing.
+Decided: the app sends the launch settings of the boot's revision (command, arguments, working directory) in Start, together with its environment variables and shared folders, which maintenance mode gets too. The supervisor mounts the shared folders first (see [Live host-directory access](#live-host-directory-access)), then runs the command directly, without a shell, as the unprivileged `ubuntu` user on the console, and starts it again two seconds after it exits. It never falls back to a shell. The supervisor has no default command: an empty command starts nothing.
 
 ### Maintenance mode
 
@@ -202,6 +202,15 @@ Proposed defaults:
 - Read-only access until the user selects write access.
 - No implicit sharing of the home directory, credential stores, or unrelated projects.
 - Stable host-to-guest path mapping for activity display.
+
+Decided:
+
+- All enabled folders of a boot share one virtio-fs device (tag `terrarium-shares`) with a `VZMultipleDirectoryShare`; each folder is a named directory in it. Read-only folders are read-only `VZSharedDirectory`s, so the Mac enforces the access and guest root can't lift it.
+- The app checks the folders before the boot (each must exist and be readable, guest paths must be absolute, without `..`, and unique) and fails the start with the reason otherwise.
+- `Start` names each folder and its guest path. The supervisor mounts the share at `/run/terrarium/shares` (root only), then bind-mounts each folder to its guest path, parents first, and remounts read-only folders read-only. It creates missing mount points owned by `ubuntu` and refuses a path through a symbolic link. The mounts last for the boot only; nothing is written to fstab.
+- Agent and maintenance boots get the folders; provision boots don't, as they run with open internet.
+- If a folder can't be mounted, nothing starts: the supervisor logs the error, shows it on the session console, sends `StartFailed`, and powers off. The app shows the reason as a startup failure.
+- Changing the folders of a running instance applies on the next boot.
 
 Deferred: copied workspaces, isolated change sets, diff review, and selective application back to the host.
 
@@ -323,7 +332,7 @@ Decided (first version, crate `command_plane`, `command_plane/proto/command_plan
 
 - The app connects to the supervisor on vsock port 700, retrying every 250 ms while the guest boots, and again if the connection closes. Only root can listen on ports up to 1023 in a Linux guest, so the agent user can't pose as the supervisor.
 - Frames are a big-endian u32 length followed by the encoded message, at most 1 MiB. Both sides use blocking I/O on their own threads.
-- Messages: `Hello` (guest, with the protocol version) → `Start` (host: mode, plus launch settings in agent mode or the script in provision mode; only the first per boot counts) → `ProvisionFinished` (guest), `Resize` (host: the Terminal view's columns and rows, sent after Start and on every change; the supervisor applies it to `hvc1`) and `Stop` (host). Without a Hello within 60 seconds of the VM's start, the app stops the VM and reports the failure.
+- Messages: `Hello` (guest, with the protocol version) → `Start` (host: mode, plus launch settings in agent mode or the script in provision mode, and environment variables and shared folders in agent and maintenance mode; only the first per boot counts) → `ProvisionFinished` or `StartFailed` (guest, when the shared folders couldn't be mounted), `Resize` (host: the Terminal view's columns and rows, sent after Start and on every change; the supervisor applies it to `hvc1`) and `Stop` (host). Without a Hello within 60 seconds of the VM's start, the app stops the VM and reports the failure.
 - Terminal I/O runs on its own serial console (`hvc1`), apart from the boot output on `hvc0`. A guest PTY with its own vsock stream is only needed once an instance runs several sessions at once; separate channels, request IDs, and telemetry follow.
 
 Bind each connection to the host-managed VM and current run. Do not trust an instance ID supplied in an arbitrary guest message as authority. Validate all guest input and avoid a generic host-command execution endpoint.
@@ -350,7 +359,7 @@ Decided:
 - Any number of instances can run at once. Each running VM operates on its own serial dispatch queue and is driven by its own controller thread, which starts it, watches its state and stops it (with a hard stop after a timeout). Controllers report state changes and the console to the main thread, which keeps database access, the sidebar and two terminals per instance (session and boot log); the selected instance's terminal for the active tab is shown. Quitting asks every running VM to shut down and exits once all have stopped.
 - `rusqlite_migration` upgrades the schema on start, tracked in `PRAGMA user_version`. Migrations are append-only SQL files; a shipped migration is never edited, reordered or deleted. An existing database is copied to `terrarium.sqlite.v<version>.bak` before an upgrade. A database newer than the app is refused.
 - Instance configuration is stored as revisions. The latest revision is editable while pending; the first boot that uses it freezes it. List-valued settings (arguments, environment, mounts, network rules) are JSON columns.
-- Launch settings (command, arguments, working directory, environment), mounts, and network rules are stored but not yet applied at boot; delivering them to the guest needs the guest command channel.
+- Launch settings (command, arguments, working directory, environment) and mounts are applied at boot through `Start`. Network rules are stored but not yet applied.
 
 Preserve received source events separately from later enrichment. Enrichment must retain provenance and remain reproducible; do not overwrite the original destination with a guessed domain.
 

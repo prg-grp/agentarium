@@ -35,6 +35,10 @@ RUN systemctl enable terrarium-supervisor.service
 # The command plane's vsock transport, loaded early so the supervisor can listen right away.
 RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf
 
+# The shared folders arrive through one virtio-fs device; the supervisor mounts it and
+# binds each folder to its path in agent and maintenance boots.
+RUN printf 'virtiofs\n' > /etc/modules-load.d/virtiofs.conf
+
 # Virtualization.framework gives Linux guests no usable hardware clock. The clock is set
 # early at boot from the Mac's time on the kernel command line; timesyncd keeps it right
 # afterwards, e.g. when the VM was paused while the Mac slept.
