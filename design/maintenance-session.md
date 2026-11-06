@@ -40,7 +40,7 @@ The banner cannot be dismissed.
 
 - Agent reading: pause icon in `tx3`, "Not running in maintenance" in `tx2`.
 - Monitoring reading reflects the real state. If the collector is changed or stopped by root, it switches to Degraded or Not running immediately, with the notice from [agent-exited-degraded.md](agent-exited-degraded.md#degraded-monitoring-notice).
-- Actions: "Stop" and "Delete" only. No "Restart in maintenance" while already in maintenance.
+- Actions: "Restart in agent mode" (ghost, sparkles icon), "Stop" and "Delete". No "Restart in maintenance" while already in maintenance. "Restart in agent mode" does the same as the banner's "Return to agent mode"; the header button exists until the banner is built.
 
 ## Terminal
 

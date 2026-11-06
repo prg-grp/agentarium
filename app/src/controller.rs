@@ -14,6 +14,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
@@ -22,13 +23,13 @@ use command_plane::{
     EnvVar, GuestMessage, HostMessage, Launch, Mode, Mount, PORT, PROTOCOL_VERSION, Resize, Start,
     Stop, guest_message, host_message,
 };
-use slint::{ComponentHandle, Model, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::create::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
 use crate::db::{self, Db};
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
-use crate::{AppWindow, InstanceItem, InstanceState, StatusReading, Tone};
+use crate::{AppWindow, Deletion, InstanceItem, InstanceState, StatusReading, Tone};
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
 
@@ -72,6 +73,8 @@ enum Event {
         log: Console,
     },
     State(VmState),
+    /// The guest supervisor got Start, so the session is about to run.
+    Ready,
     /// The provisioning script finished with this exit code.
     Provisioned(i32),
     /// The controller ended: the VM stopped, or failed with the error.
@@ -240,8 +243,11 @@ fn run(
                         if let (Ok(()), Some(size)) = (&sent, size) {
                             sent = channel.send(host_message::Kind::Resize(size));
                         }
-                        if let Err(error) = sent {
-                            eprintln!("Couldn't send Start to the guest supervisor: {error}");
+                        match sent {
+                            Ok(()) => report(Event::Ready),
+                            Err(error) => {
+                                eprintln!("Couldn't send Start to the guest supervisor: {error}")
+                            }
                         }
                     }
                 }
@@ -310,6 +316,15 @@ thread_local! {
     static CONTROL: RefCell<Weak<VmControl>> = const { RefCell::new(Weak::new()) };
 }
 
+/// What happens once a VM has stopped.
+#[derive(Clone, Copy, PartialEq)]
+pub enum AfterStop {
+    Nothing,
+    Boot(BootMode),
+    /// The instance is deleted; nothing cancels this.
+    Delete,
+}
+
 /// A running VM, as the UI thread tracks it.
 struct Running {
     commands: Sender<Command>,
@@ -317,8 +332,10 @@ struct Running {
     mode: BootMode,
     /// The configuration revision this boot uses.
     revision: i64,
-    /// Set while a stop is in progress; `Some(true)` boots maintenance mode afterwards.
-    stop: Option<bool>,
+    /// Set while a stop is in progress, with what happens afterwards.
+    stop: Option<AfterStop>,
+    /// Set once the guest supervisor got Start; until then the boot is still starting.
+    ready: bool,
     /// The provisioning script's exit code, once the supervisor reported it.
     provisioned: Option<i32>,
 }
@@ -403,6 +420,7 @@ impl VmControl {
                 mode,
                 revision,
                 stop: None,
+                ready: false,
                 provisioned: None,
             },
         );
@@ -508,9 +526,9 @@ impl VmControl {
         Ok((spec, start, mode, revision.number))
     }
 
-    /// Asks the instance's guest to shut down, then boots it in maintenance mode if
-    /// `then_maintenance` is set. Its controller stops it hard if it doesn't shut down in time.
-    pub fn stop(&self, id: &str, then_maintenance: bool) {
+    /// Asks the instance's guest to shut down, then does `then`. Its controller stops it hard
+    /// if it doesn't shut down in time. A pending deletion stays pending.
+    pub fn stop(&self, id: &str, then: AfterStop) {
         let mode = {
             let mut running = self.running.borrow_mut();
             let Some(run) = running.get_mut(id) else {
@@ -519,7 +537,9 @@ impl VmControl {
             if run.stop.is_none() {
                 let _ = run.commands.send(Command::Stop);
             }
-            run.stop = Some(then_maintenance);
+            if run.stop != Some(AfterStop::Delete) {
+                run.stop = Some(then);
+            }
             run.mode
         };
         self.show(id, mode, VmState::Stopping);
@@ -534,11 +554,124 @@ impl VmControl {
         if self.quitting.replace(true) {
             return;
         }
-        // Instances already stopping just don't boot maintenance mode afterwards.
+        // Instances already stopping just don't boot again afterwards.
         let ids: Vec<String> = self.running.borrow().keys().cloned().collect();
         for id in ids {
-            self.stop(&id, false);
+            self.stop(&id, AfterStop::Nothing);
         }
+    }
+
+    /// Opens the delete confirmation for the instance, with what deleting it removes.
+    pub fn ask_delete(&self, id: &str) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let instance = match self.db.instance(id) {
+            Ok(instance) => instance,
+            Err(error) => return eprintln!("Couldn't read the instance to delete: {error}"),
+        };
+        // Allocated, not logical size: the disk is sparse and shares blocks with its base.
+        let disk_size = std::fs::metadata(&instance.disk_path).map_or(String::new(), |meta| {
+            let bytes = meta.blocks() * 512;
+            if bytes >= 1_000_000_000 {
+                format!("{:.1} GB", bytes as f64 / 1e9)
+            } else {
+                format!("{} MB", bytes / 1_000_000)
+            }
+        });
+        let folders: Vec<SharedString> = self
+            .db
+            .latest_revision(id)
+            .map(|revision| {
+                revision
+                    .config
+                    .mounts
+                    .iter()
+                    .map(|mount| display_path(&mount.host_path).into())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let g = ui.global::<Deletion>();
+        g.set_instance_id(id.into());
+        g.set_name(instance.name.into());
+        g.set_running(self.running.borrow().contains_key(id));
+        g.set_disk_size(disk_size.into());
+        g.set_revisions(self.db.revision_count(id).unwrap_or(0) as i32);
+        g.set_folders(ModelRc::new(VecModel::from(folders)));
+        g.set_busy(false);
+        g.set_error("".into());
+        g.set_open(true);
+    }
+
+    /// Deletes the instance, after shutting its VM down if it runs.
+    pub fn delete(&self, id: &str) {
+        if let Some(ui) = self.ui.upgrade() {
+            ui.global::<Deletion>().set_busy(true);
+        }
+        if self.running.borrow().contains_key(id) {
+            self.stop(id, AfterStop::Delete);
+        } else {
+            self.finish_delete(id);
+        }
+    }
+
+    /// Deletes the stopped instance from the database, then its folder with the disk, and
+    /// reports the outcome to the dialog. Returns false if nothing was deleted.
+    fn finish_delete(&self, id: &str) -> bool {
+        let report = |error: String| {
+            if let Some(ui) = self.ui.upgrade() {
+                let g = ui.global::<Deletion>();
+                g.set_busy(false);
+                g.set_error(error.as_str().into());
+                g.set_open(!error.is_empty());
+            }
+        };
+        if let Err(error) = self.db.delete_instance(id) {
+            report(format!("Couldn't delete the instance: {error}"));
+            return false;
+        }
+
+        if self.shown.borrow().as_deref() == Some(id) {
+            if let Some(terminal) = self.shown_terminal() {
+                terminal.hide();
+            }
+            *self.shown.borrow_mut() = None;
+        }
+        self.terminals.borrow_mut().remove(id);
+
+        // The next instance takes the deleted one's place, or the previous one if it was last.
+        if let Some(row) = (0..self.instances.row_count()).find(|&row| {
+            self.instances
+                .row_data(row)
+                .is_some_and(|item| item.id == id)
+        }) {
+            self.instances.remove(row);
+            if let Some(ui) = self.ui.upgrade() {
+                let (row, count) = (row as i32, self.instances.row_count() as i32);
+                let selected = ui.get_selected_index();
+                if selected > row {
+                    ui.set_selected_index(selected - 1);
+                } else if selected == row {
+                    ui.set_selected_index(row.min(count - 1));
+                }
+            }
+        }
+
+        let removed = db::instance_dir(id)
+            .map_err(|error| error.to_string())
+            .and_then(|dir| match std::fs::remove_dir_all(&dir) {
+                Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                    Err(format!("{} ({error})", display_path(&dir)))
+                }
+                _ => Ok(()),
+            });
+        report(match removed {
+            Ok(()) => String::new(),
+            Err(error) => {
+                format!("The instance was deleted, but its folder couldn't be removed: {error}")
+            }
+        });
+        true
     }
 
     fn handle(&self, id: &str, event: Event) {
@@ -560,7 +693,7 @@ impl VmControl {
                     });
                 if let Err(error) = attached {
                     eprintln!("Stopping the virtual machine: {error}");
-                    self.stop(id, false);
+                    self.stop(id, AfterStop::Nothing);
                 }
             }
             Event::State(state) => {
@@ -575,6 +708,15 @@ impl VmControl {
                 // The guest keeps running while it shuts down.
                 self.show(id, mode, if stopping { VmState::Stopping } else { state });
             }
+            Event::Ready => {
+                let Some(mode) = self.running.borrow_mut().get_mut(id).map(|run| {
+                    run.ready = true;
+                    run.mode
+                }) else {
+                    return;
+                };
+                self.show(id, mode, VmState::Running);
+            }
             Event::Provisioned(code) => {
                 if let Some(run) = self.running.borrow_mut().get_mut(id) {
                     run.provisioned = Some(code);
@@ -585,6 +727,13 @@ impl VmControl {
                     return;
                 };
                 let quitting = self.quitting.get();
+                // The VM is down either way; a failed deletion shows the instance stopped.
+                if run.stop == Some(AfterStop::Delete) && self.finish_delete(id) {
+                    if quitting && self.running.borrow().is_empty() {
+                        let _ = slint::quit_event_loop();
+                    }
+                    return;
+                }
                 match result {
                     Err(error) => self.failed(id, run.mode, &error),
                     // A provisioning run powers off by itself once its script is done.
@@ -596,8 +745,10 @@ impl VmControl {
                     Ok(()) => {
                         self.detach(id, "The virtual machine stopped.");
                         self.show(id, run.mode, VmState::Stopped);
-                        if run.stop == Some(true) && !quitting {
-                            self.start(id, BootMode::Maintenance);
+                        if let Some(AfterStop::Boot(mode)) = run.stop
+                            && !quitting
+                        {
+                            self.start(id, mode);
                         }
                     }
                 }
@@ -758,8 +909,23 @@ impl VmControl {
                 reading("Not running", Tone::Neutral),
             ),
         };
+        // A provisioning boot is covered throughout; its output shows dimmed behind it.
+        let transition = match self.running.borrow().get(id) {
+            Some(Running {
+                stop: Some(then), ..
+            }) => match then {
+                AfterStop::Boot(BootMode::Maintenance) => "Restarting in maintenance…",
+                AfterStop::Boot(_) => "Restarting in agent mode…",
+                AfterStop::Delete => "Deleting…",
+                AfterStop::Nothing => "Stopping…",
+            },
+            Some(run) if run.mode == BootMode::Provision => "Provisioning…",
+            Some(run) if !run.ready => "Starting…",
+            _ => "",
+        };
         item.state = instance_state;
         item.summary = summary.into();
+        item.transition = transition.into();
         item.vm = vm;
         item.agent_status = agent;
         self.instances.set_row_data(row, item);

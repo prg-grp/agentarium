@@ -2,7 +2,7 @@
 
 import { Theme } from "theme.slint";
 
-export enum ButtonKind { primary, neutral, ghost, danger }
+export enum ButtonKind { primary, neutral, ghost, danger, danger-confirm }
 
 // Button styles from DESIGN.md "Buttons and emphasis". At most one primary per view.
 export component AppButton {
@@ -16,6 +16,7 @@ export component AppButton {
     callback clicked();
 
     property <color> fg: kind == ButtonKind.primary ? Theme.on-acc
+        : kind == ButtonKind.danger-confirm ? Theme.on-bad
         : kind == ButtonKind.danger ? Theme.bad
         : kind == ButtonKind.ghost ? Theme.tx2
         : Theme.tx;
@@ -39,6 +40,7 @@ export component AppButton {
         border-width: kind == ButtonKind.neutral ? 1px : 0px;
         border-color: Theme.line2;
         background: kind == ButtonKind.primary ? (touch.has-hover ? Theme.acc.brighter(8%) : Theme.acc)
+            : kind == ButtonKind.danger-confirm ? (touch.has-hover ? Theme.bad.brighter(8%) : Theme.bad)
             : kind == ButtonKind.neutral ? (touch.has-hover ? Theme.raise.brighter(15%) : Theme.raise)
             : (touch.has-hover ? Theme.hover : transparent);
     }

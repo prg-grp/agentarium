@@ -35,6 +35,7 @@ Agent session in /work/api                         Boot log │ Live activity   
 - Normal terminal behavior: keyboard input, selection, copy, paste, resize, scrolling, full-screen terminal apps. Do not intercept the agent's ordinary shortcuts. Keep focus predictable: clicking the terminal focuses it; tab switches do not steal focus back unexpectedly.
 - When the user scrolls up, keep the position and show a "Jump to latest" control at the bottom right of the terminal. Remove it when the user returns to the end.
 - Agent exit and restart behavior: see [agent-exited-degraded.md](agent-exited-degraded.md).
+- While the instance starts, stops or restarts, the terminal is covered and takes no input (keys, clicks, selection, scrolling). Its content stays visible under a `well` scrim at 50%, with a centered indeterminate spinner (28 px) and the transition in `tx2` 12 px: "Starting…", "Provisioning…", "Stopping…", "Restarting in maintenance…", "Restarting in agent mode…", "Deleting…". Starting lasts until the guest supervisor has received the boot mode, not just until the VM runs. A provisioning boot is covered from start to end ("Provisioning…"); the script's output shows dimmed behind the scrim, and the agent boot that follows continues with "Starting…". The cursor is hidden meanwhile. The Logs tab is never covered, since it shows the progress. The spinner is a deliberate exception to "no animated status effects" in [DESIGN.md](../DESIGN.md): it follows a user action and ends with it.
 
 ## Live activity rail
 

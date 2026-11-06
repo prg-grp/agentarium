@@ -17,7 +17,7 @@ use std::time::Duration;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{Model, ModelRc, Timer, VecModel};
 
-use controller::{View, VmControl};
+use controller::{AfterStop, View, VmControl};
 use db::Db;
 use vm::BootMode;
 
@@ -107,9 +107,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     ui.on_instance_action(move |id, action| match action {
         InstanceAction::Start => c.start(&id, BootMode::Agent),
         InstanceAction::BootMaintenance => c.start(&id, BootMode::Maintenance),
-        InstanceAction::Stop => c.stop(&id, false),
-        InstanceAction::RestartMaintenance => c.stop(&id, true),
-        _ => {}
+        InstanceAction::Stop => c.stop(&id, AfterStop::Nothing),
+        InstanceAction::RestartMaintenance => c.stop(&id, AfterStop::Boot(BootMode::Maintenance)),
+        InstanceAction::RestartAgent => c.stop(&id, AfterStop::Boot(BootMode::Agent)),
+        InstanceAction::Delete => c.ask_delete(&id),
+    });
+    let c = control.clone();
+    let ui_handle = ui.as_weak();
+    ui.global::<Deletion>().on_confirm(move || {
+        if let Some(ui) = ui_handle.upgrade() {
+            c.delete(&ui.global::<Deletion>().get_instance_id());
+        }
     });
 
     let session = ui.global::<TerminalSession>();
@@ -251,5 +259,6 @@ fn to_item(instance: db::Instance) -> InstanceItem {
         // Counting saved but inactive changes comes with the settings screen.
         pending_changes: 0,
         has_terminal: true,
+        transition: "".into(),
     }
 }

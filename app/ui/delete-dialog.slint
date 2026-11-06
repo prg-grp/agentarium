@@ -1,0 +1,213 @@
+// Delete confirmation, see design/delete-confirmation.md.
+// Its layout is the confirmation dialog layout the maintenance confirmation will share
+// (DESIGN.md); extract it once that dialog is built.
+
+import { Theme } from "theme.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+
+// The instance asked to be deleted. Rust (src/controller.rs) fills it and deletes on confirm.
+export global Deletion {
+    in-out property <bool> open;
+    in property <string> instance-id;
+    in property <string> name;
+    in property <bool> running;
+    // "" when the disk's size couldn't be read.
+    in property <string> disk-size;
+    in property <int> revisions;
+    // Host paths of the instance's shared folders.
+    in property <[string]> folders;
+    // Set while the instance shuts down and is deleted.
+    in property <bool> busy;
+    // Set when the deletion failed, completely or partly.
+    in property <string> error;
+
+    callback confirm();
+}
+
+// One item of the effect list: an icon, optional monospace paths, and a sentence.
+component Effect {
+    in property <image> icon;
+    in property <color> icon-color;
+    in property <[string]> paths;
+    in property <string> text;
+
+    HorizontalLayout {
+        padding-top: 10px;
+        padding-bottom: 10px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 1px;
+            width: 20px;
+            Image {
+                source: root.icon;
+                colorize: root.icon-color;
+                width: 18px;
+                height: 18px;
+                accessible-role: none;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 2px;
+
+            for path in root.paths: Text {
+                text: path;
+                color: Theme.tx;
+                font-family: Theme.mono;
+                font-size: Theme.font-small;
+                wrap: char-wrap;
+            }
+
+            Text {
+                text: root.text;
+                color: root.paths.length > 0 ? Theme.tx2 : Theme.tx;
+                font-size: root.paths.length > 0 ? Theme.font-small : Theme.font-body;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+export component DeleteDialog {
+    init => {
+        keys.focus();
+    }
+
+    Rectangle {
+        background: #000000.with-alpha(0.45);
+    }
+
+    // Keeps clicks from reaching the window below.
+    TouchArea { }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                if !Deletion.busy {
+                    Deletion.open = false;
+                }
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px;
+        height: content.preferred-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-window;
+        border-width: 1px;
+        border-color: Theme.line2;
+        accessible-role: groupbox;
+        accessible-label: "Delete \{Deletion.name}?";
+
+        content := VerticalLayout {
+            padding: 24px;
+            spacing: 6px;
+
+            Text {
+                text: "Delete \{Deletion.name}?";
+                color: Theme.tx;
+                font-size: Theme.font-dialog;
+                font-weight: Theme.weight-medium;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: Deletion.running ? "The instance is running and will be shut down first. This can't be undone." : "This can't be undone.";
+                color: Theme.tx2;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                padding-top: 12px;
+
+                Text {
+                    text: "Removed";
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                }
+
+                Effect {
+                    icon: @image-url("icons/server-2.svg");
+                    icon-color: Theme.bad;
+                    text: Deletion.disk-size != ""
+                        ? "Virtual machine disk, \{Deletion.disk-size}, including software installed in maintenance"
+                        : "Virtual machine disk, including software installed in maintenance";
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+
+                Effect {
+                    icon: @image-url("icons/adjustments-horizontal.svg");
+                    icon-color: Theme.bad;
+                    text: Deletion.revisions == 1 ? "Configuration and its revision" : "Configuration and its \{Deletion.revisions} revisions";
+                }
+            }
+
+            if Deletion.folders.length > 0: VerticalLayout {
+                padding-top: 8px;
+
+                Text {
+                    text: "Stays on your Mac";
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                }
+
+                Effect {
+                    icon: @image-url("icons/folder.svg");
+                    icon-color: Theme.tx2;
+                    paths: Deletion.folders;
+                    text: "Shared folders and their files aren't touched.";
+                }
+            }
+
+            if Deletion.error != "": Text {
+                text: Deletion.error;
+                color: Theme.bad;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                padding-top: 14px;
+                spacing: 10px;
+                alignment: end;
+
+                if Deletion.error == "": AppButton {
+                    kind: ButtonKind.ghost;
+                    text: "Cancel";
+                    enabled: !Deletion.busy;
+                    clicked => {
+                        Deletion.open = false;
+                    }
+                }
+
+                if Deletion.error == "": AppButton {
+                    kind: ButtonKind.danger-confirm;
+                    text: Deletion.busy ? "Deleting…" : "Delete instance";
+                    icon: @image-url("icons/trash.svg");
+                    enabled: !Deletion.busy;
+                    clicked => {
+                        Deletion.confirm();
+                    }
+                }
+
+                if Deletion.error != "": AppButton {
+                    kind: ButtonKind.neutral;
+                    text: "Close";
+                    clicked => {
+                        Deletion.open = false;
+                    }
+                }
+            }
+        }
+    }
+}

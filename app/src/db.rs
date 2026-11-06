@@ -316,6 +316,21 @@ impl Db {
         Ok(())
     }
 
+    /// Deletes the instance with its revisions; its files are the caller's.
+    pub fn delete_instance(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM instances WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn revision_count(&self, instance_id: &str) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT count(*) FROM instance_revisions WHERE instance_id = ?1",
+            [instance_id],
+            |row| row.get(0),
+        )?)
+    }
+
     /// Records that a provisioning run succeeded on the instance's disk.
     pub fn mark_provisioned(&self, instance_id: &str) -> Result<()> {
         self.conn.execute(

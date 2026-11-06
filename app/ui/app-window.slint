@@ -6,8 +6,9 @@ import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
 import { TerminalSession, TerminalView } from "terminal.slint";
 import { Creation, CreateInstance } from "create-instance.slint";
+import { Deletion, DeleteDialog } from "delete-dialog.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, TerminalSession, AgentKind, EnvRow, MountRow, RuleRow, CreateIssue, Creation }
+export { Tone, InstanceState, InstanceAction, StatusReading, InstanceItem, TermRun, TermLine, TerminalSession, AgentKind, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion }
 
 // One of the three readings in the instance header.
 component StatusCell {
@@ -383,8 +384,19 @@ export component AppWindow inherits Window {
                                 kind: ButtonKind.ghost;
                                 text: "Restart in maintenance";
                                 icon: @image-url("icons/tool.svg");
+                                enabled: current.transition == "";
                                 clicked => {
                                     root.instance-action(current.id, InstanceAction.restart-maintenance);
+                                }
+                            }
+
+                            if in-maintenance: AppButton {
+                                kind: ButtonKind.ghost;
+                                text: "Restart in agent mode";
+                                icon: @image-url("icons/sparkles.svg");
+                                enabled: current.transition == "";
+                                clicked => {
+                                    root.instance-action(current.id, InstanceAction.restart-agent);
                                 }
                             }
 
@@ -502,6 +514,7 @@ export component AppWindow inherits Window {
                 // Tab content (other screens come in later steps)
                 if current-tab == 0 && current.has-terminal: TerminalView {
                     vertical-stretch: 1;
+                    transition: current.transition;
                     open-log => {
                         root.current-tab = 1;
                     }
@@ -527,5 +540,11 @@ export component AppWindow inherits Window {
                 }
             }
         }
+    }
+
+    // Covers the whole window, sidebar included.
+    if Deletion.open: DeleteDialog {
+        width: parent.width;
+        height: parent.height;
     }
 }

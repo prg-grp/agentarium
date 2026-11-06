@@ -6,6 +6,12 @@ rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+# macOS names an unbundled app after its executable in the app switcher and Dock,
+# so the binary carries the name from the window title.
+[[bin]]
+name = "TerrArIum"
+path = "src/main.rs"
+
 [dependencies]
 alacritty_terminal = "0.26"
 arboard = "3"

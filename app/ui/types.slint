@@ -4,7 +4,7 @@ export enum Tone { ok, warn, bad, neutral, muted, accent }
 
 export enum InstanceState { running, agent-exited, maintenance, startup-failed, stopped, draft }
 
-export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, delete }
+export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, restart-agent, delete }
 
 export enum AgentKind { claude-code, codex, custom }
 
@@ -24,6 +24,8 @@ export struct InstanceItem {
     monitoring: StatusReading,
     pending-changes: int,
     has-terminal: bool,
+    // Label of the start, stop or restart in progress, shown over the terminal; "" when none.
+    transition: string,
 }
 
 // One styled stretch of terminal text, starting at column `col`.
