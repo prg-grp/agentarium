@@ -16,7 +16,10 @@ use std::rc::Rc;
 
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::db::{self, Agent, Config, Db, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget};
+use crate::db::{
+    self, Agent, Config, Db, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget, mask32,
+    mask128, max_prefix, parse_network,
+};
 use crate::vm;
 use crate::{
     AgentKind, AppWindow, CreateIssue, Creation, EnvRow, InstanceItem, InstanceState, MountRow,
@@ -839,7 +842,7 @@ fn rule_rows(rules: &[NetworkRule], action: NetworkAction) -> Vec<RuleRow> {
     let denied = |target: &RuleTarget| {
         rules
             .iter()
-            .any(|other| other.action == NetworkAction::Deny && blocks(&other.target, target))
+            .any(|other| other.action == NetworkAction::Deny && other.target.covers(target))
     };
     rules
         .iter()
@@ -936,53 +939,10 @@ fn cidr(address: IpAddr, prefix: u8) -> Option<RuleTarget> {
     })
 }
 
-fn parse_network(network: &str) -> Option<(IpAddr, u8)> {
-    let (address, prefix) = network.split_once('/')?;
-    Some((address.parse().ok()?, prefix.parse().ok()?))
-}
-
-fn max_prefix(address: IpAddr) -> u8 {
-    if address.is_ipv4() { 32 } else { 128 }
-}
-
-fn mask32(prefix: u8) -> u32 {
-    u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0)
-}
-
-fn mask128(prefix: u8) -> u128 {
-    u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0)
-}
-
 fn same_target(a: &RuleTarget, b: &RuleTarget) -> bool {
     match (a, b) {
         (RuleTarget::Domain { name: a, .. }, RuleTarget::Domain { name: b, .. }) => a == b,
         (RuleTarget::Cidr { network: a }, RuleTarget::Cidr { network: b }) => a == b,
-        _ => false,
-    }
-}
-
-/// Whether the deny rule `deny` blocks some of what `allowed` allows. Domains and
-/// addresses aren't compared: which addresses a domain has is only known from DNS.
-fn blocks(deny: &RuleTarget, allowed: &RuleTarget) -> bool {
-    match (deny, allowed) {
-        (
-            RuleTarget::Domain {
-                name: denied,
-                include_subdomains,
-            },
-            RuleTarget::Domain { name, .. },
-        ) => name == denied || (*include_subdomains && name.ends_with(&format!(".{denied}"))),
-        (RuleTarget::Cidr { network: a }, RuleTarget::Cidr { network: b }) => {
-            match (parse_network(a), parse_network(b)) {
-                (Some((IpAddr::V4(a), pa)), Some((IpAddr::V4(b), pb))) => {
-                    (u32::from(a) ^ u32::from(b)) & mask32(pa.min(pb)) == 0
-                }
-                (Some((IpAddr::V6(a), pa)), Some((IpAddr::V6(b), pb))) => {
-                    (u128::from(a) ^ u128::from(b)) & mask128(pa.min(pb)) == 0
-                }
-                _ => false,
-            }
-        }
         _ => false,
     }
 }

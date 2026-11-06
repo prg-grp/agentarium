@@ -18,6 +18,7 @@ use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::rc::{Rc, Weak};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -29,6 +30,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::create::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
 use crate::db::{self, Db};
+use crate::policy::Policy;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
 use crate::{AppWindow, Deletion, InstanceItem, InstanceState, StatusReading, Tone, Usage};
@@ -521,11 +523,18 @@ impl VmControl {
             mode
         };
         let config = revision.config;
+        // Only agent boots are held to the network rules; maintenance and provision boots
+        // get open internet, but never the Mac or the local network.
+        let network = match mode {
+            BootMode::Agent => Policy::new(config.network_default, config.network_rules),
+            BootMode::Maintenance | BootMode::Provision => Policy::open(),
+        };
         let mut spec = VmSpec {
             cpus: config.cpus as usize,
             memory_mib: config.memory_mib.into(),
             rootfs: instance.disk_path,
             shares: Vec::new(),
+            network: Arc::new(network),
         };
         let mut start = match mode {
             BootMode::Agent => Start {

@@ -8,6 +8,7 @@
 //! so the configuration of every run stays on record.
 
 use std::error::Error;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -122,6 +123,52 @@ pub enum RuleTarget {
     /// An address range in `address/prefix` form with the host bits cleared; a single
     /// address is a /32 (IPv4) or /128 (IPv6).
     Cidr { network: String },
+}
+
+impl RuleTarget {
+    /// Whether this rule's target includes some of `other`: the same domain, a subdomain
+    /// when this rule includes subdomains, or an overlapping address range. Domains and
+    /// addresses aren't compared: which addresses a domain has is only known from DNS.
+    pub fn covers(&self, other: &RuleTarget) -> bool {
+        match (self, other) {
+            (
+                RuleTarget::Domain {
+                    name: rule,
+                    include_subdomains,
+                },
+                RuleTarget::Domain { name, .. },
+            ) => name == rule || (*include_subdomains && name.ends_with(&format!(".{rule}"))),
+            (RuleTarget::Cidr { network: a }, RuleTarget::Cidr { network: b }) => {
+                match (parse_network(a), parse_network(b)) {
+                    (Some((IpAddr::V4(a), pa)), Some((IpAddr::V4(b), pb))) => {
+                        (u32::from(a) ^ u32::from(b)) & mask32(pa.min(pb)) == 0
+                    }
+                    (Some((IpAddr::V6(a), pa)), Some((IpAddr::V6(b), pb))) => {
+                        (u128::from(a) ^ u128::from(b)) & mask128(pa.min(pb)) == 0
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+pub fn parse_network(network: &str) -> Option<(IpAddr, u8)> {
+    let (address, prefix) = network.split_once('/')?;
+    Some((address.parse().ok()?, prefix.parse().ok()?))
+}
+
+pub fn max_prefix(address: IpAddr) -> u8 {
+    if address.is_ipv4() { 32 } else { 128 }
+}
+
+pub fn mask32(prefix: u8) -> u32 {
+    u32::MAX.checked_shl(32 - u32::from(prefix)).unwrap_or(0)
+}
+
+pub fn mask128(prefix: u8) -> u128 {
+    u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0)
 }
 
 /// An instance's configuration, as saved in one revision.

@@ -3,8 +3,9 @@
 //! Virtualization.framework passes the guest's Ethernet frames through a datagram
 //! socketpair. The stack (netstack-smoltcp) terminates the guest's TCP connections and
 //! UDP flows, and each one is opened again as an ordinary socket on the Mac, so every
-//! connection passes `allowed()`. Each VM gets its own runtime and threads, so one VM's
-//! traffic can't slow down another's.
+//! connection passes the VM's `Policy` first. DNS (UDP port 53, to any address) always goes
+//! to the Mac's nameserver, so the policy sees every lookup and answer. Each VM gets its
+//! own runtime and threads, so one VM's traffic can't slow down another's.
 //!
 //! The guest is configured statically (base rootfs): 192.168.127.2/24, gateway and DNS
 //! at 192.168.127.1, IPv4 only.
@@ -28,6 +29,8 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio::time::{sleep, timeout};
 
+use crate::policy::Policy;
+
 /// MTU of the guest NIC and the stack. 1500 is Virtualization.framework's default.
 pub const MTU: usize = 1500;
 const GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 127, 1);
@@ -44,9 +47,9 @@ pub struct Network {
 }
 
 impl Network {
-    /// Starts the network and returns it with the guest's end of the socketpair, which
-    /// becomes the VM's network device.
-    pub fn start() -> io::Result<(Network, StdUnixDatagram)> {
+    /// Starts the network under `policy` and returns it with the guest's end of the
+    /// socketpair, which becomes the VM's network device.
+    pub fn start(policy: Arc<Policy>) -> io::Result<(Network, StdUnixDatagram)> {
         let (guest, host) = StdUnixDatagram::pair()?;
         for socket in [&guest, &host] {
             set_buffers(socket)?;
@@ -63,7 +66,7 @@ impl Network {
             UnixDatagram::from_std(host)?
         };
         runtime.spawn(async move {
-            if let Err(error) = run(host, upstream_dns()).await {
+            if let Err(error) = run(host, upstream_dns(), policy).await {
                 eprintln!("The VM network stopped: {error}");
             }
         });
@@ -85,22 +88,16 @@ impl Drop for Network {
     }
 }
 
-/// The single policy decision for each new guest connection or UDP flow. The demo VM
-/// allows everything; network rules plug in here.
-fn allowed(_destination: SocketAddr) -> bool {
-    true
-}
-
 /// Moves frames between the guest and the stack, and starts the TCP and UDP relays.
-async fn run(host: UnixDatagram, dns: SocketAddr) -> io::Result<()> {
+async fn run(host: UnixDatagram, dns: SocketAddr, policy: Arc<Policy>) -> io::Result<()> {
     let (stack, runner, udp, tcp) = StackBuilder::default()
         .enable_tcp(true)
         .enable_udp(true)
         .mtu(MTU)
         .build()?;
     tokio::spawn(runner.expect("TCP is enabled"));
-    tokio::spawn(relay_tcp(tcp.expect("TCP is enabled")));
-    tokio::spawn(relay_udp(udp.expect("UDP is enabled"), dns));
+    tokio::spawn(relay_tcp(tcp.expect("TCP is enabled"), policy.clone()));
+    tokio::spawn(relay_udp(udp.expect("UDP is enabled"), dns, policy));
 
     let host = Arc::new(host);
     let guest_mac = Arc::new(OnceLock::new());
@@ -169,10 +166,12 @@ fn arp_reply(payload: &[u8]) -> Option<Vec<u8>> {
     Some([&header.to_bytes()[..], &reply.to_bytes()].concat())
 }
 
-/// Opens each guest TCP connection on the Mac and copies data both ways.
-async fn relay_tcp(mut listener: TcpListener) {
+/// Opens each guest TCP connection the policy allows on the Mac and copies data both ways.
+/// A blocked connection is closed right away.
+async fn relay_tcp(mut listener: TcpListener, policy: Arc<Policy>) {
     while let Some((mut guest, _, destination)) = listener.next().await {
-        if !allowed(destination) {
+        if !policy.allows(destination.ip()) {
+            eprintln!("Blocked a TCP connection to {destination}");
             continue;
         }
         tokio::spawn(async move {
@@ -187,9 +186,10 @@ async fn relay_tcp(mut listener: TcpListener) {
     }
 }
 
-/// Sends each guest UDP flow from its own socket on the Mac. DNS queries to the gateway
-/// go to the Mac's nameserver.
-async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr) {
+/// Sends each guest UDP flow the policy allows from its own socket on the Mac. DNS queries,
+/// to the gateway or any other address, go to the Mac's nameserver if the policy allows
+/// their name, and are refused otherwise.
+async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy: Arc<Policy>) {
     let (mut from_guest, mut to_guest) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::channel::<UdpMsg>(256);
     tokio::spawn(async move {
@@ -200,9 +200,14 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr) {
         }
     });
 
-    let gateway_dns = SocketAddr::from((GATEWAY_IP, DNS_PORT));
     let mut flows: HashMap<(SocketAddr, SocketAddr), mpsc::Sender<Vec<u8>>> = HashMap::new();
     while let Some((payload, source, destination)) = from_guest.next().await {
+        let is_dns = destination.port() == DNS_PORT;
+        // Each query is checked, as a flow can carry several.
+        if is_dns && let Some(refusal) = policy.check_query(&payload) {
+            let _ = reply_tx.try_send((refusal, destination, source));
+            continue;
+        }
         let payload = match flows.get(&(source, destination)) {
             Some(flow) => match flow.try_send(payload) {
                 // A full queue drops the datagram, like a congested link would.
@@ -212,13 +217,13 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr) {
             },
             None => payload,
         };
-        if !allowed(destination) {
-            continue;
-        }
-        let (upstream, idle) = if destination == gateway_dns {
+        let (upstream, idle) = if is_dns {
             (dns, DNS_IDLE)
-        } else {
+        } else if policy.allows(destination.ip()) {
             (destination, UDP_IDLE)
+        } else {
+            eprintln!("Blocked UDP to {destination}");
+            continue;
         };
         flows.retain(|_, flow| !flow.is_closed());
         let (flow_tx, flow_rx) = mpsc::channel(64);
@@ -230,18 +235,21 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr) {
             (source, destination),
             upstream,
             idle,
+            is_dns.then(|| policy.clone()),
         ));
     }
 }
 
 /// One guest UDP flow: forwards its datagrams to `upstream` and the answers back to the
-/// guest, until it has been idle for `idle`.
+/// guest, until it has been idle for `idle`. A DNS flow hands each answer to the policy
+/// (`dns`) before the guest gets it.
 async fn udp_flow(
     mut from_guest: mpsc::Receiver<Vec<u8>>,
     to_guest: mpsc::Sender<UdpMsg>,
     (guest, destination): (SocketAddr, SocketAddr),
     upstream: SocketAddr,
     idle: Duration,
+    dns: Option<Arc<Policy>>,
 ) {
     let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
         Ok(socket) => socket,
@@ -262,6 +270,9 @@ async fn udp_flow(
             received = socket.recv(&mut buffer) => match received {
                 // Answers appear to come from the address the guest sent to.
                 Ok(len) => {
+                    if let Some(policy) = &dns {
+                        policy.record_answer(&buffer[..len]);
+                    }
                     let reply = (buffer[..len].to_vec(), destination, guest);
                     if to_guest.send(reply).await.is_err() {
                         return;

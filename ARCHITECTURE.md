@@ -167,7 +167,7 @@ Proposed safeguards:
 - Preserve host-side network enforcement outside the guest.
 - Do not silently start the agent when maintenance preparation completes.
 
-The exact maintenance networking exception remains to be specified; “internet restrictions lifted” must not silently become access to every host service.
+Decided: the maintenance networking exception is the open policy (default allow, no rules). The Mac and the local network stay unreachable, so “internet restrictions lifted” never becomes access to host services (see [Decided policy](#decided-policy)).
 
 ### Provision mode
 
@@ -218,7 +218,7 @@ Deferred: copied workspaces, isolated change sets, diff review, and selective ap
 
 ### Required behavior
 
-Users configure allow/deny rules during creation and later editing. A rule targets either a domain (exact name, or including subdomains) or an IPv4/IPv6 address range in CIDR form; a single address is a /32 or /128. The application resolves domains and applies the resulting access policy; address rules match destinations directly. Rules are stored per revision in `network_rules` but are not enforced yet (`net::allowed` still allows everything).
+Users configure allow/deny rules during creation and later editing. A rule targets either a domain (exact name, or including subdomains) or an IPv4/IPv6 address range in CIDR form; a single address is a /32 or /128. The application resolves domains and applies the resulting access policy; address rules match destinations directly. Rules are stored per revision in `network_rules` and enforced on the Mac (see [Decided policy](#decided-policy)).
 
 Policy enforcement must sit outside the agent’s control. Guest firewall configuration alone cannot provide that boundary when maintenance grants guest root access.
 
@@ -238,6 +238,22 @@ Define these semantics before implementation:
 - Existing connections when policy changes.
 
 Proposed initial behavior: deny overrides allow; restrictive mode denies unclassified destinations; rule and DNS failures do not silently grant access. Evaluate private-network destinations separately from domain rules.
+
+### Decided policy
+
+Enforced in `app/src/policy.rs`, called by the VM's userspace network stack (`net`) for every new TCP connection and UDP flow, and for every DNS query. The policy is fixed for a boot, as the boot freezes its revision; changed rules apply on the next boot.
+
+- **Destinations,** decided when a TCP connection or UDP flow opens:
+  1. The Mac and the local network are never reachable, in any mode and whatever the rules say: loopback, private (10/8, 172.16/12, 192.168/16, which includes the guest's gateway), link-local, shared 100.64/10 (carrier-grade NAT, VPNs such as Tailscale), multicast, 0/8 and 240/4, and their IPv6 counterparts (loopback, fc00::/7, fe80::/10, multicast, IPv4-mapped).
+  2. The destination's names are the names whose DNS answers returned its address and haven't expired.
+  3. A deny rule that matches the address (CIDR) or one of its names blocks it. Deny wins, also when an address has several names and only one of them is denied.
+  4. Otherwise an allow rule that matches the address or one of its names allows it.
+  5. Otherwise the default action applies. An address without a recorded name is decided by address rules and the default only.
+- **DNS:** every UDP datagram to port 53, to the gateway or any other address, goes to the Mac's nameserver, so another resolver can't skip the check. Each query is decided by its name with steps 3 to 5; a refused query gets a `REFUSED` answer, an unreadable one `FORMERR`. Refusing stops lookups (and DNS-based exfiltration) of names the policy doesn't allow.
+- **Answers:** before the guest gets an answer, its A and AAAA records are recorded with the queried name and the names of the CNAME chain. An entry lasts for its TTL (at most one hour) plus five minutes, as programs keep using an address a little beyond its TTL. Expired entries are dropped as new answers arrive.
+- Blocked connection attempts are logged on the app's standard error. Recording policy decisions as events follows with the activity store.
+- Maintenance and provision boots use the open policy: default allow and no rules, so only step 1 applies; their DNS is forwarded unchecked but still recorded.
+- Limitations: DNS over TCP to the gateway is blocked by step 1, so a truncated UDP answer can't be retried over TCP. Encrypted DNS (DoH, DoT) and hard-coded addresses bypass the name association: such an address has no names, so under default allow only address rules can block it. A blocked TCP connection is accepted by the stack and closed right away, rather than refused.
 
 ### Domain-policy limitation
 
@@ -360,7 +376,7 @@ Decided:
 - Any number of instances can run at once. Each running VM operates on its own serial dispatch queue and is driven by its own controller thread, which starts it, watches its state and stops it (with a hard stop after a timeout). Controllers report state changes and the console to the main thread, which keeps database access, the sidebar and two terminals per instance (session and boot log); the selected instance's terminal for the active tab is shown. Quitting asks every running VM to shut down and exits once all have stopped.
 - `rusqlite_migration` upgrades the schema on start, tracked in `PRAGMA user_version`. Migrations are append-only SQL files; a shipped migration is never edited, reordered or deleted. An existing database is copied to `terrarium.sqlite.v<version>.bak` before an upgrade. A database newer than the app is refused.
 - Instance configuration is stored as revisions. The latest revision is editable while pending; the first boot that uses it freezes it. List-valued settings (arguments, environment, mounts, network rules) are JSON columns.
-- Launch settings (command, arguments, working directory, environment) and mounts are applied at boot through `Start`. Network rules are stored but not yet applied.
+- Launch settings (command, arguments, working directory, environment) and mounts are applied at boot through `Start`. Network rules are applied on the Mac by the VM's network stack for agent boots.
 
 Preserve received source events separately from later enrichment. Enrichment must retain provenance and remain reproducible; do not overwrite the original destination with a guessed domain.
 

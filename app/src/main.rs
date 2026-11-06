@@ -5,6 +5,7 @@ mod controller;
 mod create;
 mod db;
 mod net;
+mod policy;
 mod terminal;
 mod vm;
 

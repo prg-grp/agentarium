@@ -7,6 +7,7 @@
 use std::fs::File;
 use std::os::fd::{FromRawFd, IntoRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use block2::RcBlock;
@@ -25,6 +26,7 @@ use objc2_virtualization::{
 };
 
 use crate::net::{self, Network};
+use crate::policy::Policy;
 use crate::terminal::Console;
 
 /// The guest kernel, built into the workspace target directory by `make guest`.
@@ -54,6 +56,8 @@ pub struct VmSpec {
     /// Host folders shared live through one virtio-fs device (`SHARE_TAG`); the guest
     /// supervisor mounts them where `Start.mounts` says.
     pub shares: Vec<SharedFolder>,
+    /// What the guest may reach over the network.
+    pub network: Arc<Policy>,
 }
 
 /// A host folder in the instance's virtio-fs share.
@@ -128,7 +132,8 @@ impl Vm {
         // The guest numbers the ports in this order: the log is hvc0, the session hvc1.
         let (log, log_port) = serial_port()?;
         let (session, session_port) = serial_port()?;
-        let (network, guest_network) = Network::start().map_err(|e| e.to_string())?;
+        let (network, guest_network) =
+            Network::start(spec.network.clone()).map_err(|e| e.to_string())?;
 
         unsafe {
             let boot = VZLinuxBootLoader::initWithKernelURL(
