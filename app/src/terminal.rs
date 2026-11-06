@@ -1,6 +1,7 @@
-//! The VM console, shown in the Terminal tab.
+//! The VM consoles: the session in the Terminal tab and the read-only boot log in the
+//! Logs tab.
 //!
-//! `alacritty_terminal` reads the console, parses its output on its own I/O
+//! `alacritty_terminal` reads a console, parses its output on its own I/O
 //! thread, and answers terminal queries. This module forwards input, resizes,
 //! and scrolling to it, and sends the visible screen to the UI as rows of
 //! styled runs (`TermLine`), replacing only rows that changed.
@@ -115,11 +116,15 @@ struct Link {
     active: AtomicBool,
     /// Whether the terminal is the one shown in the UI; only that one draws.
     shown: AtomicBool,
+    /// Never writes to the console, not even replies to terminal queries.
+    read_only: bool,
 }
 
 impl Link {
     fn write(&self, bytes: Vec<u8>) {
-        if let Some(sender) = self.sender.get() {
+        if !self.read_only
+            && let Some(sender) = self.sender.get()
+        {
             let _ = sender.send(Msg::Input(Cow::Owned(bytes)));
         }
     }
@@ -160,7 +165,7 @@ impl EventListener for Listener {
             Event::PtyWrite(text) => link.write(text.into_bytes()),
             // The terminal is locked while this is sent, so answer from the
             // default palette instead of locking it again.
-            Event::ColorRequest(index, format) => {
+            Event::ColorRequest(index, format) if !link.read_only => {
                 let (r, g, b) = palette(index);
                 link.write(format(Rgb { r, g, b }).into_bytes());
             }
@@ -206,17 +211,20 @@ pub struct Terminal {
     shown: Cell<bool>,
     /// The exit bar text while no session runs.
     exit_message: RefCell<Option<String>>,
+    /// Only shows output: input is ignored, while selecting and copying still work.
+    read_only: bool,
 }
 
 impl Terminal {
     /// Creates a hidden terminal without a session; `message` is shown until one is attached.
-    pub fn new(ui: Weak<AppWindow>, message: &str) -> Terminal {
+    pub fn new(ui: Weak<AppWindow>, message: &str, read_only: bool) -> Terminal {
         Terminal {
             ui,
             size: Cell::new((24, 80)),
             session: RefCell::new(None),
             shown: Cell::new(false),
             exit_message: RefCell::new(Some(message.to_owned())),
+            read_only,
         }
     }
 
@@ -268,6 +276,7 @@ impl Terminal {
             redraw_pending: AtomicBool::new(false),
             active: AtomicBool::new(true),
             shown: AtomicBool::new(self.shown.get()),
+            read_only: self.read_only,
         });
         let config = Config {
             scrolling_history: SCROLLBACK,
@@ -283,6 +292,10 @@ impl Terminal {
         let event_loop =
             EventLoop::new(term.clone(), Listener(link.clone()), console, true, false)?;
         let _ = link.sender.set(event_loop.channel());
+        // `resize` only passes on changes, so the console learns its first size here.
+        let _ = event_loop
+            .channel()
+            .send(Msg::Resize(window_size(lines, cols)));
         event_loop.spawn();
 
         *self.session.borrow_mut() = Some(Session { term, link });
@@ -349,7 +362,7 @@ impl Terminal {
             .borrow()
             .as_ref()
             .is_some_and(|session| session.link.active.load(Ordering::Acquire));
-        if !running {
+        if !running || self.read_only {
             return false;
         }
 
@@ -483,10 +496,12 @@ impl Drop for Terminal {
     }
 }
 
-/// Host end of the VM's serial console: two pipes, read and write.
+/// Host end of one of the VM's serial consoles: two pipes, read and write.
 pub struct Console {
     reader: File,
     writer: File,
+    /// Passes the terminal's size on to the guest as (columns, lines), if set.
+    resized: Option<Box<dyn FnMut(u16, u16) + Send>>,
 }
 
 impl Console {
@@ -503,7 +518,15 @@ impl Console {
         Ok(Console {
             reader: File::from(reader),
             writer: File::from(writer),
+            resized: None,
         })
+    }
+
+    /// Calls `resized` with (columns, lines) whenever the terminal changes size. A serial
+    /// line can't carry the size itself, so the guest learns it some other way.
+    pub fn with_resize(mut self, resized: impl FnMut(u16, u16) + Send + 'static) -> Console {
+        self.resized = Some(Box::new(resized));
+        self
     }
 }
 
@@ -566,8 +589,11 @@ impl EventedPty for Console {
 }
 
 impl OnResize for Console {
-    // A serial console has no window size; the guest keeps its own.
-    fn on_resize(&mut self, _: WindowSize) {}
+    fn on_resize(&mut self, size: WindowSize) {
+        if let Some(resized) = self.resized.as_mut() {
+            resized(size.num_cols, size.num_lines);
+        }
+    }
 }
 
 fn window_size(lines: usize, cols: usize) -> WindowSize {

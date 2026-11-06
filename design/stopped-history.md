@@ -8,7 +8,7 @@ A stopped instance with the Activity tab open and the run picker expanded. Frame
 docs-site   │ VM Stopped │ Agent Not running │ Monitoring Not running │ [Boot in maintenance] [▶ Start] │ Delete
 Claude Code
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Activity   Settings
+Terminal   Logs   Activity   Settings
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 [Timeline|Network]  [⟲ Run 23, Nov 2 at 09:12 ▴]  [⌕ Search paths, commands and addresses     ]
            ┌────────────────────────────────────────────────────────────┐

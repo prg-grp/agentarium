@@ -8,7 +8,7 @@ The main working screen: a running instance in agent mode with the Terminal tab 
 api-refactor   │ VM Running │ Agent Running │ Monitoring Running │ [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Activity   Settings 2 pending                                          [Live activity]
+Terminal   Logs   Activity   Settings 2 pending                                   [Live activity]
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Agent session in /work/api                         Boot log │ Live activity                 Pause
 ─────────────────────────────────────────────────────────── │ ───────────────────────────────────
@@ -31,7 +31,7 @@ Agent session in /work/api                         Boot log │ Live activity   
 ## Terminal
 
 - Background `well`; text SF Mono 12.5 / 21, base color `#D6DCE5`. Terminal colors come from the agent's own output (ANSI); do not restyle them.
-- A thin header row above the terminal (`tx3` 12 px, 1 px `line` bottom border): "Agent session in `/work/api`" on the left (path monospace, `tx2`), "Boot log" link on the right. Boot diagnostics stay separate from the agent session and open in their own view.
+- A thin header row above the terminal (`tx3` 12 px, 1 px `line` bottom border): "Agent session in `/work/api`" on the left (path monospace, `tx2`), "Boot log" link on the right, which opens the Logs tab ([app-shell.md](app-shell.md#tab-bar)). Boot diagnostics stay separate from the agent session and never print into it.
 - Normal terminal behavior: keyboard input, selection, copy, paste, resize, scrolling, full-screen terminal apps. Do not intercept the agent's ordinary shortcuts. Keep focus predictable: clicking the terminal focuses it; tab switches do not steal focus back unexpectedly.
 - When the user scrolls up, keep the position and show a "Jump to latest" control at the bottom right of the terminal. Remove it when the user returns to the end.
 - Agent exit and restart behavior: see [agent-exited-degraded.md](agent-exited-degraded.md).

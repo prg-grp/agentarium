@@ -14,19 +14,20 @@ RUN apt-get update && \
 
 # Set up systemd
 RUN systemctl set-default multi-user.target && \
-    systemctl enable serial-getty@hvc0.service && \
     systemctl enable systemd-networkd.service && \
     systemctl mask systemd-networkd-wait-online.service \
     systemd-resolved.service \
     e2scrub_reap.service \
     systemd-firstboot.service
 
-# The app's terminal is the virtio console (hvc0). No login runs on it, or anywhere:
-# the supervisor alone starts what a boot runs there, once the app sends Start over the
-# command plane (vsock): the agent's command as ubuntu, a root shell in maintenance mode,
-# or the provisioning script in provision mode. The binary is built from guest_supervisor
-# and handed in as the build context "supervisor" (see vms/rootfs/Makefile).
-RUN systemctl mask serial-getty@hvc0.service getty@tty1.service
+# The guest has two virtio consoles. hvc0 is the kernel console: kernel, systemd and the
+# supervisor's logs, shown read-only in the app's Logs tab. hvc1 is the session, shown
+# in the app's Terminal tab. No login runs on either, or anywhere: the supervisor alone
+# starts what a boot runs on hvc1, once the app sends Start over the command plane
+# (vsock): the agent's command as ubuntu, a root shell in maintenance mode, or the
+# provisioning script in provision mode. The binary is built from guest_supervisor and
+# handed in as the build context "supervisor" (see vms/rootfs/Makefile).
+RUN systemctl mask serial-getty@hvc0.service serial-getty@hvc1.service getty@tty1.service
 COPY --from=supervisor --chmod=755 terrarium-supervisor /usr/local/sbin/terrarium-supervisor
 COPY terrarium-supervisor.service /etc/systemd/system/terrarium-supervisor.service
 RUN systemctl enable terrarium-supervisor.service

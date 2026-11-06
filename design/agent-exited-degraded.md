@@ -8,7 +8,7 @@ A running VM whose agent process exited, while monitoring is partly working. It 
 api-refactor  │ VM Running │ Agent Exited, status 1 │ Monitoring Degraded │ [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Activity   Settings                                                        [Live activity]
+Terminal   Logs   Activity   Settings                                                 [Live activity]
 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 ⚠ Monitoring is degraded since 14:19:40. 1,040 file events were dropped because the buffer filled.
   Process and network events are still recorded, and network rules are still enforced.  Show affected interval

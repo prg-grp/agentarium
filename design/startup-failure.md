@@ -8,7 +8,7 @@ An instance whose boot stopped before the agent launched. Frame: [app-shell.md](
 infra-audit   │ VM Running │ Agent Not started │ Monitoring Failed to start │ [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Activity   Settings
+Terminal   Logs   Activity   Settings
 ───────────────────────────────────────────────────────────────────────────────────────────────────────
 The agent wasn't started                           │ Boot log      Serial console, not the agent session
 Monitoring didn't come up, so nothing ran without  │ [    0.000000] Linux version 6.12.4-toolbox (arm64)

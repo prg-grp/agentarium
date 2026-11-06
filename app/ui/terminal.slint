@@ -1,4 +1,4 @@
-// Agent terminal, see design/terminal-running.md.
+// Agent terminal and boot log, see design/terminal-running.md and design/app-shell.md.
 
 import { Theme } from "theme.slint";
 import { TermLine, TermSpan } from "types.slint";
@@ -31,6 +31,12 @@ export global TerminalSession {
 }
 
 export component TerminalView {
+    // Shows the read-only boot log instead of the session. Rust ignores its input, except
+    // for selecting and copying.
+    in property <bool> log;
+    // The "Boot log" link in the session's header was clicked.
+    callback open-log();
+
     init => {
         focus.focus();
     }
@@ -50,17 +56,25 @@ export component TerminalView {
                 padding-right: 22px;
                 spacing: 4px;
 
-                Text {
+                if !root.log: Text {
                     text: "Agent session in";
                     color: Theme.tx3;
                     font-size: Theme.font-meta;
                     vertical-alignment: center;
                 }
 
-                Text {
+                if !root.log: Text {
                     text: TerminalSession.cwd-label;
                     color: Theme.tx2;
                     font-family: Theme.mono;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+
+                if root.log: Text {
+                    text: "Boot log";
+                    color: Theme.tx2;
+                    font-weight: Theme.weight-medium;
                     font-size: Theme.font-meta;
                     vertical-alignment: center;
                 }
@@ -69,11 +83,29 @@ export component TerminalView {
                     horizontal-stretch: 1;
                 }
 
-                Text {
-                    text: "Boot log";
+                if root.log: Text {
+                    text: "Serial console, not the agent session";
                     color: Theme.tx3;
                     font-size: Theme.font-meta;
                     vertical-alignment: center;
+                }
+
+                if !root.log: Text {
+                    text: "Boot log";
+                    color: link-touch.has-hover ? Theme.tx2 : Theme.tx3;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                    accessible-role: button;
+                    accessible-action-default => {
+                        root.open-log();
+                    }
+
+                    link-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.open-log();
+                        }
+                    }
                 }
             }
         }
@@ -163,7 +195,7 @@ export component TerminalView {
                     background: Theme.acc.with-alpha(0.3);
                 }
 
-                if TerminalSession.cursor-visible && TerminalSession.scroll-offset == 0 && !TerminalSession.exited: Rectangle {
+                if !root.log && TerminalSession.cursor-visible && TerminalSession.scroll-offset == 0 && !TerminalSession.exited: Rectangle {
                     x: TerminalSession.cursor-col * grid.cell-width;
                     y: TerminalSession.cursor-row * grid.cell-height;
                     width: grid.cell-width;

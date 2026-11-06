@@ -69,12 +69,17 @@ export component AppWindow inherits Window {
     callback instance-action(string, InstanceAction);
     // The selected instance changed; its terminal is shown.
     callback instance-selected(string);
+    // The tab changed; the Terminal and Logs tabs show different terminals.
+    callback tab-changed(int);
     callback drag-window();
 
     property <InstanceItem> current: instances[selected-index];
     property <string> current-id: current.id;
     changed current-id => {
         root.instance-selected(current-id);
+    }
+    changed current-tab => {
+        root.tab-changed(current-tab);
     }
     property <bool> in-maintenance: current.state == InstanceState.maintenance;
     property <bool> show-creation: creating && (selected-index < 0 || current.state == InstanceState.draft);
@@ -452,7 +457,7 @@ export component AppWindow inherits Window {
                         spacing: 28px;
                         alignment: start;
 
-                        for tab-name[tab-index] in ["Terminal", "Activity", "Settings"]: Rectangle {
+                        for tab-name[tab-index] in ["Terminal", "Logs", "Activity", "Settings"]: Rectangle {
                             property <bool> active: tab-index == root.current-tab;
 
                             accessible-role: tab;
@@ -469,7 +474,7 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                 }
 
-                                if tab-index == 2 && current.pending-changes > 0: Text {
+                                if tab-index == 3 && current.pending-changes > 0: Text {
                                     text: "\{current.pending-changes} pending";
                                     font-size: Theme.font-meta;
                                     color: Theme.acc;
@@ -497,14 +502,24 @@ export component AppWindow inherits Window {
                 // Tab content (other screens come in later steps)
                 if current-tab == 0 && current.has-terminal: TerminalView {
                     vertical-stretch: 1;
+                    open-log => {
+                        root.current-tab = 1;
+                    }
                 }
 
-                if current-tab != 0 || !current.has-terminal: Rectangle {
+                // The boot log: the same view, read-only.
+                if current-tab == 1 && current.has-terminal: TerminalView {
+                    vertical-stretch: 1;
+                    log: true;
+                }
+
+                if current-tab > 1 || !current.has-terminal: Rectangle {
                     vertical-stretch: 1;
 
                     Text {
                         text: current-tab == 0 ? "Terminal comes in a later step."
-                            : current-tab == 1 ? "Activity comes in a later step."
+                            : current-tab == 1 ? "Logs come in a later step."
+                            : current-tab == 2 ? "Activity comes in a later step."
                             : "Settings come in a later step.";
                         color: Theme.tx3;
                         font-size: Theme.font-small;

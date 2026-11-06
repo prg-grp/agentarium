@@ -3,10 +3,11 @@
 //! Each boot gets its own controller thread, which creates the VM, starts it, watches its
 //! state and stops it; the VM itself operates on its own dispatch queue (see `vm.rs`).
 //! Controllers report to `VmControl` on the UI thread, which owns the database and keeps
-//! the sidebar rows and each instance's terminal in sync.
+//! the sidebar rows and each instance's two terminals (session and boot log) in sync.
 //!
 //! The controller also holds the command plane to the guest supervisor: it connects once
-//! the VM runs, answers the supervisor's Hello with Start (the boot mode), and sends Stop.
+//! the VM runs, answers the supervisor's Hello with Start (the boot mode), and sends the
+//! session terminal's size (Resize) and Stop.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -18,7 +19,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use command_plane::{
-    EnvVar, GuestMessage, HostMessage, Launch, Mode, PORT, PROTOCOL_VERSION, Start, Stop,
+    EnvVar, GuestMessage, HostMessage, Launch, Mode, PORT, PROTOCOL_VERSION, Resize, Start, Stop,
     guest_message, host_message,
 };
 use slint::{ComponentHandle, Model, VecModel};
@@ -55,12 +56,20 @@ enum Command {
     Guest(GuestMessage),
     /// The supervisor's connection closed.
     Disconnected,
+    /// The session terminal changed size.
+    Resize {
+        columns: u32,
+        rows: u32,
+    },
 }
 
 /// What a controller thread reports to the UI thread.
 enum Event {
-    /// The VM is configured and starting; this is the host end of its console.
-    Created(Console),
+    /// The VM is configured and starting; these are the host ends of its consoles.
+    Created {
+        session: Console,
+        log: Console,
+    },
     State(VmState),
     /// The provisioning script finished with this exit code.
     Provisioned(i32),
@@ -139,8 +148,15 @@ fn run(
     received: &Receiver<Command>,
     report: &impl Fn(Event),
 ) -> Result<(), String> {
-    let (vm, console) = Vm::create(spec)?;
-    report(Event::Created(console));
+    let (vm, session, log) = Vm::create(spec)?;
+    let resized = commands.clone();
+    let session = session.with_resize(move |columns, rows| {
+        let _ = resized.send(Command::Resize {
+            columns: columns.into(),
+            rows: rows.into(),
+        });
+    });
+    report(Event::Created { session, log });
     let started = commands.clone();
     vm.start(move |result| {
         let _ = started.send(Command::Started(result));
@@ -167,6 +183,8 @@ fn run(
     let mut hello_deadline: Option<Instant> = None;
     // Why the VM is being stopped, if the boot failed while it ran.
     let mut failure: Option<String> = None;
+    // The session terminal's latest size, sent again on every new connection.
+    let mut size: Option<Resize> = None;
     let mut last = VmState::Starting;
     loop {
         let wait = [deadline, next_connect]
@@ -216,9 +234,14 @@ fn run(
                         force_stop(&vm);
                     } else if deadline.is_none()
                         && let Some(channel) = channel.as_mut()
-                        && let Err(error) = channel.send(host_message::Kind::Start(start.clone()))
                     {
-                        eprintln!("Couldn't send Start to the guest supervisor: {error}");
+                        let mut sent = channel.send(host_message::Kind::Start(start.clone()));
+                        if let (Ok(()), Some(size)) = (&sent, size) {
+                            sent = channel.send(host_message::Kind::Resize(size));
+                        }
+                        if let Err(error) = sent {
+                            eprintln!("Couldn't send Start to the guest supervisor: {error}");
+                        }
                     }
                 }
                 Some(guest_message::Kind::ProvisionFinished(finished)) => {
@@ -226,6 +249,15 @@ fn run(
                 }
                 None => eprintln!("Ignoring a message from the guest supervisor."),
             },
+            Ok(Command::Resize { columns, rows }) => {
+                let resize = Resize { columns, rows };
+                size = Some(resize);
+                if let Some(channel) = channel.as_mut()
+                    && let Err(error) = channel.send(host_message::Kind::Resize(resize))
+                {
+                    eprintln!("Couldn't send Resize to the guest supervisor: {error}");
+                }
+            }
             Ok(Command::Disconnected) => {
                 channel = None;
                 if deadline.is_none() {
@@ -286,6 +318,21 @@ struct Running {
     provisioned: Option<i32>,
 }
 
+/// Which of an instance's terminals is shown: the session (Terminal tab) or the boot log
+/// (Logs tab).
+#[derive(Clone, Copy, PartialEq)]
+pub enum View {
+    Session,
+    Log,
+}
+
+/// An instance's two terminals, kept after its VM stops.
+struct Terminals {
+    session: Rc<Terminal>,
+    /// Read-only: kernel, systemd and supervisor output.
+    log: Rc<Terminal>,
+}
+
 /// Starts and stops the instances' VMs and keeps their sidebar rows and terminals in sync.
 /// Lives on the UI thread; each VM runs on its own controller thread.
 pub struct VmControl {
@@ -293,10 +340,12 @@ pub struct VmControl {
     instances: Rc<VecModel<InstanceItem>>,
     ui: slint::Weak<AppWindow>,
     running: RefCell<HashMap<String, Running>>,
-    /// Each instance's console, kept after its VM stops.
-    terminals: RefCell<HashMap<String, Rc<Terminal>>>,
+    /// Each instance's terminals.
+    terminals: RefCell<HashMap<String, Terminals>>,
     /// The instance whose terminal is shown.
     shown: RefCell<Option<String>>,
+    /// Which of its terminals is shown.
+    view: Cell<View>,
     /// The terminal view's size as (columns, rows).
     size: Cell<(i32, i32)>,
     /// Set once the app is quitting; the event loop ends when all VMs have stopped.
@@ -312,6 +361,7 @@ impl VmControl {
             running: RefCell::default(),
             terminals: RefCell::default(),
             shown: RefCell::default(),
+            view: Cell::new(View::Session),
             size: Cell::new((80, 24)),
             quitting: Cell::new(false),
         });
@@ -438,17 +488,19 @@ impl VmControl {
 
     fn handle(&self, id: &str, event: Event) {
         match event {
-            Event::Created(console) => {
+            Event::Created { session, log } => {
                 let Some(revision) = self.running.borrow().get(id).map(|run| run.revision) else {
                     return;
                 };
+                let (session_terminal, log_terminal) = self.terminals(id);
                 let attached = self
                     .db
                     .mark_booted(id, revision)
                     .map_err(|error| format!("couldn't record the boot: {error}"))
                     .and_then(|()| {
-                        self.terminal(id)
-                            .attach(console)
+                        session_terminal
+                            .attach(session)
+                            .and_then(|()| log_terminal.attach(log))
                             .map_err(|error| format!("couldn't open the console: {error}"))
                     });
                 if let Err(error) = attached {
@@ -487,7 +539,7 @@ impl VmControl {
                         self.finish_provisioning(id, run.provisioned)
                     }
                     Ok(()) => {
-                        self.terminal(id).detach("The virtual machine stopped.");
+                        self.detach(id, "The virtual machine stopped.");
                         self.show(id, run.mode, VmState::Stopped);
                         if run.stop == Some(true) && !quitting {
                             self.start(id, BootMode::Maintenance);
@@ -516,47 +568,76 @@ impl VmControl {
     }
 
     fn failed(&self, id: &str, mode: BootMode, error: &str) {
-        self.terminal(id)
-            .detach(&format!("Couldn't run the virtual machine: {error}"));
+        self.detach(id, &format!("Couldn't run the virtual machine: {error}"));
         self.show(id, mode, VmState::Error);
     }
 
-    /// The instance's terminal, created on first use.
-    fn terminal(&self, id: &str) -> Rc<Terminal> {
-        self.terminals
-            .borrow_mut()
-            .entry(id.to_owned())
-            .or_insert_with(|| Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE)))
-            .clone()
+    /// Ends both of the instance's terminals with the same message, so it shows on either tab.
+    fn detach(&self, id: &str, message: &str) {
+        let (session, log) = self.terminals(id);
+        session.detach(message);
+        log.detach(message);
     }
 
-    /// The terminal shown in the Terminal tab.
+    /// The instance's session and log terminals, created on first use.
+    fn terminals(&self, id: &str) -> (Rc<Terminal>, Rc<Terminal>) {
+        let mut terminals = self.terminals.borrow_mut();
+        let terminals = terminals.entry(id.to_owned()).or_insert_with(|| Terminals {
+            session: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, false)),
+            log: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, true)),
+        });
+        (terminals.session.clone(), terminals.log.clone())
+    }
+
+    /// The terminal shown in the Terminal or Logs tab.
     pub fn shown_terminal(&self) -> Option<Rc<Terminal>> {
         let shown = self.shown.borrow();
-        self.terminals.borrow().get(shown.as_deref()?).cloned()
+        let terminals = self.terminals.borrow();
+        let terminals = terminals.get(shown.as_deref()?)?;
+        Some(match self.view.get() {
+            View::Session => terminals.session.clone(),
+            View::Log => terminals.log.clone(),
+        })
     }
 
-    /// Shows the instance's terminal in the Terminal tab, in place of the previous one.
+    /// Shows the instance's terminals, in place of the previous instance's.
     pub fn select(&self, id: &str) {
-        if self.shown.borrow().as_deref() == Some(id) {
-            return;
+        if self.shown.borrow().as_deref() != Some(id) {
+            self.switch(|control| *control.shown.borrow_mut() = Some(id.to_owned()));
         }
+    }
+
+    /// Shows the session or the boot log of the selected instance.
+    pub fn set_view(&self, view: View) {
+        if self.view.get() != view {
+            self.switch(|control| control.view.set(view));
+        }
+    }
+
+    /// Hides the shown terminal, applies `change`, then sizes and shows the new one.
+    fn switch(&self, change: impl FnOnce(&VmControl)) {
         if let Some(previous) = self.shown_terminal() {
             previous.hide();
         }
-        *self.shown.borrow_mut() = Some(id.to_owned());
-        let terminal = self.terminal(id);
+        change(self);
         let (cols, rows) = self.size.get();
-        terminal.resize(cols, rows);
-        terminal.show();
+        self.resize(cols, rows);
+        if let Some(terminal) = self.shown_terminal() {
+            terminal.show();
+        }
     }
 
-    /// The terminal view changed size; hidden terminals adopt it when shown.
+    /// The terminal view changed size. Both of the shown instance's terminals adopt it, so
+    /// the session keeps its size while the Logs tab is open; hidden instances' terminals
+    /// adopt it when shown.
     pub fn resize(&self, cols: i32, rows: i32) {
         self.size.set((cols, rows));
-        if let Some(terminal) = self.shown_terminal() {
-            terminal.resize(cols, rows);
-        }
+        let Some(id) = self.shown.borrow().clone() else {
+            return;
+        };
+        let (session, log) = self.terminals(&id);
+        session.resize(cols, rows);
+        log.resize(cols, rows);
     }
 
     /// Updates the instance's sidebar summary and header readings.

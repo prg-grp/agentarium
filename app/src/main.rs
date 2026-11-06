@@ -17,7 +17,7 @@ use std::time::Duration;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{Model, ModelRc, Timer, VecModel};
 
-use controller::VmControl;
+use controller::{View, VmControl};
 use db::Db;
 use vm::BootMode;
 
@@ -91,9 +91,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     ui.on_create_instance(move || creator.open());
 
-    // The Terminal tab shows the selected instance's console.
+    // The Terminal tab shows the selected instance's session, the Logs tab its boot log.
     let c = control.clone();
     ui.on_instance_selected(move |id| c.select(&id));
+    let c = control.clone();
+    ui.on_tab_changed(move |tab| c.set_view(if tab == 1 { View::Log } else { View::Session }));
     if let Some(item) = usize::try_from(ui.get_selected_index())
         .ok()
         .and_then(|row| ui.get_instances().row_data(row))

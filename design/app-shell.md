@@ -10,7 +10,7 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 │                  │ Claude Code        │ Running   │ Running   │ Running    │  maintenance]│
 │ Instances    [+] │                                                         [Stop] │ Delete │
 │ ▌● api-refactor  ├──────────────────────────────────────────────────────────────────────┤
-│    Running       │ Terminal   Activity   Settings 2 pending          [Live activity]    │
+│    Running       │ Terminal   Logs   Activity   Settings 2 pending   [Live activity]    │
 │  ⚒ scraper-lab   ├──────────────────────────────────────────────────────────────────────┤
 │    Maintenance,  │                                                                      │
 │    internet open │                      tab content                                     │
@@ -54,8 +54,9 @@ Do not add a separate mode reading. Maintenance is shown by the amber window tre
 ## Tab bar
 
 - 44 px tall, 28 px gaps, 1 px `line` bottom border.
-- Tabs: Terminal, Activity, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
+- Tabs: Terminal, Logs, Activity, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
 - Settings shows "2 pending" in `acc` 12 px when saved changes wait for the next boot.
+- Logs shows the instance's boot log in the same terminal view, read-only: kernel, systemd and supervisor output from boot to shutdown. Header: "Boot log" (`tx2`, 500) and "Serial console, not the agent session" (`tx3`). No cursor; typing and pasting do nothing, while selecting, copying, scrolling and "Jump to latest" work as in the Terminal tab. Output is kept until the next start.
 - On the Terminal tab only, a "Live activity" toggle sits at the right end (ghost, compact, sidebar-right icon). Pressed state: `raise` background and `tx` text. It shows or hides the live activity rail; the terminal takes the full width when hidden. Remember the choice per instance.
 
 ## Removed on purpose

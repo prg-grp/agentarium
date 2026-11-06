@@ -33,7 +33,7 @@ const KERNEL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image
 const BASE_ROOTFS_VAR: &str = "AGENT_TOOLBOX_BASE_ROOTFS";
 
 /// What the guest does after booting. The app sends it to the guest supervisor over the
-/// command plane (`Start`); nothing runs on the console before that.
+/// command plane (`Start`); nothing runs on the session console before that.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum BootMode {
     /// The supervisor runs the instance's launch command as `ubuntu`.
@@ -76,8 +76,10 @@ unsafe impl Send for Vm {}
 unsafe impl Sync for Vm {}
 
 impl Vm {
-    /// Configures the VM and returns it with the host end of its console.
-    pub fn create(spec: &VmSpec) -> Result<(Vm, Console), String> {
+    /// Configures the VM and returns it with the host ends of its two consoles: the
+    /// session (guest `hvc1`, the Terminal tab), then the boot log (guest `hvc0`, the
+    /// kernel console, shown read-only in the Logs tab).
+    pub fn create(spec: &VmSpec) -> Result<(Vm, Console, Console), String> {
         if !unsafe { VZVirtualMachine::isSupported() } {
             return Err("Virtualization isn't available on this Mac.".into());
         }
@@ -90,11 +92,29 @@ impl Vm {
             }
         }
 
-        // The guest reads what the host writes, and the other way round.
-        let (guest_reads, host_writes) = std::io::pipe().map_err(|e| e.to_string())?;
-        let (host_reads, guest_writes) = std::io::pipe().map_err(|e| e.to_string())?;
-        let console =
-            Console::new(host_reads.into(), host_writes.into()).map_err(|e| e.to_string())?;
+        // A serial port and the host end of its console. The guest reads what the host
+        // writes, and the other way round.
+        let serial_port = || -> Result<_, String> {
+            let (guest_reads, host_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+            let (host_reads, guest_writes) = std::io::pipe().map_err(|e| e.to_string())?;
+            let console =
+                Console::new(host_reads.into(), host_writes.into()).map_err(|e| e.to_string())?;
+            let port = unsafe {
+                let attachment =
+                    VZFileHandleSerialPortAttachment::initWithFileHandleForReading_fileHandleForWriting(
+                        VZFileHandleSerialPortAttachment::alloc(),
+                        Some(&file_handle(guest_reads.into())),
+                        Some(&file_handle(guest_writes.into())),
+                    );
+                let port = VZVirtioConsoleDeviceSerialPortConfiguration::new();
+                port.setAttachment(Some(&attachment));
+                port
+            };
+            Ok((console, port))
+        };
+        // The guest numbers the ports in this order: the log is hvc0, the session hvc1.
+        let (log, log_port) = serial_port()?;
+        let (session, session_port) = serial_port()?;
         let (network, guest_network) = Network::start().map_err(|e| e.to_string())?;
 
         unsafe {
@@ -124,15 +144,6 @@ impl Vm {
                 &disk,
             );
 
-            let attachment =
-                VZFileHandleSerialPortAttachment::initWithFileHandleForReading_fileHandleForWriting(
-                    VZFileHandleSerialPortAttachment::alloc(),
-                    Some(&file_handle(guest_reads.into())),
-                    Some(&file_handle(guest_writes.into())),
-                );
-            let serial = VZVirtioConsoleDeviceSerialPortConfiguration::new();
-            serial.setAttachment(Some(&attachment));
-
             let network_attachment = VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
                 VZFileHandleNetworkDeviceAttachment::alloc(),
                 &file_handle(guest_network.into()),
@@ -151,9 +162,10 @@ impl Vm {
                 VZVirtualMachineConfiguration::minimumAllowedMemorySize(),
                 VZVirtualMachineConfiguration::maximumAllowedMemorySize(),
             ));
-            config.setSerialPorts(&NSArray::from_retained_slice(&[Retained::into_super(
-                serial,
-            )]));
+            config.setSerialPorts(&NSArray::from_retained_slice(&[
+                Retained::into_super(log_port),
+                Retained::into_super(session_port),
+            ]));
             config.setStorageDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 rootfs,
             )]));
@@ -181,7 +193,8 @@ impl Vm {
                     machine,
                     _network: network,
                 },
-                console,
+                session,
+                log,
             ))
         }
     }

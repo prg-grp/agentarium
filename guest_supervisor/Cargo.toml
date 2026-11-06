@@ -13,3 +13,5 @@ path = "src/main.rs"
 [dependencies]
 command_plane = { path = "../command_plane" }
 libc = "0.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }

@@ -7,7 +7,7 @@ The Settings tab of a running instance after the user saved changes that apply o
 ```
 api-refactor  │ VM Running │ Agent Running │ Monitoring Running │ [Restart in maintenance] [Stop] │ Delete
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Activity   Settings 2 pending
+Terminal   Logs   Activity   Settings 2 pending
 ──────────────────────────────────────────────────────────────────────────────────────────────────
 💾 Saved; restart required. The instance is running revision 7. Your 2 changes are in revision 8
    and apply on the next boot.                              [Revert to revision 7] [↻ Restart now]
