@@ -50,10 +50,6 @@ pub struct Creator {
     allowed: Rc<VecModel<RuleRow>>,
     denied: Rc<VecModel<RuleRow>>,
     issues: Rc<VecModel<CreateIssue>>,
-    /// Whether a VM is running.
-    // TODO(multi-vm): drop this once VmControl runs one VM per instance; a new instance
-    // can then always start right away.
-    vm_busy: Box<dyn Fn() -> bool>,
     /// Takes a created instance and whether to start it.
     created: Box<dyn Fn(db::Instance, bool)>,
 }
@@ -63,7 +59,6 @@ impl Creator {
         ui: &AppWindow,
         db: Rc<Db>,
         instances: Rc<VecModel<InstanceItem>>,
-        vm_busy: impl Fn() -> bool + 'static,
         created: impl Fn(db::Instance, bool) + 'static,
     ) -> Rc<Creator> {
         let this = Rc::new(Creator {
@@ -77,7 +72,6 @@ impl Creator {
             allowed: Rc::default(),
             denied: Rc::default(),
             issues: Rc::default(),
-            vm_busy: Box::new(vm_busy),
             created: Box::new(created),
         });
 
@@ -302,8 +296,7 @@ impl Creator {
         if issues.iter().any(|issue| issue.blocks_create) {
             return self.refresh();
         }
-        // TODO(multi-vm): don't check vm_busy once several VMs can run at once.
-        let start = issues.is_empty() && !g.get_dont_start() && !(self.vm_busy)();
+        let start = issues.is_empty() && !g.get_dont_start();
 
         let id = uuid::Uuid::now_v7().to_string();
         match self.create_instance(&id, &name, &config) {
@@ -486,10 +479,8 @@ impl Creator {
         );
 
         let issues = self.issues(d);
-        let busy = (self.vm_busy)();
         g.set_can_create(!issues.iter().any(|issue| issue.blocks_create));
-        g.set_can_start(issues.is_empty() && !busy);
-        g.set_other_running(busy);
+        g.set_can_start(issues.is_empty());
         sync(&self.issues, issues);
 
         g.set_review_runs(command_line(c).into());

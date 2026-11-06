@@ -51,7 +51,6 @@ Cancel                                  [< Back]  [▶ Create and start]
 
 - Blocking problems from earlier steps (missing folder, invalid command or guest path, duplicate variable, empty or unfilled script) are listed at the top of Review in `bad`, each with a "Go to <step>" link. Until they are fixed, the checkbox is replaced by a sentence saying the instance is created without starting, and the button reads "Create".
 - A missing or duplicate name blocks creating altogether; the create button is disabled.
-- While another instance runs, the new one is created without starting, with the sentence "Another instance is running, so this one is created without starting. Start it once the other one has stopped." This goes away once several instances can run at once.
 - If creating fails (for example, the base disk image is missing), the error shows in the footer in `bad`, and the draft stays as it is.
 - After "Create and start", the instance's Terminal tab opens and shows provisioning stages (same stage list as [startup-failure.md](startup-failure.md), with stages filling in as they complete).
 - Failures during provisioning keep all entered settings.

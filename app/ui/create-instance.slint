@@ -40,7 +40,6 @@ export global Creation {
     in property <[CreateIssue]> issues;
     in property <bool> can-create;
     in property <bool> can-start;
-    in property <bool> other-running;
     in property <string> create-error;
 
     // Read-back on Review
@@ -1384,7 +1383,7 @@ export component CreateInstance {
                         }
 
                         if !Creation.can-start: Text {
-                            text: Creation.other-running ? "Another instance is running, so this one is created without starting. Start it once the other one has stopped." : "Fix the problems listed above to start the instance right away. Until then, it is created without starting.";
+                            text: "Fix the problems listed above to start the instance right away. Until then, it is created without starting.";
                             color: Theme.tx2;
                             wrap: word-wrap;
                         }

@@ -67,9 +67,15 @@ export component AppWindow inherits Window {
 
     callback create-instance();
     callback instance-action(string, InstanceAction);
+    // The selected instance changed; its terminal is shown.
+    callback instance-selected(string);
     callback drag-window();
 
     property <InstanceItem> current: instances[selected-index];
+    property <string> current-id: current.id;
+    changed current-id => {
+        root.instance-selected(current-id);
+    }
     property <bool> in-maintenance: current.state == InstanceState.maintenance;
     property <bool> show-creation: creating && (selected-index < 0 || current.state == InstanceState.draft);
 

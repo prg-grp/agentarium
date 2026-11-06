@@ -10,6 +10,7 @@ rust-version.workspace = true
 alacritty_terminal = "0.26"
 arboard = "3"
 block2 = "0.6"
+dispatch2 = "0.3"
 etherparse = "0.21.0"
 futures = "0.3.34"
 libc = "0.2"

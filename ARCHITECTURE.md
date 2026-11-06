@@ -329,6 +329,7 @@ Decided:
 
 - The app's files live in `~/Library/Application Support/com.programming-group.terrarium/`: the database `terrarium.sqlite`, and per instance `instances/<id>/` with its root disk `root.ext4` and provisioning folder `provision/`.
 - The database is accessed with `rusqlite` (bundled SQLite) on the main thread.
+- Any number of instances can run at once. Each running VM operates on its own serial dispatch queue and is driven by its own controller thread, which starts it, watches its state and stops it (with a hard stop after a timeout). Controllers report state changes and the console to the main thread, which keeps database access, the sidebar and one terminal per instance; the selected instance's terminal is shown. Quitting asks every running VM to shut down and exits once all have stopped.
 - `rusqlite_migration` upgrades the schema on start, tracked in `PRAGMA user_version`. Migrations are append-only SQL files; a shipped migration is never edited, reordered or deleted. An existing database is copied to `terrarium.sqlite.v<version>.bak` before an upgrade. A database newer than the app is refused.
 - Instance configuration is stored as revisions. The latest revision is editable while pending; the first boot that uses it freezes it. List-valued settings (arguments, environment, mounts, network rules) are JSON columns.
 - Launch settings (command, arguments, working directory, environment), mounts, and network rules are stored but not yet applied at boot; delivering them to the guest needs the guest command channel.

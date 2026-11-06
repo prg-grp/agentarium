@@ -243,6 +243,7 @@ dependencies = [
  "alacritty_terminal",
  "arboard",
  "block2 0.6.2",
+ "dispatch2",
  "etherparse 0.21.0",
  "futures",
  "libc",

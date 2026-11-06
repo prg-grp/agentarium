@@ -113,6 +113,8 @@ struct Link {
     redraw_pending: AtomicBool,
     /// Cleared when the session is replaced, so its late events are ignored.
     active: AtomicBool,
+    /// Whether the terminal is the one shown in the UI; only that one draws.
+    shown: AtomicBool,
 }
 
 impl Link {
@@ -135,11 +137,16 @@ impl EventListener for Listener {
         match event {
             Event::Wakeup => {
                 // Schedule at most one redraw at a time, so bursts of output
-                // don't flood the event loop.
-                if !link.redraw_pending.swap(true, Ordering::AcqRel) {
+                // don't flood the event loop. A hidden terminal redraws when shown.
+                if link.shown.load(Ordering::Acquire)
+                    && !link.redraw_pending.swap(true, Ordering::AcqRel)
+                {
                     let link = link.clone();
                     let _ = slint::invoke_from_event_loop(move || {
-                        if !link.active.load(Ordering::Acquire) {
+                        if !link.active.load(Ordering::Acquire)
+                            || !link.shown.load(Ordering::Acquire)
+                        {
+                            link.redraw_pending.store(false, Ordering::Release);
                             return;
                         }
                         let term = link.term.get().and_then(|term| term.upgrade());
@@ -189,29 +196,64 @@ struct Session {
     link: Arc<Link>,
 }
 
+/// One instance's console. Several can exist; only the shown one draws into the
+/// `TerminalSession` global, the others keep their output until shown.
 pub struct Terminal {
     ui: Weak<AppWindow>,
     /// Screen size as (lines, columns).
     size: Cell<(usize, usize)>,
     session: RefCell<Option<Session>>,
+    shown: Cell<bool>,
+    /// The exit bar text while no session runs.
+    exit_message: RefCell<Option<String>>,
 }
 
 impl Terminal {
-    /// Creates the terminal without a session; `message` is shown until one is attached.
-    pub fn start(ui: &AppWindow, message: &str) -> Terminal {
-        let terminal = Terminal {
-            ui: ui.as_weak(),
+    /// Creates a hidden terminal without a session; `message` is shown until one is attached.
+    pub fn new(ui: Weak<AppWindow>, message: &str) -> Terminal {
+        Terminal {
+            ui,
             size: Cell::new((24, 80)),
             session: RefCell::new(None),
-        };
-        terminal.detach(message);
-        terminal
+            shown: Cell::new(false),
+            exit_message: RefCell::new(Some(message.to_owned())),
+        }
+    }
+
+    /// Makes this terminal the one drawn in the UI, with its output and exit bar.
+    pub fn show(&self) {
+        self.set_shown(true);
+        if let Some(ui) = self.ui.upgrade() {
+            let session = ui.global::<TerminalSession>();
+            session.set_lines(ModelRc::new(VecModel::<TermLine>::default()));
+            session.set_selection(ModelRc::default());
+            session.set_scroll_offset(0);
+            let message = self.exit_message.borrow();
+            session.set_exited(message.is_some());
+            session.set_exit_message(message.as_deref().unwrap_or_default().into());
+        }
+        self.redraw();
+    }
+
+    /// Stops drawing into the UI; output keeps being collected.
+    pub fn hide(&self) {
+        self.set_shown(false);
+    }
+
+    fn set_shown(&self, shown: bool) {
+        self.shown.set(shown);
+        if let Some(session) = self.session.borrow().as_ref() {
+            session.link.shown.store(shown, Ordering::Release);
+        }
     }
 
     /// Shows a new console, replacing the previous session and its output.
     pub fn attach(&self, console: Console) -> io::Result<()> {
         self.stop();
-        if let Some(ui) = self.ui.upgrade() {
+        *self.exit_message.borrow_mut() = None;
+        if self.shown.get()
+            && let Some(ui) = self.ui.upgrade()
+        {
             let session = ui.global::<TerminalSession>();
             session.set_lines(ModelRc::new(VecModel::<TermLine>::default()));
             session.set_exited(false);
@@ -225,6 +267,7 @@ impl Terminal {
             previous: Mutex::new(Vec::new()),
             redraw_pending: AtomicBool::new(false),
             active: AtomicBool::new(true),
+            shown: AtomicBool::new(self.shown.get()),
         });
         let config = Config {
             scrolling_history: SCROLLBACK,
@@ -251,7 +294,10 @@ impl Terminal {
     /// visible and scrollable until the next `attach`.
     pub fn detach(&self, message: &str) {
         self.stop();
-        if let Some(ui) = self.ui.upgrade() {
+        *self.exit_message.borrow_mut() = Some(message.to_owned());
+        if self.shown.get()
+            && let Some(ui) = self.ui.upgrade()
+        {
             let session = ui.global::<TerminalSession>();
             if session
                 .get_lines()
@@ -409,6 +455,9 @@ impl Terminal {
     }
 
     fn redraw(&self) {
+        if !self.shown.get() {
+            return;
+        }
         let session = self.session.borrow();
         let (Some(ui), Some(session)) = (self.ui.upgrade(), session.as_ref()) else {
             return;

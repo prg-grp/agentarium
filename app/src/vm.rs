@@ -1,14 +1,15 @@
 //! An instance's VM, run with Apple's Virtualization.framework.
 //!
-//! The framework is used on the main queue, so everything here must be called
-//! on the main thread, which is Slint's UI thread on macOS. Completion handlers
-//! also run there.
+//! Each VM operates on its own serial dispatch queue, so VMs run independently of each
+//! other and of the UI thread. `Vm`'s methods can be called from any thread; they run
+//! on that queue, where completion handlers also run.
 
 use std::os::fd::{IntoRawFd, OwnedFd};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use block2::RcBlock;
+use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
 use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
@@ -67,10 +68,17 @@ pub enum VmState {
 }
 
 pub struct Vm {
+    /// The serial queue the machine operates on.
+    queue: DispatchRetained<DispatchQueue>,
     machine: Retained<VZVirtualMachine>,
     /// The VM's network stack; dropped after the machine.
     _network: Network,
 }
+
+// SAFETY: the machine is only used on its own queue (`self.queue`), which serializes
+// every call to it, so `Vm` can be shared with and moved to other threads.
+unsafe impl Send for Vm {}
+unsafe impl Sync for Vm {}
 
 impl Vm {
     /// Configures the VM and returns it with the host end of its console.
@@ -187,10 +195,15 @@ impl Vm {
                 .validateWithError()
                 .map_err(|error| error.localizedDescription().to_string())?;
 
-            let machine =
-                VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &config);
+            let queue = DispatchQueue::new("agent-toolbox.vm", DispatchQueueAttr::SERIAL);
+            let machine = VZVirtualMachine::initWithConfiguration_queue(
+                VZVirtualMachine::alloc(),
+                &config,
+                &queue,
+            );
             Ok((
                 Vm {
+                    queue,
                     machine,
                     _network: network,
                 },
@@ -199,39 +212,51 @@ impl Vm {
         }
     }
 
-    pub fn start(&self, done: impl Fn(Result<(), String>) + 'static) {
-        let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
-        unsafe { self.machine.startWithCompletionHandler(&handler) };
+    /// Starts the VM; `done` runs on the VM's queue once it has started or failed to.
+    pub fn start(&self, done: impl Fn(Result<(), String>) + Send + 'static) {
+        self.queue.exec_sync(|| {
+            let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
+            unsafe { self.machine.startWithCompletionHandler(&handler) };
+        });
     }
 
     /// Presses the VM's power button, so the guest shuts down cleanly.
     pub fn request_stop(&self) -> Result<(), String> {
-        unsafe {
-            if !self.machine.canRequestStop() {
-                return Err("The virtual machine can't be asked to stop.".into());
-            }
-            self.machine
-                .requestStopWithError()
-                .map_err(|error| error.localizedDescription().to_string())
-        }
+        let mut requested = Ok(());
+        self.queue.exec_sync(|| unsafe {
+            requested = if self.machine.canRequestStop() {
+                self.machine
+                    .requestStopWithError()
+                    .map_err(|error| error.localizedDescription().to_string())
+            } else {
+                Err("The virtual machine can't be asked to stop.".into())
+            };
+        });
+        requested
     }
 
-    /// Stops the VM immediately, like pulling the power cord. The fallback
-    /// when the guest doesn't shut down after `request_stop`.
-    pub fn stop(&self, done: impl Fn(Result<(), String>) + 'static) {
-        let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
-        unsafe { self.machine.stopWithCompletionHandler(&handler) };
+    /// Stops the VM immediately, like pulling the power cord. The fallback when the
+    /// guest doesn't shut down after `request_stop`. `done` runs on the VM's queue.
+    pub fn stop(&self, done: impl Fn(Result<(), String>) + Send + 'static) {
+        self.queue.exec_sync(|| {
+            let handler = RcBlock::new(move |error: *mut NSError| done(result(error)));
+            unsafe { self.machine.stopWithCompletionHandler(&handler) };
+        });
     }
 
     pub fn state(&self) -> VmState {
-        match unsafe { self.machine.state() } {
-            VZVirtualMachineState::Stopped => VmState::Stopped,
-            VZVirtualMachineState::Starting => VmState::Starting,
-            VZVirtualMachineState::Running => VmState::Running,
-            VZVirtualMachineState::Stopping => VmState::Stopping,
-            VZVirtualMachineState::Error => VmState::Error,
-            _ => VmState::Other,
-        }
+        let mut state = VmState::Other;
+        self.queue.exec_sync(|| {
+            state = match unsafe { self.machine.state() } {
+                VZVirtualMachineState::Stopped => VmState::Stopped,
+                VZVirtualMachineState::Starting => VmState::Starting,
+                VZVirtualMachineState::Running => VmState::Running,
+                VZVirtualMachineState::Stopping => VmState::Stopping,
+                VZVirtualMachineState::Error => VmState::Error,
+                _ => VmState::Other,
+            };
+        });
+        state
     }
 }
 
