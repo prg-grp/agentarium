@@ -1,0 +1,752 @@
+// Configuration fields shared by the creation flow and the Settings tab: launch, environment,
+// shared folders, network and resources. Each block shows what its owner passes in and reports
+// every edit through a callback; the owner (src/create.rs, src/settings.rs) checks it.
+
+import { LineEdit, SpinBox } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { EnvRow, MountRow, RuleRow } from "types.slint";
+import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
+
+export component Link {
+    in property <string> text;
+    callback clicked();
+
+    horizontal-stretch: 0;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        Text {
+            text: root.text;
+            color: touch.has-hover ? Theme.acc.brighter(15%) : Theme.acc;
+            font-size: Theme.font-small;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// Single-line input; `invalid` outlines it in `bad`.
+export component Field {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <string> label;
+    in property <bool> mono;
+    in property <bool> invalid;
+    in property <bool> read-only;
+    callback edited(text: string);
+    callback accepted(text: string);
+
+    HorizontalLayout {
+        LineEdit {
+            text <=> root.text;
+            read-only: root.read-only;
+            placeholder-text: root.placeholder;
+            font-family: root.mono ? Theme.mono : "";
+            font-size: root.mono ? Theme.font-mono : Theme.font-body;
+            accessible-label: root.label != "" ? root.label : root.placeholder;
+            edited(text) => {
+                root.edited(text);
+            }
+            accepted(text) => {
+                root.accepted(text);
+            }
+        }
+    }
+
+    if root.invalid: Rectangle {
+        border-width: 1px;
+        border-color: Theme.bad;
+        border-radius: 4px;
+    }
+}
+
+// An icon and a sentence below a field; extra children (a link) follow the sentence.
+export component Message {
+    in property <image> icon;
+    in property <string> text;
+    in property <color> color;
+
+    HorizontalLayout {
+        spacing: 6px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 1px;
+            Image {
+                source: root.icon;
+                colorize: root.color;
+                width: 15px;
+                height: 15px;
+                accessible-role: none;
+            }
+        }
+
+        Text {
+            text: root.text;
+            color: root.color;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+
+        @children
+    }
+}
+
+// A field's label, above it.
+component Label inherits Text {
+    color: Theme.tx2;
+    font-size: Theme.font-small;
+}
+
+// The Allowed or Denied list.
+component RuleList {
+    in property <bool> deny;
+    in property <[RuleRow]> rows;
+    // Returns why the entry was refused, or "" once it is added.
+    callback add-rule(text: string) -> string;
+    callback toggle-scope(index: int);
+    callback remove-rule(index: int);
+    property <string> error;
+
+    horizontal-stretch: 1;
+
+    VerticalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+
+            VerticalLayout {
+                alignment: center;
+                Image {
+                    source: root.deny ? @image-url("icons/ban.svg") : @image-url("icons/circle-check.svg");
+                    colorize: root.deny ? Theme.bad : Theme.ok;
+                    width: 16px;
+                    height: 16px;
+                    accessible-role: none;
+                }
+            }
+
+            Text {
+                text: root.deny ? "Denied" : "Allowed";
+                color: Theme.tx;
+                font-weight: Theme.weight-medium;
+            }
+        }
+
+        for row[index] in root.rows: VerticalLayout {
+            spacing: 4px;
+
+            HorizontalLayout {
+                spacing: 10px;
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: row.target;
+                    color: Theme.tx;
+                    font-family: Theme.mono;
+                    font-size: Theme.font-mono;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                // Domains toggle between exact name and subdomains; addresses have one scope.
+                Rectangle {
+                    horizontal-stretch: 0;
+                    accessible-role: button;
+                    accessible-label: row.scope;
+                    accessible-enabled: row.is-domain;
+                    accessible-action-default => {
+                        if row.is-domain {
+                            root.toggle-scope(index);
+                        }
+                    }
+
+                    HorizontalLayout {
+                        Text {
+                            text: row.scope;
+                            color: scope-touch.has-hover && row.is-domain ? Theme.tx : Theme.tx2;
+                            font-size: Theme.font-meta;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    scope-touch := TouchArea {
+                        enabled: row.is-domain;
+                        mouse-cursor: row.is-domain ? pointer : default;
+                        clicked => {
+                            root.toggle-scope(index);
+                        }
+                    }
+                }
+
+                AppButton {
+                    kind: ButtonKind.ghost;
+                    compact: true;
+                    icon: @image-url("icons/x.svg");
+                    label: "Remove " + row.target;
+                    clicked => {
+                        root.remove-rule(index);
+                    }
+                }
+            }
+
+            if row.conflict != "": Message {
+                icon: @image-url("icons/arrows-cross.svg");
+                color: Theme.warn;
+                text: row.conflict;
+            }
+        }
+
+        Field {
+            mono: true;
+            placeholder: root.deny ? "Add a domain or address to deny" : "Add a domain or address to allow";
+            invalid: root.error != "";
+            edited => {
+                root.error = "";
+            }
+            accepted(text) => {
+                root.error = root.add-rule(text);
+                if root.error == "" {
+                    self.text = "";
+                }
+            }
+        }
+
+        if root.error != "": Message {
+            icon: @image-url("icons/alert-circle.svg");
+            color: Theme.bad;
+            text: root.error;
+        }
+    }
+}
+
+// Command, arguments and working directory.
+export component LaunchFields {
+    in-out property <string> command;
+    in-out property <string> working-directory;
+    in property <[string]> arguments;
+    in property <bool> command-read-only;
+    // Shown beside a read-only command, like "Set by the Claude Code preset."
+    in property <string> command-note;
+    in property <string> command-error;
+    in property <string> working-directory-error;
+    callback set-command(command: string);
+    callback add-argument(argument: string);
+    callback remove-argument(index: int);
+    callback set-working-directory(directory: string);
+
+    VerticalLayout {
+        spacing: 14px;
+
+        VerticalLayout {
+            spacing: 6px;
+
+            Label {
+                text: "Command";
+            }
+
+            HorizontalLayout {
+                spacing: 10px;
+                alignment: start;
+
+                Field {
+                    width: 200px;
+                    mono: true;
+                    label: "Command";
+                    text <=> root.command;
+                    read-only: root.command-read-only;
+                    invalid: root.command-error != "";
+                    edited(text) => {
+                        root.set-command(text);
+                    }
+                }
+
+                if root.command-error != "": VerticalLayout {
+                    alignment: center;
+                    Message {
+                        icon: @image-url("icons/alert-circle.svg");
+                        color: Theme.bad;
+                        text: root.command-error;
+                    }
+                }
+
+                if root.command-note != "": Text {
+                    text: root.command-note;
+                    color: Theme.tx2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+
+            Label {
+                text: "Arguments";
+            }
+
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+
+                for argument[index] in root.arguments: Rectangle {
+                    border-radius: 4px;
+                    background: Theme.raise;
+
+                    HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 2px;
+                        spacing: 2px;
+
+                        Text {
+                            text: argument;
+                            color: Theme.tx;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            vertical-alignment: center;
+                        }
+
+                        AppButton {
+                            kind: ButtonKind.ghost;
+                            compact: true;
+                            icon: @image-url("icons/x.svg");
+                            label: "Remove argument " + argument;
+                            clicked => {
+                                root.remove-argument(index);
+                            }
+                        }
+                    }
+                }
+
+                Field {
+                    width: 180px;
+                    mono: true;
+                    placeholder: "Add argument";
+                    accepted(text) => {
+                        root.add-argument(text);
+                        self.text = "";
+                    }
+                }
+            }
+
+            Text {
+                text: "Press Return to add. Each argument is passed as it is, without shell quoting.";
+                color: Theme.tx3;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 6px;
+
+            Label {
+                text: "Working directory inside the instance";
+            }
+
+            HorizontalLayout {
+                alignment: start;
+                Field {
+                    width: 360px;
+                    mono: true;
+                    label: "Working directory inside the instance";
+                    text <=> root.working-directory;
+                    invalid: root.working-directory-error != "";
+                    edited(text) => {
+                        root.set-working-directory(text);
+                    }
+                }
+            }
+
+            if root.working-directory-error != "": Message {
+                icon: @image-url("icons/alert-circle.svg");
+                color: Theme.bad;
+                text: root.working-directory-error;
+            }
+        }
+    }
+}
+
+// The environment variables and "Add variable".
+export component EnvironmentFields {
+    in property <[EnvRow]> rows;
+    callback add();
+    callback edit(index: int, name: string, value: string);
+    callback remove-row(index: int);
+
+    VerticalLayout {
+        spacing: 14px;
+
+        for row[index] in root.rows: VerticalLayout {
+            spacing: 4px;
+
+            HorizontalLayout {
+                spacing: 8px;
+
+                Field {
+                    width: 200px;
+                    mono: true;
+                    label: "Variable name";
+                    placeholder: "NAME";
+                    text: row.name;
+                    invalid: row.error != "";
+                    edited(text) => {
+                        root.edit(index, text, row.value);
+                    }
+                }
+
+                Field {
+                    horizontal-stretch: 1;
+                    mono: true;
+                    label: "Value of " + row.name;
+                    placeholder: "value";
+                    text: row.value;
+                    edited(text) => {
+                        root.edit(index, row.name, text);
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    AppButton {
+                        kind: ButtonKind.ghost;
+                        icon: @image-url("icons/x.svg");
+                        label: "Remove variable";
+                        clicked => {
+                            root.remove-row(index);
+                        }
+                    }
+                }
+            }
+
+            if row.error != "": Message {
+                icon: @image-url("icons/alert-circle.svg");
+                color: Theme.bad;
+                text: row.error;
+            }
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            AppButton {
+                kind: ButtonKind.ghost;
+                icon: @image-url("icons/plus.svg");
+                text: "Add variable";
+                clicked => {
+                    root.add();
+                }
+            }
+        }
+    }
+}
+
+// The shared folders table; "Add folder" is the owner's.
+export component FolderTable {
+    in property <[MountRow]> rows;
+    callback choose-folder(index: int);
+    callback edit-guest-path(index: int, path: string);
+    callback set-writable(index: int, writable: bool);
+    callback remove-row(index: int);
+
+    VerticalLayout {
+        if root.rows.length == 0: Text {
+            text: "No folders are shared yet. The agent starts with an empty ~/workspace.";
+            color: Theme.tx3;
+            font-size: Theme.font-small;
+        }
+
+        if root.rows.length > 0: HorizontalLayout {
+            spacing: 16px;
+            padding-bottom: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "On your Mac";
+                color: Theme.tx3;
+                font-size: Theme.font-meta;
+            }
+
+            Text {
+                width: 300px;
+                text: "Inside the instance";
+                color: Theme.tx3;
+                font-size: Theme.font-meta;
+            }
+
+            Text {
+                width: 200px;
+                text: "Access";
+                color: Theme.tx3;
+                font-size: Theme.font-meta;
+            }
+
+            Rectangle {
+                width: 32px;
+            }
+        }
+
+        for row[index] in root.rows: VerticalLayout {
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            VerticalLayout {
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    spacing: 16px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        Text {
+                            text: row.host-path;
+                            color: row.missing ? Theme.tx3 : Theme.tx;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    Field {
+                        width: 300px;
+                        mono: true;
+                        label: "Path inside the instance";
+                        text: row.guest-path;
+                        invalid: row.guest-error != "";
+                        edited(text) => {
+                            root.edit-guest-path(index, text);
+                        }
+                    }
+
+                    HorizontalLayout {
+                        width: 200px;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            SegmentedControl {
+                                options: ["Read only", "Read and write"];
+                                selected: row.writable ? 1 : 0;
+                                changed(option) => {
+                                    root.set-writable(index, option == 1);
+                                }
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        AppButton {
+                            kind: ButtonKind.ghost;
+                            icon: @image-url("icons/x.svg");
+                            label: "Remove folder";
+                            clicked => {
+                                root.remove-row(index);
+                            }
+                        }
+                    }
+                }
+
+                if row.writable: Message {
+                    icon: @image-url("icons/alert-triangle.svg");
+                    color: Theme.warn;
+                    text: "Changes inside this instance modify these host files immediately.";
+                }
+
+                if row.problem != "": Message {
+                    icon: @image-url("icons/folder-off.svg");
+                    color: Theme.bad;
+                    text: row.problem;
+                    Link {
+                        text: "Choose folder";
+                        clicked => {
+                            root.choose-folder(index);
+                        }
+                    }
+                }
+
+                if row.guest-error != "": Message {
+                    icon: @image-url("icons/alert-circle.svg");
+                    color: Theme.bad;
+                    text: row.guest-error;
+                }
+            }
+        }
+    }
+}
+
+// The default action and the Allowed and Denied lists.
+export component NetworkFields {
+    in property <bool> deny;
+    in property <[RuleRow]> allowed;
+    in property <[RuleRow]> denied;
+    callback set-deny(deny: bool);
+    // Returns why the entry was refused, or "" once it is added.
+    callback add-rule(text: string, deny: bool) -> string;
+    callback toggle-scope(deny: bool, index: int);
+    callback remove-rule(deny: bool, index: int);
+
+    VerticalLayout {
+        spacing: 24px;
+        alignment: start;
+
+        VerticalLayout {
+            spacing: 10px;
+
+            Text {
+                text: "Destinations not listed below";
+                font-size: Theme.font-section;
+                font-weight: Theme.weight-medium;
+                color: Theme.tx;
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+
+                SegmentedControl {
+                    options: ["Deny", "Allow"];
+                    selected: root.deny ? 0 : 1;
+                    changed(option) => {
+                        root.set-deny(option == 0);
+                    }
+                }
+
+                Text {
+                    text: root.deny ? "The agent can reach only the destinations you allow." : "The agent can reach any destination except the ones you deny.";
+                    color: Theme.tx2;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 28px;
+
+            RuleList {
+                deny: false;
+                rows: root.allowed;
+                add-rule(text) => {
+                    return root.add-rule(text, false);
+                }
+                toggle-scope(index) => {
+                    root.toggle-scope(false, index);
+                }
+                remove-rule(index) => {
+                    root.remove-rule(false, index);
+                }
+            }
+
+            RuleList {
+                deny: true;
+                rows: root.denied;
+                add-rule(text) => {
+                    return root.add-rule(text, true);
+                }
+                toggle-scope(index) => {
+                    root.toggle-scope(true, index);
+                }
+                remove-rule(index) => {
+                    root.remove-rule(true, index);
+                }
+            }
+        }
+    }
+}
+
+// Processors, memory and disk, with what the Mac has.
+export component ResourceFields {
+    in-out property <int> cpus;
+    in-out property <int> memory-gb;
+    in property <int> max-cpus: 1;
+    in property <int> max-memory-gb: 1;
+    in property <string> host-line;
+    callback set-cpus(cpus: int);
+    callback set-memory(gb: int);
+
+    VerticalLayout {
+        spacing: 14px;
+
+        HorizontalLayout {
+            spacing: 24px;
+            alignment: start;
+
+            VerticalLayout {
+                spacing: 6px;
+
+                Label {
+                    text: "Processors";
+                }
+
+                SpinBox {
+                    width: 120px;
+                    minimum: 1;
+                    maximum: root.max-cpus;
+                    value <=> root.cpus;
+                    accessible-label: "Processors";
+                    edited(value) => {
+                        root.set-cpus(value);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+
+                Label {
+                    text: "Memory (GB)";
+                }
+
+                SpinBox {
+                    width: 120px;
+                    minimum: 1;
+                    maximum: root.max-memory-gb;
+                    value <=> root.memory-gb;
+                    accessible-label: "Memory in GB";
+                    edited(value) => {
+                        root.set-memory(value);
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 6px;
+
+                Label {
+                    text: "Disk";
+                }
+
+                Text {
+                    height: Theme.control-height;
+                    text: "64 GB, grows as used";
+                    color: Theme.tx;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        Text {
+            text: root.host-line;
+            color: Theme.tx3;
+            font-size: Theme.font-small;
+            wrap: word-wrap;
+        }
+    }
+}

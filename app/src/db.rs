@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, Type, ValueRef};
-use rusqlite::{Connection, Row, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use rusqlite_migration::{M, Migrations, SchemaVersion};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -270,36 +270,35 @@ impl Db {
     }
 
     pub fn latest_revision(&self, instance_id: &str) -> Result<Revision> {
-        let revision = self.conn.query_row(
-            "SELECT revision, cpus, memory_mib, command, arguments, working_directory,
-                    environment, mounts, network_default, network_rules, provision_script
-             FROM instance_revisions WHERE instance_id = ?1
-             ORDER BY revision DESC LIMIT 1",
+        Ok(self.conn.query_row(
+            &format!("{REVISION_QUERY} ORDER BY revision DESC LIMIT 1"),
             [instance_id],
-            |row| {
-                Ok(Revision {
-                    number: row.get(0)?,
-                    config: Config {
-                        cpus: row.get(1)?,
-                        memory_mib: row.get(2)?,
-                        command: row.get(3)?,
-                        arguments: json(row, 4)?,
-                        working_directory: row.get(5)?,
-                        environment: json(row, 6)?,
-                        mounts: json(row, 7)?,
-                        network_default: row.get(8)?,
-                        network_rules: json(row, 9)?,
-                        provision_script: row.get(10)?,
-                    },
-                })
-            },
-        )?;
-        Ok(revision)
+            revision_from_row,
+        )?)
+    }
+
+    /// The newest revision that was booted: the one the instance runs, or ran last.
+    pub fn active_revision(&self, instance_id: &str) -> Result<Option<Revision>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "{REVISION_QUERY} AND booted_at IS NOT NULL ORDER BY revision DESC LIMIT 1"
+                ),
+                [instance_id],
+                revision_from_row,
+            )
+            .optional()?)
+    }
+
+    pub fn rename_instance(&self, id: &str, name: &str) -> Result<()> {
+        self.conn
+            .execute("UPDATE instances SET name = ?2 WHERE id = ?1", [id, name])?;
+        Ok(())
     }
 
     /// Saves `config` for the next boot: into the pending revision if there is
     /// one, otherwise into a new revision. Returns the revision number.
-    #[expect(dead_code, reason = "used by the settings screen")]
     pub fn save_config(&self, instance_id: &str, config: &Config) -> Result<i64> {
         let tx = self.conn.unchecked_transaction()?;
         let (latest, booted_at): (i64, Option<i64>) = tx.query_row(
@@ -359,6 +358,28 @@ const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
      ORDER BY r.revision DESC LIMIT 1),
     i.provisioned_at IS NOT NULL
     FROM instances i";
+
+const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, command, arguments,
+    working_directory, environment, mounts, network_default, network_rules, provision_script
+    FROM instance_revisions WHERE instance_id = ?1";
+
+fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
+    Ok(Revision {
+        number: row.get(0)?,
+        config: Config {
+            cpus: row.get(1)?,
+            memory_mib: row.get(2)?,
+            command: row.get(3)?,
+            arguments: json(row, 4)?,
+            working_directory: row.get(5)?,
+            environment: json(row, 6)?,
+            mounts: json(row, 7)?,
+            network_default: row.get(8)?,
+            network_rules: json(row, 9)?,
+            provision_script: row.get(10)?,
+        },
+    })
+}
 
 fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
     Ok(Instance {

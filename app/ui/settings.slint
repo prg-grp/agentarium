@@ -1,0 +1,512 @@
+// Settings tab: the instance's configuration, edited for its next boot and saved explicitly.
+// See design/settings-pending.md.
+
+import { ScrollView, TextEdit } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { InstanceItem, InstanceState, EnvRow, MountRow, RuleRow } from "types.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
+
+// The shown instance's edited configuration. Rust (src/settings.rs) owns it and checks it
+// after every edit; nothing is stored until Save.
+export global Settings {
+    // Single values, edited in place; every edit is also reported through its callback.
+    in-out property <string> name;
+    in-out property <string> command;
+    in-out property <string> working-directory;
+    // Shown and edited only until provisioning has succeeded.
+    in-out property <string> script;
+    in-out property <int> cpus;
+    in-out property <int> memory-gb;
+
+    in property <[string]> arguments;
+    in property <[EnvRow]> environment;
+    in property <[MountRow]> mounts;
+    in property <bool> network-deny: true;
+    in property <[RuleRow]> allowed;
+    in property <[RuleRow]> denied;
+    in property <int> max-cpus: 1;
+    in property <int> max-memory-gb: 1;
+    in property <string> host-line;
+
+    in property <string> name-error;
+    in property <string> command-error;
+    in property <string> working-directory-error;
+    // Saved but inactive changes per section, in the order of the section navigation.
+    in property <[int]> section-changes;
+    // The edits differ from the saved configuration.
+    in property <bool> dirty;
+    in property <bool> can-save;
+    in property <bool> can-restart;
+    // Why saving (or restarting) is blocked, or why the last save failed; "" when nothing is.
+    in property <string> note;
+
+    callback set-name(name: string);
+    callback set-command(command: string);
+    callback add-argument(argument: string);
+    callback remove-argument(index: int);
+    callback set-working-directory(directory: string);
+    callback set-script(script: string);
+    callback add-env();
+    callback edit-env(index: int, name: string, value: string);
+    callback remove-env(index: int);
+    callback add-folder();
+    callback choose-folder(index: int);
+    callback edit-guest-path(index: int, path: string);
+    callback set-writable(index: int, writable: bool);
+    callback remove-folder(index: int);
+    callback set-network-deny(deny: bool);
+    // Returns why the entry was refused, or "" once it is added.
+    callback add-rule(text: string, deny: bool) -> string;
+    callback toggle-scope(deny: bool, index: int);
+    callback remove-rule(deny: bool, index: int);
+    callback set-cpus(cpus: int);
+    callback set-memory(gb: int);
+    callback discard();
+    // Saves the edits; with restart, also boots the instance in agent mode.
+    callback save(restart: bool);
+}
+
+// A section: heading and description above its fields.
+component Group {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> first;
+
+    VerticalLayout {
+        if !root.first: Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        VerticalLayout {
+            padding-top: 22px;
+            padding-bottom: 22px;
+            spacing: 14px;
+
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: root.title;
+                    font-size: Theme.font-section;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.tx;
+                }
+
+                if root.description != "": Text {
+                    text: root.description;
+                    font-size: Theme.font-small;
+                    color: Theme.tx3;
+                    wrap: word-wrap;
+                }
+            }
+
+            @children
+        }
+    }
+}
+
+export component SettingsTab {
+    in property <InstanceItem> item;
+    // Reboots the instance in agent mode, from the pending-changes bar.
+    callback restart-now();
+
+    property <[string]> sections: ["Agent and launch", "Shared folders", "Network", "Environment", "Resources"];
+    property <bool> stopped: item.state == InstanceState.stopped;
+    // The section at the top of the scroll area; the last one once scrolled to the end.
+    property <int> current-section: scroll.content-y <= scroll.visible-height - scroll.content-height + 1px ? 4
+        : -scroll.content-y >= s4.y - 24px ? 4
+        : -scroll.content-y >= s3.y - 24px ? 3
+        : -scroll.content-y >= s2.y - 24px ? 2
+        : -scroll.content-y >= s1.y - 24px ? 1 : 0;
+
+    pure function section-y(index: int) -> length {
+        if index == 1 {
+            return s1.y;
+        }
+        if index == 2 {
+            return s2.y;
+        }
+        if index == 3 {
+            return s3.y;
+        }
+        if index == 4 {
+            return s4.y;
+        }
+        return 0px;
+    }
+
+    VerticalLayout {
+        // Pending-changes bar
+        if root.item.pending-changes > 0: Rectangle {
+            background: Theme.acc.with-alpha(0.08);
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 28px;
+                padding-right: 28px;
+                padding-top: 10px;
+                padding-bottom: 10px;
+                spacing: 10px;
+
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: @image-url("icons/device-floppy.svg");
+                        colorize: Theme.acc;
+                        width: 16px;
+                        height: 16px;
+                        accessible-role: none;
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 0;
+                    text: root.stopped ? "Saved. Changes apply when you start the instance." : "Saved; restart required.";
+                    color: Theme.tx;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.stopped ? ""
+                        : root.item.pending-changes == 1
+                        ? "The instance is running revision \{root.item.active-revision}. Your change is in revision \{root.item.saved-revision} and applies on the next boot."
+                        : "The instance is running revision \{root.item.active-revision}. Your \{root.item.pending-changes} changes are in revision \{root.item.saved-revision} and apply on the next boot.";
+                    color: Theme.tx2;
+                    font-size: Theme.font-small;
+                    vertical-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                if !root.stopped: VerticalLayout {
+                    alignment: center;
+                    AppButton {
+                        kind: ButtonKind.neutral;
+                        compact: true;
+                        text: "Restart now";
+                        icon: @image-url("icons/refresh.svg");
+                        enabled: root.item.transition == "";
+                        clicked => {
+                            root.restart-now();
+                        }
+                    }
+                }
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            // Section navigation
+            Rectangle {
+                width: 220px;
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                VerticalLayout {
+                    padding: 14px;
+                    padding-right: 15px;
+                    spacing: 2px;
+                    alignment: start;
+
+                    for name[index] in root.sections: Rectangle {
+                        property <bool> selected: index == root.current-section;
+                        property <int> changes: root.item.pending-changes > 0 ? Settings.section-changes[index] : 0;
+
+                        height: 34px;
+                        border-radius: Theme.radius-item;
+                        background: selected ? Theme.raise : (nav-touch.has-hover ? Theme.hover : transparent);
+                        accessible-role: tab;
+                        accessible-label: name;
+                        accessible-item-selected: selected;
+                        accessible-action-default => {
+                            scroll.content-y = min(0px, max(-root.section-y(index), scroll.visible-height - scroll.content-height));
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            spacing: 8px;
+
+                            // One weight for all: the selection follows the scroll position, and a
+                            // weight change would feed back into the layout.
+                            Text {
+                                horizontal-stretch: 1;
+                                text: name;
+                                color: selected ? Theme.tx : Theme.tx2;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
+
+                            if changes > 0: Text {
+                                text: changes == 1 ? "1 change" : "\{changes} changes";
+                                color: Theme.acc;
+                                font-size: Theme.font-meta;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        nav-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                scroll.content-y = min(0px, max(-root.section-y(index), scroll.visible-height - scroll.content-height));
+                            }
+                        }
+                    }
+                }
+            }
+
+            scroll := ScrollView {
+                horizontal-stretch: 1;
+                content-width: self.visible-width;
+                horizontal-scrollbar-policy: always-off;
+
+                VerticalLayout {
+                    padding-left: 28px;
+                    padding-right: 28px;
+                    padding-bottom: 28px;
+                    alignment: start;
+
+                    Group {
+                        first: true;
+                        title: "Agent and launch";
+                        description: "The name in the sidebar, and what starts when the instance boots. The command runs directly, not through a shell.";
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Name";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                Field {
+                                    width: 320px;
+                                    label: "Name";
+                                    text <=> Settings.name;
+                                    invalid: Settings.name-error != "";
+                                    edited(text) => {
+                                        Settings.set-name(text);
+                                    }
+                                }
+                            }
+
+                            if Settings.name-error != "": Message {
+                                icon: @image-url("icons/alert-circle.svg");
+                                color: Theme.bad;
+                                text: Settings.name-error;
+                            }
+                        }
+
+                        LaunchFields {
+                            command <=> Settings.command;
+                            working-directory <=> Settings.working-directory;
+                            arguments: Settings.arguments;
+                            command-error: Settings.command-error;
+                            working-directory-error: Settings.working-directory-error;
+                            set-command(command) => {
+                                Settings.set-command(command);
+                            }
+                            add-argument(argument) => {
+                                Settings.add-argument(argument);
+                            }
+                            remove-argument(index) => {
+                                Settings.remove-argument(index);
+                            }
+                            set-working-directory(directory) => {
+                                Settings.set-working-directory(directory);
+                            }
+                        }
+
+                        if !root.item.provisioned: VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Provisioning script";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            Text {
+                                text: "Runs once as root with internet access before the first start. It can't be changed once provisioning has succeeded.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+
+                            TextEdit {
+                                height: 320px;
+                                text <=> Settings.script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                wrap: no-wrap;
+                                accessible-label: "Provisioning script";
+                                edited(text) => {
+                                    Settings.set-script(text);
+                                }
+                            }
+                        }
+                    }
+
+                    s1 := Group {
+                        title: "Shared folders";
+                        description: "The agent sees these folders live. Nothing else on your Mac is shared.";
+
+                        FolderTable {
+                            rows: Settings.mounts;
+                            choose-folder(index) => {
+                                Settings.choose-folder(index);
+                            }
+                            edit-guest-path(index, path) => {
+                                Settings.edit-guest-path(index, path);
+                            }
+                            set-writable(index, writable) => {
+                                Settings.set-writable(index, writable);
+                            }
+                            remove-row(index) => {
+                                Settings.remove-folder(index);
+                            }
+                        }
+
+                        HorizontalLayout {
+                            alignment: start;
+                            AppButton {
+                                text: "Add folder";
+                                icon: @image-url("icons/folder-plus.svg");
+                                clicked => {
+                                    Settings.add-folder();
+                                }
+                            }
+                        }
+                    }
+
+                    s2 := Group {
+                        title: "Network";
+                        description: "Applies to agent boots. Your Mac and local network stay unreachable, whatever the rules say.";
+
+                        NetworkFields {
+                            deny: Settings.network-deny;
+                            allowed: Settings.allowed;
+                            denied: Settings.denied;
+                            set-deny(deny) => {
+                                Settings.set-network-deny(deny);
+                            }
+                            add-rule(text, deny) => {
+                                return Settings.add-rule(text, deny);
+                            }
+                            toggle-scope(deny, index) => {
+                                Settings.toggle-scope(deny, index);
+                            }
+                            remove-rule(deny, index) => {
+                                Settings.remove-rule(deny, index);
+                            }
+                        }
+                    }
+
+                    s3 := Group {
+                        title: "Environment";
+                        description: "Visible to the agent and recorded with each run.";
+
+                        EnvironmentFields {
+                            rows: Settings.environment;
+                            add => {
+                                Settings.add-env();
+                            }
+                            edit(index, name, value) => {
+                                Settings.edit-env(index, name, value);
+                            }
+                            remove-row(index) => {
+                                Settings.remove-env(index);
+                            }
+                        }
+                    }
+
+                    s4 := Group {
+                        title: "Resources";
+                        description: "The instance takes memory from your Mac only as it uses it.";
+
+                        ResourceFields {
+                            cpus <=> Settings.cpus;
+                            memory-gb <=> Settings.memory-gb;
+                            max-cpus: Settings.max-cpus;
+                            max-memory-gb: Settings.max-memory-gb;
+                            host-line: Settings.host-line;
+                            set-cpus(cpus) => {
+                                Settings.set-cpus(cpus);
+                            }
+                            set-memory(gb) => {
+                                Settings.set-memory(gb);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        // Footer
+        HorizontalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+            spacing: 10px;
+
+            AppButton {
+                kind: ButtonKind.ghost;
+                text: "Discard changes";
+                enabled: Settings.dirty;
+                clicked => {
+                    Settings.discard();
+                }
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: Settings.note != "" ? Settings.note : (Settings.dirty ? "Unsaved changes" : "");
+                color: Settings.note != "" ? Theme.bad : Theme.tx2;
+                font-size: Theme.font-small;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            AppButton {
+                text: root.stopped ? "Save and start" : "Save and restart";
+                icon: root.stopped ? @image-url("icons/player-play.svg") : @image-url("icons/refresh.svg");
+                enabled: Settings.can-restart && root.item.transition == "";
+                clicked => {
+                    Settings.save(true);
+                }
+            }
+
+            AppButton {
+                kind: ButtonKind.primary;
+                text: "Save";
+                enabled: Settings.can-save;
+                clicked => {
+                    Settings.save(false);
+                }
+            }
+        }
+    }
+}

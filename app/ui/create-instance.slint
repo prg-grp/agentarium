@@ -1,10 +1,11 @@
 // Instance creation: harness, agent, shared folders, network, review.
 // See design/create-harness.md and the other design/create-*.md files.
 
-import { LineEdit, TextEdit, ScrollView, SpinBox, CheckBox } from "std-widgets.slint";
+import { TextEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { PresetRow, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
-import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+import { Link, Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
 // The draft being created. Rust (src/create.rs) owns it and checks it after every edit.
 export global Creation {
@@ -19,7 +20,6 @@ export global Creation {
     in-out property <string> working-directory;
     in-out property <int> cpus;
     in-out property <int> memory-gb;
-    in-out property <bool> dont-start;
 
     in property <[PresetRow]> presets;
     // The selected preset, as an index into presets. Only the custom agent's script and
@@ -56,7 +56,8 @@ export global Creation {
 
     callback go(step: int);
     callback cancel();
-    callback create();
+    // Creates the instance; with start, it also starts right away and provisions.
+    callback create(start: bool);
     callback set-name(name: string);
     callback set-preset(index: int);
     callback set-script(script: string);
@@ -80,33 +81,6 @@ export global Creation {
     callback remove-rule(deny: bool, index: int);
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
-}
-
-component Link {
-    in property <string> text;
-    callback clicked();
-
-    horizontal-stretch: 0;
-    accessible-role: button;
-    accessible-label: root.text;
-    accessible-action-default => {
-        root.clicked();
-    }
-
-    HorizontalLayout {
-        Text {
-            text: root.text;
-            color: touch.has-hover ? Theme.acc.brighter(15%) : Theme.acc;
-            font-size: Theme.font-small;
-        }
-    }
-
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        clicked => {
-            root.clicked();
-        }
-    }
 }
 
 // Two-column section: title and description on the left, fields on the right.
@@ -168,74 +142,6 @@ component Section {
                 }
             }
         }
-    }
-}
-
-// Single-line input; `invalid` outlines it in `bad`.
-component Field {
-    in-out property <string> text;
-    in property <string> placeholder;
-    in property <string> label;
-    in property <bool> mono;
-    in property <bool> invalid;
-    in property <bool> read-only;
-    callback edited(text: string);
-    callback accepted(text: string);
-
-    HorizontalLayout {
-        LineEdit {
-            text <=> root.text;
-            read-only: root.read-only;
-            placeholder-text: root.placeholder;
-            font-family: root.mono ? Theme.mono : "";
-            font-size: root.mono ? Theme.font-mono : Theme.font-body;
-            accessible-label: root.label != "" ? root.label : root.placeholder;
-            edited(text) => {
-                root.edited(text);
-            }
-            accepted(text) => {
-                root.accepted(text);
-            }
-        }
-    }
-
-    if root.invalid: Rectangle {
-        border-width: 1px;
-        border-color: Theme.bad;
-        border-radius: 4px;
-    }
-}
-
-// An icon and a sentence below a field; extra children (a link) follow the sentence.
-component Message {
-    in property <image> icon;
-    in property <string> text;
-    in property <color> color;
-
-    HorizontalLayout {
-        spacing: 6px;
-
-        VerticalLayout {
-            alignment: start;
-            padding-top: 1px;
-            Image {
-                source: root.icon;
-                colorize: root.color;
-                width: 15px;
-                height: 15px;
-                accessible-role: none;
-            }
-        }
-
-        Text {
-            text: root.text;
-            color: root.color;
-            font-size: Theme.font-small;
-            wrap: word-wrap;
-            horizontal-stretch: 1;
-        }
-
-        @children
     }
 }
 
@@ -329,131 +235,9 @@ component KeyValue {
     }
 }
 
-// The Allowed or Denied list on the Network step.
-component RuleList {
-    in property <bool> deny;
-    in property <[RuleRow]> rows;
-    property <string> error;
-
-    horizontal-stretch: 1;
-
-    VerticalLayout {
-        spacing: 10px;
-        alignment: start;
-
-        HorizontalLayout {
-            spacing: 6px;
-            alignment: start;
-
-            VerticalLayout {
-                alignment: center;
-                Image {
-                    source: root.deny ? @image-url("icons/ban.svg") : @image-url("icons/circle-check.svg");
-                    colorize: root.deny ? Theme.bad : Theme.ok;
-                    width: 16px;
-                    height: 16px;
-                    accessible-role: none;
-                }
-            }
-
-            Text {
-                text: root.deny ? "Denied" : "Allowed";
-                color: Theme.tx;
-                font-weight: Theme.weight-medium;
-            }
-        }
-
-        for row[index] in root.rows: VerticalLayout {
-            spacing: 4px;
-
-            HorizontalLayout {
-                spacing: 10px;
-
-                Text {
-                    horizontal-stretch: 1;
-                    text: row.target;
-                    color: Theme.tx;
-                    font-family: Theme.mono;
-                    font-size: Theme.font-mono;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-
-                // Domains toggle between exact name and subdomains; addresses have one scope.
-                Rectangle {
-                    horizontal-stretch: 0;
-                    accessible-role: button;
-                    accessible-label: row.scope;
-                    accessible-enabled: row.is-domain;
-                    accessible-action-default => {
-                        if row.is-domain {
-                            Creation.toggle-scope(root.deny, index);
-                        }
-                    }
-
-                    HorizontalLayout {
-                        Text {
-                            text: row.scope;
-                            color: scope-touch.has-hover && row.is-domain ? Theme.tx : Theme.tx2;
-                            font-size: Theme.font-meta;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    scope-touch := TouchArea {
-                        enabled: row.is-domain;
-                        mouse-cursor: row.is-domain ? pointer : default;
-                        clicked => {
-                            Creation.toggle-scope(root.deny, index);
-                        }
-                    }
-                }
-
-                AppButton {
-                    kind: ButtonKind.ghost;
-                    compact: true;
-                    icon: @image-url("icons/x.svg");
-                    label: "Remove " + row.target;
-                    clicked => {
-                        Creation.remove-rule(root.deny, index);
-                    }
-                }
-            }
-
-            if row.conflict != "": Message {
-                icon: @image-url("icons/arrows-cross.svg");
-                color: Theme.warn;
-                text: row.conflict;
-            }
-        }
-
-        Field {
-            mono: true;
-            placeholder: root.deny ? "Add a domain or address to deny" : "Add a domain or address to allow";
-            invalid: root.error != "";
-            edited => {
-                root.error = "";
-            }
-            accepted(text) => {
-                root.error = Creation.add-rule(text, root.deny);
-                if root.error == "" {
-                    self.text = "";
-                }
-            }
-        }
-
-        if root.error != "": Message {
-            icon: @image-url("icons/alert-circle.svg");
-            color: Theme.bad;
-            text: root.error;
-        }
-    }
-}
-
 export component CreateInstance {
     property <[string]> steps: ["Harness", "Agent", "Shared folders", "Network", "Review"];
     property <[string]> next-steps: ["agent", "shared folders", "network", "review"];
-    property <bool> starting: Creation.can-start && !Creation.dont-start;
 
     VerticalLayout {
         // Header and step indicator
@@ -578,7 +362,7 @@ export component CreateInstance {
                                 Field {
                                     width: 320px;
                                     label: "Name";
-                                    placeholder: "billing-service";
+                                    placeholder: "My fancy agent";
                                     text <=> Creation.name;
                                     invalid: Creation.name-error != "";
                                     edited(text) => {
@@ -666,137 +450,25 @@ export component CreateInstance {
                         title: "Launch";
                         description: "What starts when the instance boots. Runs directly, not through a shell.";
 
-                        VerticalLayout {
-                            spacing: 6px;
-
-                            Text {
-                                text: "Command";
-                                color: Theme.tx2;
-                                font-size: Theme.font-small;
+                        LaunchFields {
+                            command <=> Creation.command;
+                            working-directory <=> Creation.working-directory;
+                            arguments: Creation.arguments;
+                            command-read-only: !Creation.is-custom;
+                            command-note: Creation.is-custom ? "" : "Set by the \{Creation.preset-name} preset.";
+                            command-error: Creation.command-error;
+                            working-directory-error: Creation.working-directory-error;
+                            set-command(command) => {
+                                Creation.set-command(command);
                             }
-
-                            HorizontalLayout {
-                                spacing: 10px;
-                                alignment: start;
-
-                                Field {
-                                    width: 200px;
-                                    mono: true;
-                                    label: "Command";
-                                    text <=> Creation.command;
-                                    read-only: !Creation.is-custom;
-                                    invalid: Creation.command-error != "";
-                                    edited(text) => {
-                                        Creation.set-command(text);
-                                    }
-                                }
-
-                                if Creation.command-error != "": VerticalLayout {
-                                    alignment: center;
-                                    Message {
-                                        icon: @image-url("icons/alert-circle.svg");
-                                        color: Theme.bad;
-                                        text: Creation.command-error;
-                                    }
-                                }
-
-                                if !Creation.is-custom: Text {
-                                    text: "Set by the \{Creation.preset-name} preset.";
-                                    color: Theme.tx2;
-                                    font-size: Theme.font-small;
-                                    vertical-alignment: center;
-                                }
+                            add-argument(argument) => {
+                                Creation.add-argument(argument);
                             }
-                        }
-
-                        VerticalLayout {
-                            spacing: 6px;
-
-                            Text {
-                                text: "Arguments";
-                                color: Theme.tx2;
-                                font-size: Theme.font-small;
+                            remove-argument(index) => {
+                                Creation.remove-argument(index);
                             }
-
-                            HorizontalLayout {
-                                spacing: 6px;
-                                alignment: start;
-
-                                for argument[index] in Creation.arguments: Rectangle {
-                                    border-radius: 4px;
-                                    background: Theme.raise;
-
-                                    HorizontalLayout {
-                                        padding-left: 8px;
-                                        padding-right: 2px;
-                                        spacing: 2px;
-
-                                        Text {
-                                            text: argument;
-                                            color: Theme.tx;
-                                            font-family: Theme.mono;
-                                            font-size: Theme.font-mono;
-                                            vertical-alignment: center;
-                                        }
-
-                                        AppButton {
-                                            kind: ButtonKind.ghost;
-                                            compact: true;
-                                            icon: @image-url("icons/x.svg");
-                                            label: "Remove argument " + argument;
-                                            clicked => {
-                                                Creation.remove-argument(index);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                Field {
-                                    width: 180px;
-                                    mono: true;
-                                    placeholder: "Add argument";
-                                    accepted(text) => {
-                                        Creation.add-argument(text);
-                                        self.text = "";
-                                    }
-                                }
-                            }
-
-                            Text {
-                                text: "Press Return to add. Each argument is passed as it is, without shell quoting.";
-                                color: Theme.tx3;
-                                font-size: Theme.font-small;
-                                wrap: word-wrap;
-                            }
-                        }
-
-                        VerticalLayout {
-                            spacing: 6px;
-
-                            Text {
-                                text: "Working directory inside the instance";
-                                color: Theme.tx2;
-                                font-size: Theme.font-small;
-                            }
-
-                            HorizontalLayout {
-                                alignment: start;
-                                Field {
-                                    width: 360px;
-                                    mono: true;
-                                    label: "Working directory inside the instance";
-                                    text <=> Creation.working-directory;
-                                    invalid: Creation.working-directory-error != "";
-                                    edited(text) => {
-                                        Creation.set-working-directory(text);
-                                    }
-                                }
-                            }
-
-                            if Creation.working-directory-error != "": Message {
-                                icon: @image-url("icons/alert-circle.svg");
-                                color: Theme.bad;
-                                text: Creation.working-directory-error;
+                            set-working-directory(directory) => {
+                                Creation.set-working-directory(directory);
                             }
                         }
                     }
@@ -821,64 +493,16 @@ export component CreateInstance {
                         title: "Environment variables";
                         description: "Visible to the agent and recorded with each run.";
 
-                        for row[index] in Creation.environment: VerticalLayout {
-                            spacing: 4px;
-
-                            HorizontalLayout {
-                                spacing: 8px;
-
-                                Field {
-                                    width: 200px;
-                                    mono: true;
-                                    label: "Variable name";
-                                    placeholder: "NAME";
-                                    text: row.name;
-                                    invalid: row.error != "";
-                                    edited(text) => {
-                                        Creation.edit-env(index, text, row.value);
-                                    }
-                                }
-
-                                Field {
-                                    horizontal-stretch: 1;
-                                    mono: true;
-                                    label: "Value of " + row.name;
-                                    placeholder: "value";
-                                    text: row.value;
-                                    edited(text) => {
-                                        Creation.edit-env(index, row.name, text);
-                                    }
-                                }
-
-                                VerticalLayout {
-                                    alignment: center;
-                                    AppButton {
-                                        kind: ButtonKind.ghost;
-                                        icon: @image-url("icons/x.svg");
-                                        label: "Remove variable";
-                                        clicked => {
-                                            Creation.remove-env(index);
-                                        }
-                                    }
-                                }
+                        EnvironmentFields {
+                            rows: Creation.environment;
+                            add => {
+                                Creation.add-env();
                             }
-
-                            if row.error != "": Message {
-                                icon: @image-url("icons/alert-circle.svg");
-                                color: Theme.bad;
-                                text: row.error;
+                            edit(index, name, value) => {
+                                Creation.edit-env(index, name, value);
                             }
-                        }
-
-                        HorizontalLayout {
-                            alignment: start;
-                            AppButton {
-                                kind: ButtonKind.ghost;
-                                icon: @image-url("icons/plus.svg");
-                                text: "Add variable";
-                                clicked => {
-                                    Creation.add-env();
-                                }
+                            remove-row(index) => {
+                                Creation.remove-env(index);
                             }
                         }
                     }
@@ -922,132 +546,19 @@ export component CreateInstance {
                         }
                     }
 
-                    if Creation.mounts.length == 0: Text {
-                        text: "No folders are shared yet. The agent starts with an empty ~/workspace.";
-                        color: Theme.tx3;
-                        font-size: Theme.font-small;
-                    }
-
-                    if Creation.mounts.length > 0: VerticalLayout {
-                        HorizontalLayout {
-                            spacing: 16px;
-                            padding-bottom: 8px;
-
-                            Text {
-                                horizontal-stretch: 1;
-                                text: "On your Mac";
-                                color: Theme.tx3;
-                                font-size: Theme.font-meta;
-                            }
-
-                            Text {
-                                width: 300px;
-                                text: "Inside the instance";
-                                color: Theme.tx3;
-                                font-size: Theme.font-meta;
-                            }
-
-                            Text {
-                                width: 200px;
-                                text: "Access";
-                                color: Theme.tx3;
-                                font-size: Theme.font-meta;
-                            }
-
-                            Rectangle {
-                                width: 32px;
-                            }
+                    FolderTable {
+                        rows: Creation.mounts;
+                        choose-folder(index) => {
+                            Creation.choose-folder(index);
                         }
-
-                        for row[index] in Creation.mounts: VerticalLayout {
-                            Rectangle {
-                                height: 1px;
-                                background: Theme.line;
-                            }
-
-                            VerticalLayout {
-                                padding-top: 10px;
-                                padding-bottom: 10px;
-                                spacing: 6px;
-
-                                HorizontalLayout {
-                                    spacing: 16px;
-
-                                    VerticalLayout {
-                                        horizontal-stretch: 1;
-                                        alignment: center;
-                                        Text {
-                                            text: row.host-path;
-                                            color: row.missing ? Theme.tx3 : Theme.tx;
-                                            font-family: Theme.mono;
-                                            font-size: Theme.font-mono;
-                                            wrap: word-wrap;
-                                        }
-                                    }
-
-                                    Field {
-                                        width: 300px;
-                                        mono: true;
-                                        label: "Path inside the instance";
-                                        text: row.guest-path;
-                                        invalid: row.guest-error != "";
-                                        edited(text) => {
-                                            Creation.edit-guest-path(index, text);
-                                        }
-                                    }
-
-                                    HorizontalLayout {
-                                        width: 200px;
-                                        alignment: start;
-                                        VerticalLayout {
-                                            alignment: center;
-                                            SegmentedControl {
-                                                options: ["Read only", "Read and write"];
-                                                selected: row.writable ? 1 : 0;
-                                                changed(option) => {
-                                                    Creation.set-writable(index, option == 1);
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        AppButton {
-                                            kind: ButtonKind.ghost;
-                                            icon: @image-url("icons/x.svg");
-                                            label: "Remove folder";
-                                            clicked => {
-                                                Creation.remove-folder(index);
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if row.writable: Message {
-                                    icon: @image-url("icons/alert-triangle.svg");
-                                    color: Theme.warn;
-                                    text: "Changes inside this instance modify these host files immediately.";
-                                }
-
-                                if row.problem != "": Message {
-                                    icon: @image-url("icons/folder-off.svg");
-                                    color: Theme.bad;
-                                    text: row.problem;
-                                    Link {
-                                        text: "Choose folder";
-                                        clicked => {
-                                            Creation.choose-folder(index);
-                                        }
-                                    }
-                                }
-
-                                if row.guest-error != "": Message {
-                                    icon: @image-url("icons/alert-circle.svg");
-                                    color: Theme.bad;
-                                    text: row.guest-error;
-                                }
-                            }
+                        edit-guest-path(index, path) => {
+                            Creation.edit-guest-path(index, path);
+                        }
+                        set-writable(index, writable) => {
+                            Creation.set-writable(index, writable);
+                        }
+                        remove-row(index) => {
+                            Creation.remove-folder(index);
                         }
                     }
                 }
@@ -1061,47 +572,21 @@ export component CreateInstance {
                         spacing: 24px;
                         alignment: start;
 
-                        VerticalLayout {
-                            spacing: 10px;
-
-                            Text {
-                                text: "Destinations not listed below";
-                                font-size: Theme.font-section;
-                                font-weight: Theme.weight-medium;
-                                color: Theme.tx;
+                        NetworkFields {
+                            deny: Creation.network-deny;
+                            allowed: Creation.allowed;
+                            denied: Creation.denied;
+                            set-deny(deny) => {
+                                Creation.set-network-deny(deny);
                             }
-
-                            HorizontalLayout {
-                                spacing: 12px;
-                                alignment: start;
-
-                                SegmentedControl {
-                                    options: ["Deny", "Allow"];
-                                    selected: Creation.network-deny ? 0 : 1;
-                                    changed(option) => {
-                                        Creation.set-network-deny(option == 0);
-                                    }
-                                }
-
-                                Text {
-                                    text: Creation.network-deny ? "The agent can reach only the destinations you allow." : "The agent can reach any destination except the ones you deny.";
-                                    color: Theme.tx2;
-                                    vertical-alignment: center;
-                                }
+                            add-rule(text, deny) => {
+                                return Creation.add-rule(text, deny);
                             }
-                        }
-
-                        HorizontalLayout {
-                            spacing: 28px;
-
-                            RuleList {
-                                deny: false;
-                                rows: Creation.allowed;
+                            toggle-scope(deny, index) => {
+                                Creation.toggle-scope(deny, index);
                             }
-
-                            RuleList {
-                                deny: true;
-                                rows: Creation.denied;
+                            remove-rule(deny, index) => {
+                                Creation.remove-rule(deny, index);
                             }
                         }
                     }
@@ -1320,75 +805,18 @@ export component CreateInstance {
                         title: "Resources";
                         description: "The defaults suit most agents. The instance takes memory from your Mac only as it uses it.";
 
-                        HorizontalLayout {
-                            spacing: 24px;
-                            alignment: start;
-
-                            VerticalLayout {
-                                spacing: 6px;
-
-                                Text {
-                                    text: "Processors";
-                                    color: Theme.tx2;
-                                    font-size: Theme.font-small;
-                                }
-
-                                SpinBox {
-                                    width: 120px;
-                                    minimum: 1;
-                                    maximum: Creation.max-cpus;
-                                    value <=> Creation.cpus;
-                                    accessible-label: "Processors";
-                                    edited(value) => {
-                                        Creation.set-cpus(value);
-                                    }
-                                }
+                        ResourceFields {
+                            cpus <=> Creation.cpus;
+                            memory-gb <=> Creation.memory-gb;
+                            max-cpus: Creation.max-cpus;
+                            max-memory-gb: Creation.max-memory-gb;
+                            host-line: Creation.host-line;
+                            set-cpus(cpus) => {
+                                Creation.set-cpus(cpus);
                             }
-
-                            VerticalLayout {
-                                spacing: 6px;
-
-                                Text {
-                                    text: "Memory (GB)";
-                                    color: Theme.tx2;
-                                    font-size: Theme.font-small;
-                                }
-
-                                SpinBox {
-                                    width: 120px;
-                                    minimum: 1;
-                                    maximum: Creation.max-memory-gb;
-                                    value <=> Creation.memory-gb;
-                                    accessible-label: "Memory in GB";
-                                    edited(value) => {
-                                        Creation.set-memory(value);
-                                    }
-                                }
+                            set-memory(gb) => {
+                                Creation.set-memory(gb);
                             }
-
-                            VerticalLayout {
-                                spacing: 6px;
-
-                                Text {
-                                    text: "Disk";
-                                    color: Theme.tx2;
-                                    font-size: Theme.font-small;
-                                }
-
-                                Text {
-                                    height: Theme.control-height;
-                                    text: "64 GB, grows as used";
-                                    color: Theme.tx;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-
-                        Text {
-                            text: Creation.host-line;
-                            color: Theme.tx3;
-                            font-size: Theme.font-small;
-                            wrap: word-wrap;
                         }
                     }
 
@@ -1396,13 +824,10 @@ export component CreateInstance {
                         title: "Start";
                         description: "Starting runs the provisioning script first, then the agent.";
 
-                        if Creation.can-start: CheckBox {
-                            text: "Don't start after creating";
-                            checked <=> Creation.dont-start;
-                        }
-
-                        if !Creation.can-start: Text {
-                            text: "Fix the problems listed above to start the instance right away. Until then, it is created without starting.";
+                        Text {
+                            text: Creation.can-start
+                                ? "Create only sets the instance up; start it later from its header. You can change its settings before the first start."
+                                : "Fix the problems listed above to start the instance right away. Until then, you can create it without starting.";
                             color: Theme.tx2;
                             wrap: word-wrap;
                         }
@@ -1459,22 +884,22 @@ export component CreateInstance {
                 }
             }
 
-            if Creation.step == 4 && root.starting: AppButton {
-                kind: ButtonKind.primary;
-                enabled: Creation.can-create;
-                text: "Create and start";
-                icon: @image-url("icons/player-play.svg");
-                clicked => {
-                    Creation.create();
-                }
-            }
-
-            if Creation.step == 4 && !root.starting: AppButton {
-                kind: ButtonKind.primary;
+            if Creation.step == 4: AppButton {
+                kind: ButtonKind.neutral;
                 enabled: Creation.can-create;
                 text: "Create";
                 clicked => {
-                    Creation.create();
+                    Creation.create(false);
+                }
+            }
+
+            if Creation.step == 4: AppButton {
+                kind: ButtonKind.primary;
+                enabled: Creation.can-create && Creation.can-start;
+                text: "Create and start";
+                icon: @image-url("icons/player-play.svg");
+                clicked => {
+                    Creation.create(true);
                 }
             }
         }

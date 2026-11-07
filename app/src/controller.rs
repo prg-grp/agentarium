@@ -28,8 +28,8 @@ use command_plane::{
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::create::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
 use crate::db::{self, Db};
+use crate::editor::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
 use crate::policy::Policy;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
@@ -400,8 +400,6 @@ struct Running {
     commands: Sender<Command>,
     /// The mode of this boot; maintenance and provision boots are one-time.
     mode: BootMode,
-    /// The configuration revision this boot uses.
-    revision: i64,
     /// The VM's vCPUs.
     cpus: usize,
     /// Set while a stop is in progress, with what happens afterwards.
@@ -477,6 +475,15 @@ impl VmControl {
             Ok(prepared) => prepared,
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
+        // Frozen right away, so Settings can't change the revision this boot just read.
+        if let Err(error) = self.db.mark_booted(id, revision) {
+            return self.failed(id, mode, &format!("couldn't record the boot: {error}"));
+        }
+        self.update_item(id, |item| {
+            item.active_revision = revision as i32;
+            item.saved_revision = revision as i32;
+            item.pending_changes = 0;
+        });
         let cpus = spec.cpus;
         let event_id = id.to_owned();
         let spawned = spawn(spec, start, move |event| {
@@ -496,7 +503,6 @@ impl VmControl {
             Running {
                 commands,
                 mode,
-                revision,
                 cpus,
                 stop: None,
                 ready: false,
@@ -634,6 +640,15 @@ impl VmControl {
         self.show(id, mode, VmState::Stopping);
     }
 
+    /// Boots the instance in agent mode: after shutting it down if it runs, right away if not.
+    pub fn restart(&self, id: &str) {
+        if self.running.borrow().contains_key(id) {
+            self.stop(id, AfterStop::Boot(BootMode::Agent));
+        } else {
+            self.start(id, BootMode::Agent);
+        }
+    }
+
     /// Shuts all VMs down gracefully, like pressing Stop, then ends the event loop.
     pub fn quit(&self) {
         if self.running.borrow().is_empty() {
@@ -766,22 +781,15 @@ impl VmControl {
     fn handle(&self, id: &str, event: Event) {
         match event {
             Event::Created { session, log } => {
-                let Some(revision) = self.running.borrow().get(id).map(|run| run.revision) else {
+                if !self.running.borrow().contains_key(id) {
                     return;
-                };
+                }
                 let (session_terminal, log_terminal) = self.terminals(id);
-                let attached = self
-                    .db
-                    .mark_booted(id, revision)
-                    .map_err(|error| format!("couldn't record the boot: {error}"))
-                    .and_then(|()| {
-                        session_terminal
-                            .attach(session)
-                            .and_then(|()| log_terminal.attach(log))
-                            .map_err(|error| format!("couldn't open the console: {error}"))
-                    });
+                let attached = session_terminal
+                    .attach(session)
+                    .and_then(|()| log_terminal.attach(log));
                 if let Err(error) = attached {
-                    eprintln!("Stopping the virtual machine: {error}");
+                    eprintln!("Stopping the virtual machine: couldn't open the console: {error}");
                     self.stop(id, AfterStop::Nothing);
                 }
             }
@@ -879,7 +887,10 @@ impl VmControl {
         let failed = |error: &str| self.failed(id, BootMode::Provision, error);
         match exit_code {
             Some(0) => match self.db.mark_provisioned(id) {
-                Ok(()) => self.start(id, BootMode::Agent),
+                Ok(()) => {
+                    self.update_item(id, |item| item.provisioned = true);
+                    self.start(id, BootMode::Agent);
+                }
                 Err(error) => failed(&format!("couldn't record the provisioning: {error}")),
             },
             Some(code) => failed(&format!("the provisioning script exited with {code}.")),
@@ -958,6 +969,17 @@ impl VmControl {
         let (session, log) = self.terminals(&id);
         session.resize(cols, rows);
         log.resize(cols, rows);
+    }
+
+    /// Changes the instance's sidebar row.
+    fn update_item(&self, id: &str, change: impl FnOnce(&mut InstanceItem)) {
+        if let Some((row, mut item)) = (0..self.instances.row_count())
+            .filter_map(|row| Some((row, self.instances.row_data(row)?)))
+            .find(|(_, item)| item.id == id)
+        {
+            change(&mut item);
+            self.instances.set_row_data(row, item);
+        }
     }
 
     /// Updates the instance's sidebar summary and its Status tab: the readings and, in

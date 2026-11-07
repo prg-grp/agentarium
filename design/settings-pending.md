@@ -36,10 +36,14 @@ Resources            │ api.anthropic.com      Exact name                      
 ## Section navigation
 
 - Left column, 220 px, 1 px `line` right border: Agent and launch, Shared folders, Network, Environment, Resources.
-- Selected section: `raise` background, `tx` 500. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px.
+- All sections sit on one scrolling page; clicking a section scrolls to it, and the selection follows the scroll position.
+- Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px.
+- Agent and launch also holds the instance name. Renaming applies on save; the name isn't part of a revision.
 - There is no preset in Settings: the preset only fills in a new instance's first revision (see [create-harness.md](create-harness.md#presets)). Every setting, including the command and the network rules, is edited directly.
 
 ## Change marks inside sections
+
+Not built yet; for now the bar, the tab label and the section navigation show the pending changes.
 
 - Changed rows get a 2 px `acc` inset bar on the left and a short mark in `acc` 12 px:
   - Added: plus icon, "Added, not active yet".
@@ -49,6 +53,12 @@ Resources            │ api.anthropic.com      Exact name                      
 
 ## Behavior
 
-- Edits save directly; there is no separate "Save" button per field. Validation follows the creation steps and blocks only invalid values.
+- Settings is available from creation on, so settings can be changed before the first run. Until provisioning has succeeded, Agent and launch also shows the provisioning script, editable, with "Runs once as root with internet access before the first start. It can't be changed once provisioning has succeeded."; afterwards the script is gone from Settings. An empty script or the unchanged custom template allows Save but blocks "Save and start", with the reason in the footer.
+- Before the first boot nothing is active yet, so saving shows no pending-changes bar.
+- Edits are not saved automatically. A footer under the page holds "Discard changes" (ghost), "Save and restart" ("Save and start" while stopped; neutral) and "Save" (primary), enabled while the edits differ from the saved configuration, with "Unsaved changes" in `tx2` beside them.
+- Save writes the edits into the pending revision, or a new one if the latest was booted, and shows the pending-changes bar. Save and restart also boots the instance in agent mode.
+- Validation follows the creation steps: invalid values block saving, with "Fix the marked fields to save." in `bad`. A shared folder that no longer exists allows Save but blocks Save and restart, with the reason in the footer.
+- Selecting another instance drops unsaved edits; switching tabs keeps them.
+- "Revert to revision 7" is not built yet.
 - The effective configuration of every run is stored, so the Activity tab can show the policy that applied at the time (see [activity-network.md](activity-network.md)).
 - Hot application of settings is deferred. Nothing in this screen suggests a change is already live.

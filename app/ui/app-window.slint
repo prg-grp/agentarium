@@ -8,8 +8,9 @@ import { TerminalSession, TerminalView } from "terminal.slint";
 import { StatusTab } from "status.slint";
 import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
+import { Settings, SettingsTab } from "settings.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion }
+export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion, Settings }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
@@ -464,14 +465,21 @@ export component AppWindow inherits Window {
                     item: current;
                 }
 
-                if current-tab > 2 || (current-tab < 2 && !current.has-terminal): Rectangle {
+                if current-tab == 4: SettingsTab {
+                    vertical-stretch: 1;
+                    item: current;
+                    restart-now => {
+                        root.instance-action(current.id, InstanceAction.restart-agent);
+                    }
+                }
+
+                if current-tab == 3 || (current-tab < 2 && !current.has-terminal): Rectangle {
                     vertical-stretch: 1;
 
                     Text {
                         text: current-tab == 0 ? "Terminal comes in a later step."
                             : current-tab == 1 ? "Logs come in a later step."
-                            : current-tab == 3 ? "Activity comes in a later step."
-                            : "Settings come in a later step.";
+                            : "Activity comes in a later step.";
                         color: Theme.tx3;
                         font-size: Theme.font-small;
                     }

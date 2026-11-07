@@ -122,7 +122,7 @@ At most one filled button per view.
 | Style | Look | Used for |
 |---|---|---|
 | Primary | `acc` fill, dark text | Forward actions: Create instance, Continue to …, Create and start, Start, Retry start |
-| Neutral | `raise` fill, `line2` border | Stop, Restart now, Return to agent mode, Restart agent, Add folder, Create without starting |
+| Neutral | `raise` fill, `line2` border | Stop, Restart now, Return to agent mode, Restart agent, Add folder, Create (without starting) |
 | Ghost | No fill, `tx2` text | Restart in maintenance, Boot in maintenance, Back, Cancel, Reboot instance, Copy diagnostics |
 | Danger ghost | No fill, `bad` text | Delete in the header |
 | Mode-confirm | `warn` fill | Only the confirm button of the maintenance dialog |
@@ -242,6 +242,7 @@ These patterns appear on more than one screen. They are flagged here, per [AGENT
 | Detail pane with key/value rows | Timeline details, network details |
 | Counts bar | Timeline, network view, stopped history |
 | Segmented control | Folder access, network default action, Timeline / Network switch |
+| Configuration fields (launch, environment, folder table, network lists, resources) | Creation steps, settings; extracted to `app/ui/config-fields.slint` |
 | Domain rule row (domain, scope, change mark, remove) | Create network, settings |
 | Step indicator | All five creation steps |
 | Confirmation dialog layout (title, intro, icon list, actions) | Maintenance and delete confirmations |

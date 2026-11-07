@@ -4,9 +4,11 @@
 mod controller;
 mod create;
 mod db;
+mod editor;
 mod net;
 mod policy;
 mod preset;
+mod settings;
 mod terminal;
 mod vm;
 
@@ -43,11 +45,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
 
     let db = Rc::new(Db::open().map_err(|error| format!("Couldn't open the database: {error}"))?);
-    let items: Vec<InstanceItem> = db.instances()?.into_iter().map(to_item).collect();
+    let items: Vec<InstanceItem> = db
+        .instances()?
+        .into_iter()
+        .map(|instance| to_item(&db, instance))
+        .collect();
     let instances = Rc::new(VecModel::from(items));
     ui.set_instances(ModelRc::from(instances.clone()));
 
     let control = VmControl::new(&ui, db.clone(), instances.clone());
+    let settings =
+        settings::SettingsEditor::new(&ui, db.clone(), instances.clone(), control.clone());
 
     // Closing the window or quitting shuts all VMs down gracefully first.
     let c = control.clone();
@@ -70,6 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // sidebar row and, unless the user opted out, start and provision right away.
     let c = control.clone();
     let ui_handle = ui.as_weak();
+    let db_handle = db.clone();
     let creator = create::Creator::new(&ui, db, instances.clone(), move |instance, start| {
         let Some(ui) = ui_handle.upgrade() else {
             return;
@@ -83,7 +92,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .is_some_and(|item| item.name.to_lowercase() > name)
             })
             .unwrap_or(instances.row_count());
-        instances.insert(row, to_item(instance));
+        instances.insert(row, to_item(&db_handle, instance));
         ui.set_selected_index(row as i32);
         ui.set_current_tab(0);
         c.select(&id);
@@ -93,9 +102,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     ui.on_create_instance(move || creator.open());
 
-    // The Terminal tab shows the selected instance's session, the Logs tab its boot log.
+    // The Terminal tab shows the selected instance's session, the Logs tab its boot log;
+    // the Settings tab its configuration.
     let c = control.clone();
-    ui.on_instance_selected(move |id| c.select(&id));
+    let s = settings.clone();
+    ui.on_instance_selected(move |id| {
+        c.select(&id);
+        s.open(&id);
+    });
     let c = control.clone();
     ui.on_tab_changed(move |tab| c.set_view(if tab == 1 { View::Log } else { View::Session }));
     if let Some(item) = usize::try_from(ui.get_selected_index())
@@ -103,6 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .and_then(|row| ui.get_instances().row_data(row))
     {
         control.select(&item.id);
+        settings.open(&item.id);
     }
 
     let c = control.clone();
@@ -244,11 +259,16 @@ fn set_dock_icon() {
 }
 
 /// A sidebar row for a stored instance; it shows as stopped until its VM runs.
-fn to_item(instance: db::Instance) -> InstanceItem {
+fn to_item(db: &Db, instance: db::Instance) -> InstanceItem {
     let reading = |value: &str| StatusReading {
         value: value.into(),
         tone: Tone::Neutral,
     };
+    let (active_revision, saved_revision, pending_changes) =
+        settings::revision_fields(db, &instance.id).unwrap_or_else(|error| {
+            eprintln!("Couldn't read the instance's revisions: {error}");
+            (0, 0, 0)
+        });
     InstanceItem {
         id: instance.id.into(),
         name: instance.name.into(),
@@ -262,8 +282,10 @@ fn to_item(instance: db::Instance) -> InstanceItem {
             note: "Start the instance to see its resource use.".into(),
             ..Usage::default()
         },
-        // Counting saved but inactive changes comes with the settings screen.
-        pending_changes: 0,
+        provisioned: instance.provisioned,
+        active_revision,
+        saved_revision,
+        pending_changes,
         has_terminal: true,
         transition: "".into(),
     }
