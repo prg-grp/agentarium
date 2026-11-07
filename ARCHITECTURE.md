@@ -17,7 +17,7 @@ Build a local macOS desktop application for running AI coding agents inside isol
 
 Users should be able to configure an instance, start it, interact with its agent through a terminal, and inspect its file access, process execution, and network activity. The application should support ordinary development work and provide records useful for later behavioral analysis.
 
-The initial agent integration is Claude Code. The architecture must accommodate Codex and custom agents later without implementing those integrations in the first release.
+The initial agent integration is Claude Code. New instances are created from presets compiled into the app (Claude Code, Codex, Gemini CLI, OpenCode) or as a custom agent.
 
 ## Agreed requirements
 
@@ -87,7 +87,7 @@ Decided:
 
 - One harness-agnostic base root filesystem (`vms/rootfs/base`, Ubuntu 24.04 arm64) is built as a sparse raw ext4 image at its full virtual size of 64 GiB. Inode tables and journal stay unwritten (mke2fs lazy init, guest mounts root with `noinit_itable`), so the image only takes the space of its contents. There is no resize step.
 - Each instance disk is an APFS `clonefile` of the base: created instantly, sharing the base's blocks until the guest writes, and growing on the Mac only by what the guest writes. Without a clone (another volume) creation fails; there is no copy fallback.
-- The agent harness is not part of the base. Each instance's provisioning script installs it in provision mode (see below).
+- The agent harness is not part of the base. Each instance's provisioning script installs it in provision mode (see below). The base does include Node.js LTS with npm (NodeSource), which the Codex, Gemini CLI and OpenCode presets install from.
 - During development, `make run` names the base image with `AGENT_TOOLBOX_BASE_ROOTFS`. How a released app obtains the kernel and base image (e.g. a pinned, downloaded guest bundle) remains open.
 - The guest supervisor (`terrarium-supervisor`, crate `guest_supervisor`) is the boot authority in the guest. It is a static Rust binary for `aarch64-unknown-linux-musl`, cross-compiled on the Mac and baked into the base rootfs as a systemd service. No login runs on any console; nothing runs on the session console until the app sends Start over the command plane (see [Protobuf over vsock](#protobuf-over-vsock)). Each mode gives access to exactly one thing: the instance's launch command (agent), a root shell (maintenance), or the provisioning script (provision). The boot mode is no longer on the kernel command line. In agent mode the agent runs in a cgroup of its own below the supervisor's (systemd delegates the cpu and memory controllers with `Delegate=` and starts the supervisor in its own subgroup with `DelegateSubgroup=`), so its CPU and memory use include every process it starts.
 - The guest has two virtio consoles. `hvc1` carries only the session (the app's Terminal tab, the one interactive terminal). `hvc0` is the kernel console: kernel, systemd (boot and shutdown) and the supervisor's logs, shown read-only in the app's Logs tab, where only selecting and copying work. `hvc0` also stays the path for a later rescue console.
@@ -171,7 +171,7 @@ Decided: the maintenance networking exception is the open policy (default allow,
 
 ### Provision mode
 
-The provisioning script installs and sets up the agent harness. It is part of the instance configuration, stored per revision, and defaults to a script for the selected agent (`vms/provision/`); the user can customize it per instance. Defaults for other harnesses follow later.
+The provisioning script installs and sets up the agent harness. It is part of the instance configuration, stored per revision, and comes from the preset chosen at creation (`vms/provision/`); only a custom agent's script is written by the user.
 
 Decided:
 
@@ -179,7 +179,7 @@ Decided:
 - The app sends the script in Start. The supervisor runs it as root with its output on the console, reports the exit code (`ProvisionFinished`), and powers off. No login runs in provision mode.
 - Provisioning stays a separate one-time boot rather than a step of the agent boot: the agent boot starts fresh with the network policy, and nothing the script started (with open internet) carries over. The app's `provisioned_at` is the authority; there is no marker in the guest.
 - Provision mode gets the same internet exception as maintenance mode.
-- The harness is chosen at creation: Claude Code (`claude-code`) or a custom agent (`custom`); Codex follows later. The default scripts in `vms/provision/` are compiled into the app (`include_str!`). A custom agent starts from the template `vms/provision/custom.sh`, which the user fills in; an unchanged template can be saved but not started.
+- The harness is chosen at creation from a preset (`app/src/preset.rs`): Claude Code, Codex, Gemini CLI, OpenCode, or a custom agent. A preset defines the launch command (without arguments), the provisioning script (`vms/provision/`, compiled in with `include_str!`) and the initial network rules. Creating the instance copies them into revision 1; the preset itself isn't stored, so later app versions don't change existing instances. A preset's command and script can't be edited; its network rules are only a starting point. A custom agent starts from the template `vms/provision/custom.sh`, which the user fills in; an unchanged template can be saved but not started.
 - A new instance starts right after creation unless the user opts out, so its first boot provisions it.
 
 ## Live host-directory access

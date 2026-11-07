@@ -1,6 +1,6 @@
 # Create: harness (step 1 of 5)
 
-First step of instance creation. It names the instance, picks the agent harness, and holds the provisioning script that installs the harness. Implemented in `app/ui/create-instance.slint` and `app/src/create.rs`.
+First step of instance creation. It names the instance and picks a preset: a known agent harness, or a custom agent. Implemented in `app/ui/create-instance.slint` and `app/src/create.rs`; the presets are in `app/src/preset.rs`. Implemented in `app/ui/create-instance.slint` and `app/src/create.rs`.
 
 ## Creation flow (shared by all five steps)
 
@@ -25,37 +25,45 @@ New instance
 (1) Harness   (2) Agent   (3) Shared folders   (4) Network   (5) Review
 ───────────────────────────────────────────────────────────────────────
 Name and harness    Name     [billing-service        ]
-The harness is the  Harness  (•) Claude Code
-agent that runs…             ( ) Codex          Not available yet
-                             ( ) Custom agent   Bring your own provisioning script
+The harness is the  Harness  (•) Claude Code    Anthropic's coding agent
+agent that runs…             ( ) Codex          OpenAI's coding agent
+                             ( ) Gemini CLI     Google's coding agent
+                             ( ) OpenCode       Open-source agent; add your model provider's domain
+                             ( ) Custom agent   Bring your own provisioning script and command
 ───────────────────────────────────────────────────────────────────────
-Provisioning script ┌───────────────────────────────────────────────┐
-Runs once as root   │#!/bin/bash                                    │
-with internet…      │# Default provisioning script for Claude Code… │
-                    └───────────────────────────────────────────────┘
-                    Reset to default
+Provisioning script Show script
+Defined by the
+Claude Code preset…
 ───────────────────────────────────────────────────────────────────────
 Cancel                                              [Continue to agent]
 ```
 
+## Presets
+
+A preset is compiled into the app and defines three things:
+- the launch command, without arguments;
+- the provisioning script (`vms/provision/<preset>.sh`);
+- the initial network rules: the domains the agent needs, allowed.
+
+A preset only exists while the instance is drafted. Creating the instance copies these values into its first revision; the chosen preset isn't stored, and later app versions don't change existing instances.
+
+The command and script of a preset can't be changed. The only way to use others is Custom agent. The network rules are only the initial selection: the user can change or remove them on the Network step, like any rule.
+
 ## Elements
 
 - **Name:** text field, max width 320 px. Required, and unique among instances (case-insensitive). Used in the sidebar and header.
-- **Harness:** radio list.
-  - Claude Code is preselected.
-  - Codex is visible but disabled, with "Not available yet" in `tx3`, so later support is discoverable.
-  - Custom agent is selectable, with "Bring your own provisioning script" in `tx3`.
-- **Provisioning script:** a monospace multi-line editor, about 320 px high, without wrapping.
-  - It is prefilled with the harness's built-in script: `vms/provision/claude-code.sh` for Claude Code, or the template `vms/provision/custom.sh` for a custom agent. Both are compiled into the app.
-  - The user can edit the script for any harness.
-  - "Reset to default" (ghost, compact) appears once the script differs from the built-in one.
-  - Description: "Runs once as root with internet access before the first start. Must be safe to run again."
+- **Harness:** radio list of the presets, in the order of `Preset::ALL`, each with a one-line note in `tx3`. Claude Code is preselected.
+- **Provisioning script:**
+  - For a preset: a "Show script" / "Hide script" toggle (ghost, compact) reveals the script read-only in the monospace editor. Description: "Defined by the <preset> preset. Runs once as root with internet access before the first start. Choose Custom agent to write your own."
+  - For a custom agent: a monospace multi-line editor, about 320 px high, without wrapping, prefilled with the template `vms/provision/custom.sh`. "Reset to template" (ghost, compact) appears once the script differs from it. Description: "Runs once as root with internet access before the first start. Must be safe to run again."
 
 ## Behavior
 
-- Switching harness replaces the launch command and the provisioning script with the new harness's defaults, but only where the user hasn't changed them. A custom agent has no default command.
+- Switching preset sets the launch command and the provisioning script to the new preset's.
+- Switching away from Custom agent keeps its command and script in the draft, so switching back restores them.
+- Switching preset also swaps the network rules. The old preset's rules that the user left unchanged are removed, and the new preset's rules are added unless the same target is already in the same list. Rules the user added or changed stay.
 - A custom agent whose script is still the unchanged template can be created but not started. Review lists "Fill in the provisioning script so it installs your agent."
-- An empty script is a blocking problem on Review.
+- An empty custom script is a blocking problem on Review.
 - A duplicate name shows "Another instance already uses this name." below the field, which is outlined in `bad`.
 
 ## Copy

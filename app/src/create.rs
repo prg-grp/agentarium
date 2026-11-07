@@ -17,12 +17,13 @@ use std::rc::Rc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::db::{
-    self, Agent, Config, Db, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget, mask32,
-    mask128, max_prefix, parse_network,
+    self, Config, Db, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget, mask32, mask128,
+    max_prefix, parse_network,
 };
+use crate::preset::Preset;
 use crate::vm;
 use crate::{
-    AgentKind, AppWindow, CreateIssue, Creation, EnvRow, InstanceItem, InstanceState, MountRow,
+    AppWindow, CreateIssue, Creation, EnvRow, InstanceItem, InstanceState, MountRow, PresetRow,
     RuleRow,
 };
 
@@ -37,7 +38,11 @@ const WORKSPACE: &str = "/home/ubuntu/workspace";
 
 struct Draft {
     name: String,
+    preset: Preset,
     config: Config,
+    /// The custom agent's command and script, kept while another preset is selected.
+    custom_command: String,
+    custom_script: String,
 }
 
 pub struct Creator {
@@ -85,6 +90,14 @@ impl Creator {
         g.set_allowed(ModelRc::from(this.allowed.clone()));
         g.set_denied(ModelRc::from(this.denied.clone()));
         g.set_issues(ModelRc::from(this.issues.clone()));
+        let presets: Vec<PresetRow> = Preset::ALL
+            .iter()
+            .map(|preset| PresetRow {
+                name: preset.name().into(),
+                note: preset.note().into(),
+            })
+            .collect();
+        g.set_presets(ModelRc::new(VecModel::from(presets)));
 
         let c = this.clone();
         g.on_go(move |step| c.go(step));
@@ -96,17 +109,34 @@ impl Creator {
         let c = this.clone();
         g.on_set_name(move |name| c.edit(|d| d.name = name.into()));
         let c = this.clone();
-        g.on_set_agent(move |kind| c.set_agent(kind));
+        g.on_set_preset(move |index| c.set_preset(index));
+        // A preset's script and command are fixed; only a custom agent's can be edited.
         let c = this.clone();
-        g.on_set_script(move |script| c.edit(|d| d.config.provision_script = script.into()));
+        g.on_set_script(move |script| {
+            c.edit(|d| {
+                if d.preset == Preset::Custom {
+                    d.config.provision_script = script.into();
+                }
+            })
+        });
         let c = this.clone();
         g.on_reset_script(move || {
-            c.edit(|d| d.config.provision_script = d.config.agent.provision_script().into());
+            c.edit(|d| {
+                if d.preset == Preset::Custom {
+                    d.config.provision_script = Preset::Custom.provision_script().into();
+                }
+            });
             c.show_fields();
         });
 
         let c = this.clone();
-        g.on_set_command(move |command| c.edit(|d| d.config.command = command.into()));
+        g.on_set_command(move |command| {
+            c.edit(|d| {
+                if d.preset == Preset::Custom {
+                    d.config.command = command.into();
+                }
+            })
+        });
         let c = this.clone();
         g.on_add_argument(move |argument| {
             if !argument.is_empty() {
@@ -224,13 +254,22 @@ impl Creator {
         };
         if self.draft.borrow().is_none() {
             let host = Host::read();
-            let mut config = Config::default();
+            let preset = Preset::ClaudeCode;
+            let mut config = Config {
+                command: preset.command().into(),
+                provision_script: preset.provision_script().into(),
+                network_rules: preset.network_rules(),
+                ..Config::default()
+            };
             // At most half of the Mac, so the Mac stays usable.
             config.cpus = config.cpus.min((host.cpus / 2).max(1));
             config.memory_mib = config.memory_mib.min((host.memory_gb / 2).max(1) * 1024);
             *self.draft.borrow_mut() = Some(Draft {
                 name: String::new(),
+                preset,
                 config,
+                custom_command: String::new(),
+                custom_script: Preset::Custom.provision_script().into(),
             });
 
             let g = ui.global::<Creation>();
@@ -337,23 +376,44 @@ impl Creator {
         self.refresh();
     }
 
-    fn set_agent(&self, kind: AgentKind) {
-        let agent = match kind {
-            AgentKind::ClaudeCode => Agent::ClaudeCode,
-            AgentKind::Custom => Agent::Custom,
-            AgentKind::Codex => return,
+    /// Switches the draft to the preset at `index` in `Preset::ALL`. The preset sets the
+    /// command and script; its network rules replace the old preset's that the user left
+    /// alone, so rules the user added or changed stay.
+    fn set_preset(&self, index: i32) {
+        let Some(&preset) = usize::try_from(index)
+            .ok()
+            .and_then(|index| Preset::ALL.get(index))
+        else {
+            return;
         };
         self.edit(|d| {
-            let config = &mut d.config;
-            let old = config.agent;
-            // Keep what the user changed; replace what is still the old harness's default.
-            if config.command == old.default_command() {
-                config.command = agent.default_command().into();
+            let old = d.preset;
+            if old == preset {
+                return;
             }
-            if config.provision_script == old.provision_script() {
-                config.provision_script = agent.provision_script().into();
+            let c = &mut d.config;
+            if old == Preset::Custom {
+                d.custom_command = std::mem::take(&mut c.command);
+                d.custom_script = std::mem::take(&mut c.provision_script);
             }
-            config.agent = agent;
+            if preset == Preset::Custom {
+                c.command = d.custom_command.clone();
+                c.provision_script = d.custom_script.clone();
+            } else {
+                c.command = preset.command().into();
+                c.provision_script = preset.provision_script().into();
+            }
+            let old_rules = old.network_rules();
+            c.network_rules.retain(|rule| !old_rules.contains(rule));
+            for rule in preset.network_rules() {
+                let present = c.network_rules.iter().any(|other| {
+                    other.action == rule.action && same_target(&other.target, &rule.target)
+                });
+                if !present {
+                    c.network_rules.push(rule);
+                }
+            }
+            d.preset = preset;
         });
         self.show_fields();
     }
@@ -413,13 +473,14 @@ impl Creator {
         let g = ui.global::<Creation>();
         let c = &d.config;
         let name = d.name.trim();
-        self.sync_draft_row(&ui, name, c.agent);
+        self.sync_draft_row(&ui, name, d.preset.name());
 
-        g.set_agent(match c.agent {
-            Agent::ClaudeCode => AgentKind::ClaudeCode,
-            Agent::Custom => AgentKind::Custom,
-        });
-        g.set_script_changed(c.provision_script != c.agent.provision_script());
+        let custom = d.preset == Preset::Custom;
+        let template = c.provision_script == Preset::Custom.provision_script();
+        g.set_preset(Preset::ALL.iter().position(|&p| p == d.preset).unwrap_or(0) as i32);
+        g.set_is_custom(custom);
+        g.set_preset_name(d.preset.name().into());
+        g.set_script_changed(custom && !template);
         // An empty name is only reported on Review, not while the user starts typing.
         g.set_name_error(
             if name.is_empty() {
@@ -487,14 +548,11 @@ impl Creator {
         sync(&self.issues, issues);
 
         g.set_review_runs(command_line(c).into());
-        g.set_review_script(
-            match (c.agent, c.provision_script == c.agent.provision_script()) {
-                (Agent::ClaudeCode, true) => "Default script for Claude Code",
-                (Agent::Custom, true) => "Template, not filled in yet",
-                (_, false) => "Customized script",
-            }
-            .into(),
-        );
+        g.set_review_script(match (custom, template) {
+            (true, true) => "Template, not filled in yet".into(),
+            (true, false) => "Custom script".into(),
+            (false, _) => format!("Script from the {} preset", d.preset.name()).into(),
+        });
         let targets = |action| {
             let names: Vec<_> = rule_rows(&c.network_rules, action)
                 .into_iter()
@@ -529,14 +587,17 @@ impl Creator {
         if !name_error.is_empty() {
             add(HARNESS, name_error, true);
         }
-        if c.provision_script.trim().is_empty() {
-            add(HARNESS, "The provisioning script is empty.", false);
-        } else if c.agent == Agent::Custom && c.provision_script == c.agent.provision_script() {
-            add(
-                HARNESS,
-                "Fill in the provisioning script so it installs your agent.",
-                false,
-            );
+        // A preset's script is complete; only a custom agent's needs checking.
+        if d.preset == Preset::Custom {
+            if c.provision_script.trim().is_empty() {
+                add(HARNESS, "The provisioning script is empty.", false);
+            } else if c.provision_script == Preset::Custom.provision_script() {
+                add(
+                    HARNESS,
+                    "Fill in the provisioning script so it installs your agent.",
+                    false,
+                );
+            }
         }
         for error in [
             command_error(&c.command),
@@ -601,7 +662,7 @@ impl Creator {
     }
 
     /// The draft shows at the top of the sidebar once it has a name.
-    fn sync_draft_row(&self, ui: &AppWindow, name: &str, agent: Agent) {
+    fn sync_draft_row(&self, ui: &AppWindow, name: &str, agent: &str) {
         let selected = ui.get_selected_index();
         match (self.draft_row(), name.is_empty()) {
             (None, false) => {
@@ -609,7 +670,7 @@ impl Creator {
                     0,
                     InstanceItem {
                         name: name.into(),
-                        agent: agent.name().into(),
+                        agent: agent.into(),
                         state: InstanceState::Draft,
                         summary: "Not created yet".into(),
                         ..Default::default()
@@ -629,10 +690,10 @@ impl Creator {
             }
             (Some(row), false) => {
                 if let Some(mut item) = self.instances.row_data(row)
-                    && (item.name != name || item.agent != agent.name())
+                    && (item.name != name || item.agent != agent)
                 {
                     item.name = name.into();
-                    item.agent = agent.name().into();
+                    item.agent = agent.into();
                     self.instances.set_row_data(row, item);
                 }
             }

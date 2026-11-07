@@ -15,10 +15,9 @@ CREATE TABLE instance_revisions (
     revision          INTEGER NOT NULL,             -- 1, 2, … per instance
     created_at        INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)),
     booted_at         INTEGER,
-    agent             TEXT NOT NULL CHECK (agent IN ('claude-code', 'custom')),
     cpus              INTEGER NOT NULL CHECK (cpus > 0),
     memory_mib        INTEGER NOT NULL CHECK (memory_mib > 0),
-    command           TEXT NOT NULL,
+    command           TEXT NOT NULL,                -- from the preset, unless custom
     arguments         TEXT NOT NULL CHECK (json_valid(arguments)),     -- ["--flag", …]
     working_directory TEXT NOT NULL,
     environment       TEXT NOT NULL CHECK (json_valid(environment)),   -- [{name, value}]

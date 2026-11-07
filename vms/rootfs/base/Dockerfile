@@ -64,7 +64,10 @@ RUN ln -sf /usr/bin/python3 /usr/bin/python
 RUN curl -fsSL https://releases.astral.sh/github/uv/releases/download/0.10.11/uv-aarch64-unknown-linux-gnu.tar.gz \
     | tar -xz -C /usr/bin --strip-components=1 \
     uv-aarch64-unknown-linux-gnu/uv uv-aarch64-unknown-linux-gnu/uvx
-# No node: provisioning scripts that need it install their own.
+# Node.js LTS with npm, for agents that ship as npm packages (Codex, Gemini CLI, OpenCode).
+RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/*
 
 # The unprivileged user that runs the agent (ubuntu:24.04 already ships it).
 RUN id ubuntu >/dev/null 2>&1 || useradd -m -s /bin/bash ubuntu

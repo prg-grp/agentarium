@@ -6,6 +6,7 @@ mod create;
 mod db;
 mod net;
 mod policy;
+mod preset;
 mod terminal;
 mod vm;
 
@@ -251,7 +252,7 @@ fn to_item(instance: db::Instance) -> InstanceItem {
     InstanceItem {
         id: instance.id.into(),
         name: instance.name.into(),
-        agent: instance.agent.name().into(),
+        agent: instance.command.into(),
         state: InstanceState::Stopped,
         summary: "Stopped".into(),
         vm: reading("Stopped"),

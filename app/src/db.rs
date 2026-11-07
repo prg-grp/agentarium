@@ -43,45 +43,11 @@ pub struct Instance {
     pub name: String,
     /// The persistent root disk image.
     pub disk_path: PathBuf,
-    /// The agent of the latest revision.
-    pub agent: Agent,
+    /// The launch command of the latest revision.
+    pub command: String,
     /// Whether a provisioning run succeeded on the disk; until then, starting the
     /// instance provisions it first.
     pub provisioned: bool,
-}
-
-/// The agent harness an instance runs.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum Agent {
-    ClaudeCode,
-    /// Installed by the user's own provisioning script and started with its launch command.
-    Custom,
-}
-
-impl Agent {
-    pub fn name(self) -> &'static str {
-        match self {
-            Agent::ClaudeCode => "Claude Code",
-            Agent::Custom => "Custom agent",
-        }
-    }
-
-    /// The program the agent is launched with; a custom agent has none until the user sets it.
-    pub fn default_command(self) -> &'static str {
-        match self {
-            Agent::ClaudeCode => "claude",
-            Agent::Custom => "",
-        }
-    }
-
-    /// The default provisioning script, compiled into the app: it installs the agent, or
-    /// for a custom agent is a template the user fills in.
-    pub fn provision_script(self) -> &'static str {
-        match self {
-            Agent::ClaudeCode => include_str!("../../vms/provision/claude-code.sh"),
-            Agent::Custom => include_str!("../../vms/provision/custom.sh"),
-        }
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
@@ -174,7 +140,6 @@ pub fn mask128(prefix: u8) -> u128 {
 /// An instance's configuration, as saved in one revision.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Config {
-    pub agent: Agent,
     pub cpus: u32,
     pub memory_mib: u32,
     pub command: String,
@@ -189,23 +154,24 @@ pub struct Config {
     pub provision_script: String,
 }
 
+/// Everything but the agent: its command, provisioning script and network rules come
+/// from the preset chosen at creation.
 impl Default for Config {
     fn default() -> Self {
         Config {
-            provision_script: Agent::ClaudeCode.provision_script().into(),
-            agent: Agent::ClaudeCode,
             // Claude Code is a Node process, and builds inside the guest need memory too.
             // The VM only takes memory from the Mac as the guest uses it.
             cpus: 2,
             memory_mib: 4096,
-            command: Agent::ClaudeCode.default_command().into(),
+            command: String::new(),
             arguments: Vec::new(),
-            // The agent user's ~/workspace, which the Claude Code script trusts.
+            // The agent user's ~/workspace, which the preset scripts create and trust.
             working_directory: "/home/ubuntu/workspace".into(),
             environment: Vec::new(),
             mounts: Vec::new(),
             network_default: NetworkAction::Deny,
             network_rules: Vec::new(),
+            provision_script: String::new(),
         }
     }
 }
@@ -298,14 +264,14 @@ impl Db {
             id: id.into(),
             name: name.into(),
             disk_path: disk_path.into(),
-            agent: config.agent,
+            command: config.command.clone(),
             provisioned: false,
         })
     }
 
     pub fn latest_revision(&self, instance_id: &str) -> Result<Revision> {
         let revision = self.conn.query_row(
-            "SELECT revision, agent, cpus, memory_mib, command, arguments, working_directory,
+            "SELECT revision, cpus, memory_mib, command, arguments, working_directory,
                     environment, mounts, network_default, network_rules, provision_script
              FROM instance_revisions WHERE instance_id = ?1
              ORDER BY revision DESC LIMIT 1",
@@ -314,17 +280,16 @@ impl Db {
                 Ok(Revision {
                     number: row.get(0)?,
                     config: Config {
-                        agent: row.get(1)?,
-                        cpus: row.get(2)?,
-                        memory_mib: row.get(3)?,
-                        command: row.get(4)?,
-                        arguments: json(row, 5)?,
-                        working_directory: row.get(6)?,
-                        environment: json(row, 7)?,
-                        mounts: json(row, 8)?,
-                        network_default: row.get(9)?,
-                        network_rules: json(row, 10)?,
-                        provision_script: row.get(11)?,
+                        cpus: row.get(1)?,
+                        memory_mib: row.get(2)?,
+                        command: row.get(3)?,
+                        arguments: json(row, 4)?,
+                        working_directory: row.get(5)?,
+                        environment: json(row, 6)?,
+                        mounts: json(row, 7)?,
+                        network_default: row.get(8)?,
+                        network_rules: json(row, 9)?,
+                        provision_script: row.get(10)?,
                     },
                 })
             },
@@ -390,7 +355,7 @@ impl Db {
 }
 
 const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
-    (SELECT r.agent FROM instance_revisions r WHERE r.instance_id = i.id
+    (SELECT r.command FROM instance_revisions r WHERE r.instance_id = i.id
      ORDER BY r.revision DESC LIMIT 1),
     i.provisioned_at IS NOT NULL
     FROM instances i";
@@ -400,7 +365,7 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
         id: row.get(0)?,
         name: row.get(1)?,
         disk_path: PathBuf::from(row.get::<_, String>(2)?),
-        agent: row.get(3)?,
+        command: row.get(3)?,
         provisioned: row.get(4)?,
     })
 }
@@ -408,12 +373,12 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
 /// Inserts a revision, or updates it if it exists and is still pending.
 fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Config) -> Result<()> {
     conn.execute(
-        "INSERT INTO instance_revisions (instance_id, revision, agent, cpus, memory_mib, command,
+        "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, command,
              arguments, working_directory, environment, mounts, network_default, network_rules,
              provision_script)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT (instance_id, revision) DO UPDATE SET
-             agent = excluded.agent, cpus = excluded.cpus, memory_mib = excluded.memory_mib,
+             cpus = excluded.cpus, memory_mib = excluded.memory_mib,
              command = excluded.command, arguments = excluded.arguments,
              working_directory = excluded.working_directory, environment = excluded.environment,
              mounts = excluded.mounts, network_default = excluded.network_default,
@@ -422,7 +387,6 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
         params![
             instance_id,
             number,
-            config.agent,
             config.cpus,
             config.memory_mib,
             config.command,
@@ -443,26 +407,6 @@ fn json<T: DeserializeOwned>(row: &Row, index: usize) -> rusqlite::Result<T> {
     let text: String = row.get(index)?;
     serde_json::from_str(&text)
         .map_err(|error| rusqlite::Error::FromSqlConversionFailure(index, Type::Text, error.into()))
-}
-
-impl ToSql for Agent {
-    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
-        Ok(match self {
-            Agent::ClaudeCode => "claude-code",
-            Agent::Custom => "custom",
-        }
-        .into())
-    }
-}
-
-impl FromSql for Agent {
-    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
-        match value.as_str()? {
-            "claude-code" => Ok(Agent::ClaudeCode),
-            "custom" => Ok(Agent::Custom),
-            _ => Err(FromSqlError::InvalidType),
-        }
-    }
 }
 
 impl ToSql for NetworkAction {

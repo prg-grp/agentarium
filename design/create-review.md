@@ -10,7 +10,7 @@ New instance
 ──────────────────────────────────────────────────────────────────────
 Harness         Name          billing-service                     Edit
                 Agent         Claude Code
-                Provisioning  Default script for Claude Code
+                Provisioning  Script from the Claude Code preset
 ──────────────────────────────────────────────────────────────────────
 Agent           Runs       claude --permission-mode acceptEdits   Edit
                 In         /home/ubuntu/workspace
@@ -38,7 +38,7 @@ Cancel                                  [< Back]  [▶ Create and start]
 
 - Each section: title in the 220 px left column, key/value read-back (150 px key column in `tx3`, values in `tx` or monospace), "Edit" link in `acc` on the right that jumps to that step.
 - Writable shares repeat the `warn` direct-write sentence in short form.
-- Harness shows "Default script for Claude Code", "Template, not filled in yet" (custom agent, unchanged template), or "Customized script".
+- Harness shows the preset's name, and for provisioning "Script from the <preset> preset", "Template, not filled in yet" (custom agent, unchanged template), or "Custom script".
 - Environment shows variable names only; values are not repeated.
 - **Resources** are only editable here (the "advanced" section from the brief): steppers for processors and memory, plus a `tx3` line with what the Mac has available.
   - Defaults: 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.

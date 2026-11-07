@@ -210,7 +210,7 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 |---|---|---|
 | App shell | [design/app-shell.md](design/app-shell.md) | Sidebar, instance header, tabs, shared frame |
 | Empty application | [design/empty-state.md](design/empty-state.md) | No instances yet |
-| Create: harness | [design/create-harness.md](design/create-harness.md) | Creation flow, name, harness choice, provisioning script |
+| Create: harness | [design/create-harness.md](design/create-harness.md) | Creation flow, name, presets, provisioning script |
 | Create: agent | [design/create-agent.md](design/create-agent.md) | Launch, sign-in, environment |
 | Create: shared folders | [design/create-shared-folders.md](design/create-shared-folders.md) | Folder table, access levels, direct-write warning |
 | Create: network | [design/create-network.md](design/create-network.md) | Default action, domain and address allow/deny lists, conflicts |

@@ -3,7 +3,7 @@
 
 import { LineEdit, TextEdit, ScrollView, SpinBox, CheckBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { AgentKind, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
+import { PresetRow, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
 import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 
 // The draft being created. Rust (src/create.rs) owns it and checks it after every edit.
@@ -21,7 +21,12 @@ export global Creation {
     in-out property <int> memory-gb;
     in-out property <bool> dont-start;
 
-    in property <AgentKind> agent;
+    in property <[PresetRow]> presets;
+    // The selected preset, as an index into presets. Only the custom agent's script and
+    // command can be edited.
+    in property <int> preset;
+    in property <bool> is-custom;
+    in property <string> preset-name;
     in property <bool> script-changed;
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
@@ -53,7 +58,7 @@ export global Creation {
     callback cancel();
     callback create();
     callback set-name(name: string);
-    callback set-agent(agent: AgentKind);
+    callback set-preset(index: int);
     callback set-script(script: string);
     callback reset-script();
     callback set-command(command: string);
@@ -173,12 +178,14 @@ component Field {
     in property <string> label;
     in property <bool> mono;
     in property <bool> invalid;
+    in property <bool> read-only;
     callback edited(text: string);
     callback accepted(text: string);
 
     HorizontalLayout {
         LineEdit {
             text <=> root.text;
+            read-only: root.read-only;
             placeholder-text: root.placeholder;
             font-family: root.mono ? Theme.mono : "";
             font-size: root.mono ? Theme.font-mono : Theme.font-body;
@@ -549,10 +556,13 @@ export component CreateInstance {
 
                 // Step 1: harness
                 if Creation.step == 0: VerticalLayout {
+                    // A preset's script is shown on request, read-only.
+                    property <bool> show-script;
+
                     Section {
                         first: true;
                         title: "Name and harness";
-                        description: "The harness is the agent that runs in this instance.";
+                        description: "The harness is the agent that runs in this instance. A preset installs a known agent and allows the domains it needs.";
 
                         VerticalLayout {
                             spacing: 6px;
@@ -593,26 +603,12 @@ export component CreateInstance {
                                 font-size: Theme.font-small;
                             }
 
-                            Radio {
-                                label: "Claude Code";
-                                checked: Creation.agent == AgentKind.claude-code;
+                            for row[index] in Creation.presets: Radio {
+                                label: row.name;
+                                note: row.note;
+                                checked: index == Creation.preset;
                                 clicked => {
-                                    Creation.set-agent(AgentKind.claude-code);
-                                }
-                            }
-
-                            Radio {
-                                label: "Codex";
-                                note: "Not available yet";
-                                enabled: false;
-                            }
-
-                            Radio {
-                                label: "Custom agent";
-                                note: "Bring your own provisioning script";
-                                checked: Creation.agent == AgentKind.custom;
-                                clicked => {
-                                    Creation.set-agent(AgentKind.custom);
+                                    Creation.set-preset(index);
                                 }
                             }
                         }
@@ -620,10 +616,25 @@ export component CreateInstance {
 
                     Section {
                         title: "Provisioning script";
-                        description: "Runs once as root with internet access before the first start. Must be safe to run again.";
+                        description: Creation.is-custom
+                            ? "Runs once as root with internet access before the first start. Must be safe to run again."
+                            : "Defined by the \{Creation.preset-name} preset. Runs once as root with internet access before the first start. Choose Custom agent to write your own.";
 
-                        TextEdit {
+                        if !Creation.is-custom: HorizontalLayout {
+                            alignment: start;
+                            AppButton {
+                                kind: ButtonKind.ghost;
+                                compact: true;
+                                text: show-script ? "Hide script" : "Show script";
+                                clicked => {
+                                    show-script = !show-script;
+                                }
+                            }
+                        }
+
+                        if Creation.is-custom || show-script: TextEdit {
                             height: 320px;
+                            read-only: !Creation.is-custom;
                             text <=> Creation.script;
                             font-family: Theme.mono;
                             font-size: Theme.font-mono;
@@ -639,7 +650,7 @@ export component CreateInstance {
                             AppButton {
                                 kind: ButtonKind.ghost;
                                 compact: true;
-                                text: "Reset to default";
+                                text: "Reset to template";
                                 clicked => {
                                     Creation.reset-script();
                                 }
@@ -673,6 +684,7 @@ export component CreateInstance {
                                     mono: true;
                                     label: "Command";
                                     text <=> Creation.command;
+                                    read-only: !Creation.is-custom;
                                     invalid: Creation.command-error != "";
                                     edited(text) => {
                                         Creation.set-command(text);
@@ -686,6 +698,13 @@ export component CreateInstance {
                                         color: Theme.bad;
                                         text: Creation.command-error;
                                     }
+                                }
+
+                                if !Creation.is-custom: Text {
+                                    text: "Set by the \{Creation.preset-name} preset.";
+                                    color: Theme.tx2;
+                                    font-size: Theme.font-small;
+                                    vertical-alignment: center;
                                 }
                             }
                         }
@@ -1191,7 +1210,7 @@ export component CreateInstance {
 
                         KeyValue {
                             key: "Agent";
-                            value: Creation.agent == AgentKind.custom ? "Custom agent" : "Claude Code";
+                            value: Creation.preset-name;
                         }
 
                         KeyValue {

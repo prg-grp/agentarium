@@ -37,6 +37,7 @@ Resources            │ api.anthropic.com      Exact name                      
 
 - Left column, 220 px, 1 px `line` right border: Agent and launch, Shared folders, Network, Environment, Resources.
 - Selected section: `raise` background, `tx` 500. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px.
+- There is no preset in Settings: the preset only fills in a new instance's first revision (see [create-harness.md](create-harness.md#presets)). Every setting, including the command and the network rules, is edited directly.
 
 ## Change marks inside sections
 

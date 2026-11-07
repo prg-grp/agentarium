@@ -27,6 +27,7 @@ Cancel                                        [< Back]  [Continue to review]
 
 ## Elements
 
+- **Initial rules:** the lists start with the preset's rules (see [create-harness.md](create-harness.md#presets)), such as `api.anthropic.com` for Claude Code. They are ordinary rules: the user can change their scope or remove them. A custom agent starts with no rules.
 - **Default action:** heading "Destinations not listed below" with a segmented control "Deny | Allow" (Deny is the default) and one explanatory sentence that changes with the choice:
   - Deny: "The agent can reach only the destinations you allow."
   - Allow: "The agent can reach any destination except the ones you deny."

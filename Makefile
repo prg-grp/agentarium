@@ -37,6 +37,9 @@ check:
 	bash -n scripts/build-guest.sh
 	bash -n vms/provision/claude-code.sh
 	bash -n vms/provision/custom.sh
+	bash -n vms/provision/codex.sh
+	bash -n vms/provision/gemini-cli.sh
+	bash -n vms/provision/opencode.sh
 	sh -n scripts/codesign-run.sh
 
 clean-guest:

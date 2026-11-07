@@ -25,7 +25,7 @@ Cancel                              [< Back]  [Continue to shared folders]
 ## Elements
 
 - **Launch:**
-  - Command field (200 px, monospace), prefilled with the harness default (`claude`; empty for a custom agent).
+  - Command field (200 px, monospace), set by the preset (`claude`, `codex`, `gemini`, `opencode`) and read-only, with "Set by the <preset> preset." in `tx2` beside it. It is editable, and starts empty, only for a custom agent.
   - Arguments shown as tokens (monospace on `raise`, 4 px radius, each with a remove icon), followed by an "Add argument" field. Return adds the typed argument. Arguments form an argv list, not a single string; each is passed as it is.
   - Working directory inside the instance (monospace, max 360 px). Default: `/home/ubuntu/workspace`, the agent user's `~/workspace`, where shared folders are placed by default.
   - Description: "What starts when the instance boots. Runs directly, not through a shell." If shell execution is supported later, it must be an explicit option.

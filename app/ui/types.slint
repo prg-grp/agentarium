@@ -6,7 +6,11 @@ export enum InstanceState { running, agent-exited, maintenance, startup-failed, 
 
 export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, restart-agent, delete }
 
-export enum AgentKind { claude-code, codex, custom }
+// A preset offered on the Harness step, in the order of Preset::ALL (src/preset.rs).
+export struct PresetRow {
+    name: string,
+    note: string,
+}
 
 export struct StatusReading {
     value: string,
