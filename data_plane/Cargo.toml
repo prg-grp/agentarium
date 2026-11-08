@@ -1,7 +1,15 @@
 [package]
 name = "data_plane"
+description = "The protobuf protocol from the guest observer to the app, sent over virtio-vsock."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# Framing: the same length-prefixed frames as the command plane.
+command_plane = { path = "../command_plane" }
+prost = "0.14.4"
+
+[build-dependencies]
+prost-build = "0.14.4"
+protox = "0.10.0"

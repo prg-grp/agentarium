@@ -44,6 +44,8 @@ export component TerminalView {
     property <bool> busy: !log && transition != "";
     // The "Boot log" link in the session's header was clicked.
     callback open-log();
+    // The boot log's "Open logs" button was clicked.
+    callback open-logs();
 
     init => {
         focus.focus();
@@ -96,6 +98,16 @@ export component TerminalView {
                     color: Theme.tx3;
                     font-size: Theme.font-meta;
                     vertical-alignment: center;
+                }
+
+                if root.log: AppButton {
+                    text: "Open logs";
+                    icon: @image-url("icons/folder.svg");
+                    kind: ButtonKind.ghost;
+                    compact: true;
+                    clicked => {
+                        root.open-logs();
+                    }
                 }
 
                 if !root.log: Text {

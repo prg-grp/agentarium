@@ -1,0 +1,187 @@
+// The data plane from the guest observer to the app.
+//
+// In agent mode only, the guest supervisor starts the observer (agentarium-observer), which
+// loads eBPF programs that watch the agent and every process it starts. The observer
+// listens on vsock port 701 (see PORT in src/lib.rs); only root can listen on ports up to
+// 1023 in the guest. The app connects once the agent session is ready, and again after the
+// connection closes. Frames are the command plane's: a big-endian u32 length followed by
+// the encoded message.
+//
+// The observer says Hello first, then sends Events batches as they occur and Health every
+// HEALTH_INTERVAL. Nothing goes from the app to the observer. Events that occur while the
+// app isn't connected wait in a bounded queue; what doesn't fit is counted as lost.
+//
+// An event is evidence the guest supplies about what happened, not a tamper-proof record:
+// root in the guest can stop the observer. Gaps show as missing sequence numbers and in
+// Health, and the supervisor reports whether the observer runs (Status.collector).
+syntax = "proto3";
+
+package agent_toolbox.data_plane.v1;
+
+// Observer to app.
+message ObserverMessage {
+  oneof kind {
+    Hello hello = 1;
+    Events events = 2;
+    Health health = 3;
+  }
+}
+
+// Sent by the observer on every new connection.
+message Hello {
+  uint32 protocol_version = 1;
+  // Names this observer process within the boot (the guest's boot clock when it started,
+  // in nanoseconds). It changes when the supervisor starts the observer again; execution
+  // numbers and sequence numbers count from 1 in each run.
+  uint64 run = 2;
+}
+
+message Events {
+  repeated Event events = 1;
+}
+
+// One observation about a process of the agent.
+message Event {
+  // Counts up from 1 in this run (see Hello). A gap means events were lost.
+  uint64 sequence = 1;
+  // When the kernel saw it, in nanoseconds since the Unix epoch (the guest's clock).
+  uint64 time_unix_ns = 2;
+  // The execution that did it (see Exec); 0 if unknown.
+  uint64 execution = 3;
+  // The process (thread group) ID in the guest.
+  uint32 pid = 4;
+  oneof kind {
+    Exec exec = 10;
+    ExecFailed exec_failed = 11;
+    Exit exit = 12;
+    FileAccess file = 13;
+    Connection connection = 14;
+    CredentialChange credentials = 15;
+  }
+}
+
+// A process started a program. `Event.execution` is the new execution's number, unique
+// within this run (see Hello); every later event of the process refers to it until the
+// process runs another program.
+message Exec {
+  // The execution that started this one: the program that ran the process that forked
+  // this one, or that ran this process before. 0 for the agent itself.
+  uint64 parent_execution = 1;
+  uint32 ppid = 2;
+  uint32 uid = 3;
+  uint32 euid = 4;
+  uint32 gid = 5;
+  uint32 egid = 6;
+  // The program as the process asked for it (e.g. a script, or a symbolic link), made
+  // absolute with the working directory.
+  string path = 7;
+  // The file the kernel actually ran: symbolic links resolved, and the interpreter
+  // (e.g. /usr/bin/python3.12) when `path` is a script.
+  string binary = 8;
+  repeated string argv = 9;
+  bool argv_truncated = 10;
+  string cwd = 11;
+  // A path above was too long and is cut.
+  bool path_truncated = 12;
+}
+
+// A process tried to run a program and the kernel refused, e.g. without permission. A
+// program that doesn't exist (ENOENT) isn't reported: shells try every PATH entry.
+message ExecFailed {
+  uint64 parent_execution = 1;
+  // As the process gave it, made absolute with the working directory if known.
+  string path = 2;
+  // The errno, positive (e.g. 13 for EACCES).
+  int32 errno = 3;
+}
+
+// The process with `Event.execution` ended.
+message Exit {
+  // The exit status; -1 if it was ended by a signal.
+  int32 code = 1;
+  // 0 if it exited by itself.
+  int32 signal = 2;
+}
+
+// Bits of FileAccess.access.
+enum Access {
+  ACCESS_NONE = 0;
+  ACCESS_READ = 1;
+  ACCESS_WRITE = 2;
+  // Opened with O_CREAT: the file may have been created.
+  ACCESS_CREATE = 4;
+  ACCESS_TRUNCATE = 8;
+  ACCESS_APPEND = 16;
+  // A directory, opened to list it.
+  ACCESS_DIRECTORY = 32;
+  ACCESS_DELETE = 64;
+  // Renamed to `new_path`.
+  ACCESS_RENAME = 128;
+}
+
+// A process opened, deleted or renamed a file. Only the first open of a file by a process
+// with the same access is reported, and reads of system libraries and data are left out.
+// An open for reading doesn't prove the content was read.
+message FileAccess {
+  string path = 1;
+  // Access bits.
+  uint32 access = 2;
+  // Renames only.
+  string new_path = 3;
+  bool path_truncated = 4;
+}
+
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_TCP = 1;
+  PROTOCOL_UDP = 2;
+}
+
+enum ConnectionResult {
+  CONNECTION_RESULT_UNSPECIFIED = 0;
+  // TCP: the handshake completed.
+  CONNECTION_RESULT_CONNECTED = 1;
+  // TCP: the connection was refused, timed out, or was given up.
+  CONNECTION_RESULT_FAILED = 2;
+  // UDP: a datagram was addressed to the destination (or the socket connected to it). Only
+  // the first per process and destination is reported.
+  CONNECTION_RESULT_SENT = 3;
+}
+
+// A process contacted a network address. DNS queries are UDP to the gateway's port 53.
+message Connection {
+  Protocol protocol = 1;
+  // 4 bytes for IPv4, 16 for IPv6.
+  bytes address = 2;
+  uint32 port = 3;
+  ConnectionResult result = 4;
+}
+
+// A process changed its user or group IDs or gained capabilities: sudo, su, a setuid
+// program, setuid() and the like. Reported before the Exec that caused it, if one did.
+message CredentialChange {
+  uint32 uid_before = 1;
+  uint32 uid_after = 2;
+  uint32 euid_before = 3;
+  uint32 euid_after = 4;
+  uint32 gid_before = 5;
+  uint32 gid_after = 6;
+  uint32 egid_before = 7;
+  uint32 egid_after = 8;
+  bool capabilities_raised = 9;
+}
+
+// The observer's counters since it started, sent every HEALTH_INTERVAL.
+message Health {
+  // Events the kernel couldn't hand to the observer: its buffer was full.
+  uint64 lost_kernel = 1;
+  // Events dropped because the app wasn't connected and the queue was full.
+  uint64 lost_queue = 2;
+  // Events left out on purpose, by reason (e.g. "exec_not_found", "repeated_open",
+  // "system_path", "no_port"). They are noise, not losses.
+  map<string, uint64> filtered = 3;
+  // Processes of the agent alive now.
+  uint64 processes = 4;
+  // The last sequence number sent.
+  uint64 sequence = 5;
+}

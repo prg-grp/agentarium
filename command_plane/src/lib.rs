@@ -46,6 +46,61 @@ pub fn write_message(writer: &mut impl Write, message: &impl Message) -> io::Res
     writer.flush()
 }
 
+/// The guest's side of a vsock connection: listening and accepting. Used by the guest
+/// supervisor (command plane) and the guest observer (data plane).
+#[cfg(target_os = "linux")]
+pub mod vsock {
+    use std::fs::File;
+    use std::io;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    /// Listens on vsock `port` for the host. Ports up to 1023 need root.
+    pub fn listen(port: u32) -> io::Result<OwnedFd> {
+        let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let socket = unsafe { OwnedFd::from_raw_fd(fd) };
+        let mut address: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+        address.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+        address.svm_port = port;
+        address.svm_cid = libc::VMADDR_CID_ANY;
+        let bound = unsafe {
+            libc::bind(
+                socket.as_raw_fd(),
+                (&raw const address).cast(),
+                size_of::<libc::sockaddr_vm>() as libc::socklen_t,
+            )
+        };
+        if bound < 0 || unsafe { libc::listen(socket.as_raw_fd(), 1) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(socket)
+    }
+
+    /// Accepts the next connection; returns it with the peer's vsock CID and port.
+    pub fn accept(listener: &OwnedFd) -> io::Result<(File, u32, u32)> {
+        let mut address: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
+        let mut length = size_of::<libc::sockaddr_vm>() as libc::socklen_t;
+        let fd = unsafe {
+            libc::accept4(
+                listener.as_raw_fd(),
+                (&raw mut address).cast(),
+                &mut length,
+                libc::SOCK_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok((
+            unsafe { File::from_raw_fd(fd) },
+            address.svm_cid,
+            address.svm_port,
+        ))
+    }
+}
+
 /// Reads one message written by `write_message`. A closed connection is `UnexpectedEof`.
 pub fn read_message<M: Message + Default>(reader: &mut impl Read) -> io::Result<M> {
     let mut len = [0; 4];

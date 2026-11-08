@@ -32,6 +32,11 @@ COPY --from=supervisor --chmod=755 agentarium-supervisor /usr/local/sbin/agentar
 COPY agentarium-supervisor.service /etc/systemd/system/agentarium-supervisor.service
 RUN systemctl enable agentarium-supervisor.service
 
+# The observer (built from guest_observer, build context "observer") loads eBPF programs
+# that watch what the agent does. Only the supervisor starts it, in agent mode, so it has
+# no systemd unit: maintenance and provision boots are never observed.
+COPY --from=observer --chmod=755 agentarium-observer /usr/local/sbin/agentarium-observer
+
 # The command plane's vsock transport, loaded early so the supervisor can listen right away.
 RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf
 

@@ -26,6 +26,8 @@ export component AppWindow inherits Window {
     callback instance-selected(string);
     // The tab changed; the Terminal and Logs tabs show different terminals.
     callback tab-changed(int);
+    // The instance's logs folder should open in Finder.
+    callback open-logs(string);
     callback drag-window();
 
     property <InstanceItem> current: instances[selected-index];
@@ -458,6 +460,9 @@ export component AppWindow inherits Window {
                 if current-tab == 1 && current.has-terminal: TerminalView {
                     vertical-stretch: 1;
                     log: true;
+                    open-logs => {
+                        root.open-logs(current.id);
+                    }
                 }
 
                 if current-tab == 2: StatusTab {

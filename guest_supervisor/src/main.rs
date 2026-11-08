@@ -9,7 +9,10 @@
 //!
 //! In agent mode the agent runs in a cgroup of its own, and the supervisor reports Status
 //! (the guest's and the agent's resource use, and whether the agent runs) every
-//! STATUS_INTERVAL and whenever the agent starts or exits.
+//! STATUS_INTERVAL and whenever the agent starts or exits. Before the agent starts, it
+//! starts the observer (agentarium-observer) for that cgroup and keeps it running; the
+//! observer streams what the agent does to the app over the data plane. Maintenance and
+//! provision boots aren't observed: nothing starts the observer there.
 //!
 //! The supervisor logs with `tracing` to stdout, which systemd sends to the journal and
 //! to the kernel console (`hvc0`, the app's read-only Logs tab). Logs name programs and
@@ -18,17 +21,18 @@
 
 use std::ffi::{CStr, CString};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::io::{self, BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use command_plane::vsock::{accept, listen};
 use command_plane::{
     AgentExit, AgentUsage, CollectorState, EnvVar, GuestMessage, Hello, HostMessage, Mode, Mount,
     PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, STATUS_INTERVAL, Start, StartFailed,
@@ -46,6 +50,10 @@ const RUN_DIR: &str = "/run/agentarium";
 /// Where the virtio-fs share with all shared folders is mounted. Root only: the session
 /// reaches each folder only where it is mounted.
 const SHARES_DIR: &str = "/run/agentarium/shares";
+/// The observer, baked into the base rootfs beside the supervisor.
+const OBSERVER: &str = "/usr/local/sbin/agentarium-observer";
+/// How long the agent's start waits for the observer to attach its programs.
+const OBSERVER_READY: Duration = Duration::from_secs(10);
 
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
@@ -57,6 +65,8 @@ struct AgentState {
     running: bool,
     restarts: u32,
     last_exit: Option<AgentExit>,
+    /// Whether the observer runs.
+    collector: CollectorState,
 }
 
 /// The agent's cgroup (v2), beside the supervisor's own in the service's cgroup, which
@@ -114,7 +124,7 @@ fn main() {
     // The vsock transport module may still be loading early in the boot.
     let mut attempt = 1;
     let listener = loop {
-        match listen() {
+        match listen(PORT) {
             Ok(listener) => break listener,
             Err(error) if attempt == 1 => {
                 warn!(port = PORT, %error, "couldn't listen on vsock, trying again every second");
@@ -250,7 +260,8 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
             let cgroup_dir = cgroup.as_ref().map(|cgroup| cgroup.dir.clone());
             let agent = Arc::new(Mutex::new(AgentState::default()));
             let report = {
-                let (channel, agent) = (channel.clone(), agent.clone());
+                let (channel, agent, cgroup_dir) =
+                    (channel.clone(), agent.clone(), cgroup_dir.clone());
                 move || {
                     let status = status(&agent.lock().unwrap(), cgroup_dir.as_deref());
                     send(&channel, guest_message::Kind::Status(status));
@@ -263,6 +274,15 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                     periodic();
                 }
             });
+            // Without its own cgroup, the agent can't be told apart from the rest of the
+            // guest, so it runs unobserved.
+            match &cgroup_dir {
+                Some(dir) => observe(dir, &agent),
+                None => {
+                    warn!("not observing the agent: it has no cgroup");
+                    agent.lock().unwrap().collector = CollectorState::Stopped;
+                }
+            }
             repeat(tty, &launch.command, || {
                 {
                     let mut state = agent.lock().unwrap();
@@ -333,6 +353,66 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
             error!("the app sent no mode to start");
             tty.notify("The app sent no mode to start.");
         }
+    }
+}
+
+/// Starts the observer for the agent's cgroup and waits until its programs are attached, at
+/// most OBSERVER_READY. A thread keeps it running: whenever it exits, it is started again
+/// after RESTART_DELAY. The agent starts either way; Status tells whether it is observed.
+fn observe(cgroup: &Path, agent: &Arc<Mutex<AgentState>>) {
+    if !Path::new(OBSERVER).exists() {
+        warn!(
+            path = OBSERVER,
+            "not observing the agent: the observer isn't installed"
+        );
+        agent.lock().unwrap().collector = CollectorState::NotInstalled;
+        return;
+    }
+    agent.lock().unwrap().collector = CollectorState::Stopped;
+    let (ready, waited) = mpsc::channel();
+    let (cgroup, agent) = (cgroup.to_owned(), agent.clone());
+    thread::spawn(move || {
+        let collector = |state| agent.lock().unwrap().collector = state;
+        loop {
+            // It runs in the supervisor's cgroup, not the agent's, so it doesn't observe
+            // itself. Its logs go where the supervisor's go.
+            let started = Command::new(OBSERVER)
+                .arg("--cgroup")
+                .arg(&cgroup)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .spawn();
+            match started {
+                Ok(mut child) => {
+                    info!(pid = child.id(), "started the observer");
+                    // It prints `ready` once its programs are attached, or exits.
+                    let attached = child.stdout.take().is_some_and(|stdout| {
+                        BufReader::new(stdout)
+                            .lines()
+                            .next()
+                            .is_some_and(|line| line.is_ok_and(|line| line == "ready"))
+                    });
+                    if attached {
+                        info!("the observer is ready");
+                        collector(CollectorState::Running);
+                    }
+                    let _ = ready.send(());
+                    let status = child.wait();
+                    collector(CollectorState::Stopped);
+                    match status {
+                        Ok(status) => warn!(status = %ended(status), "the observer stopped"),
+                        Err(error) => warn!(%error, "lost the observer"),
+                    }
+                }
+                Err(error) => error!(%error, "couldn't start the observer"),
+            }
+            let _ = ready.send(());
+            debug!(delay = ?RESTART_DELAY, "starting the observer again after a delay");
+            thread::sleep(RESTART_DELAY);
+        }
+    });
+    if waited.recv_timeout(OBSERVER_READY).is_err() {
+        warn!("the observer isn't ready yet; starting the agent without waiting");
     }
 }
 
@@ -778,7 +858,7 @@ fn status(agent: &AgentState, cgroup: Option<&Path>) -> Status {
                 .saturating_sub(field(&read(&dir.join("memory.stat")), "inactive_file ")),
             oom_kills: field(&read(&dir.join("memory.events")), "oom_kill "),
         }),
-        collector: CollectorState::NotInstalled.into(),
+        collector: agent.collector.into(),
     }
 }
 
@@ -800,50 +880,4 @@ fn power_off() {
         Ok(status) => error!(status = %ended(status), "systemctl poweroff failed"),
         Err(error) => error!(%error, "couldn't run systemctl poweroff"),
     }
-}
-
-/// Listens on the command plane's port for the app. Only root may bind it.
-fn listen() -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let socket = unsafe { OwnedFd::from_raw_fd(fd) };
-    let mut address: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
-    address.svm_family = libc::AF_VSOCK as libc::sa_family_t;
-    address.svm_port = PORT;
-    address.svm_cid = libc::VMADDR_CID_ANY;
-    let bound = unsafe {
-        libc::bind(
-            socket.as_raw_fd(),
-            (&raw const address).cast(),
-            size_of::<libc::sockaddr_vm>() as libc::socklen_t,
-        )
-    };
-    if bound < 0 || unsafe { libc::listen(socket.as_raw_fd(), 1) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(socket)
-}
-
-/// Accepts the next connection; returns it with the peer's vsock CID and port.
-fn accept(listener: &OwnedFd) -> io::Result<(File, u32, u32)> {
-    let mut address: libc::sockaddr_vm = unsafe { std::mem::zeroed() };
-    let mut length = size_of::<libc::sockaddr_vm>() as libc::socklen_t;
-    let fd = unsafe {
-        libc::accept4(
-            listener.as_raw_fd(),
-            (&raw mut address).cast(),
-            &mut length,
-            libc::SOCK_CLOEXEC,
-        )
-    };
-    if fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok((
-        unsafe { File::from_raw_fd(fd) },
-        address.svm_cid,
-        address.svm_port,
-    ))
 }

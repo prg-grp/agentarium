@@ -1,6 +1,24 @@
 [workspace]
 resolver = "3"
-members = ["app", "command_plane", "data_plane", "guest_supervisor"]
+members = [
+    "app",
+    "command_plane",
+    "data_plane",
+    "guest_observer",
+    "guest_observer_common",
+    "guest_observer_ebpf",
+    "guest_supervisor",
+]
+# guest_observer_ebpf is a BPF program: guest_observer's build script compiles it for the
+# BPF target with nightly (aya-build). A plain build for the host would fail.
+default-members = [
+    "app",
+    "command_plane",
+    "data_plane",
+    "guest_observer",
+    "guest_observer_common",
+    "guest_supervisor",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,3 +28,9 @@ rust-version = "1.99"
 [profile.release]
 codegen-units = 1
 lto = true
+
+# BTF needs the debug information, and the eBPF object must keep it.
+[profile.release.package.guest_observer_ebpf]
+debug = 2
+codegen-units = 1
+strip = false

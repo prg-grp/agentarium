@@ -1,0 +1,17 @@
+[package]
+name = "guest_observer_ebpf"
+description = "The observer's eBPF programs; guest_observer's build script compiles them for the BPF target."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aya-ebpf = { version = "0.3.0", default-features = false }
+guest_observer_common = { path = "../guest_observer_common" }
+
+[build-dependencies]
+which = { version = "8", default-features = false }
+
+[[bin]]
+name = "guest_observer_ebpf"
+path = "src/main.rs"

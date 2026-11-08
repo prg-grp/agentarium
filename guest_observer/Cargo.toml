@@ -1,0 +1,26 @@
+[package]
+name = "guest_observer"
+description = "The guest observer (agentarium-observer), baked into the base rootfs: loads the eBPF programs in agent mode and streams what the agent does to the app over the data plane."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+# Linux guest only: built for aarch64-unknown-linux-musl by `make rootfs`.
+[[bin]]
+name = "agentarium-observer"
+path = "src/main.rs"
+
+[dependencies]
+aya = { version = "0.16.0", default-features = false }
+data_plane = { path = "../data_plane" }
+guest_observer_common = { path = "../guest_observer_common", features = ["user"] }
+libc = "0.2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
+
+[build-dependencies]
+aya-build = { version = "0.2.1", default-features = false }
+cargo_metadata = { version = "0.23", default-features = false }
+# Not used by the code: it tells cargo to rebuild when the eBPF programs change. aya-build
+# compiles them for the BPF target itself (cargo can't build them with -Z build-std).
+guest_observer_ebpf = { path = "../guest_observer_ebpf" }

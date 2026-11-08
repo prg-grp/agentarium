@@ -10,6 +10,11 @@
 //! session terminal's size (Resize) and Stop. In agent mode it passes the supervisor's
 //! Status reports on, with CPU use computed from two reports, and notices when they stop
 //! arriving. Only the latest report is kept; nothing is stored.
+//!
+//! In agent mode the controller also connects to the guest observer's data plane once the
+//! session is ready, and again whenever that connection closes. A thread of its own (see
+//! observer.rs) stores what the observer saw; the controller only passes on its health
+//! every two seconds, and notices when it stops arriving.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -17,6 +22,7 @@ use std::fs::File;
 use std::io;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
+use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -30,6 +36,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::db::{self, Db};
 use crate::editor::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
+use crate::observer::{self, Observed, Summary};
 use crate::policy::Policy;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
@@ -50,7 +57,11 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_RETRY: Duration = Duration::from_millis(250);
 
 /// How long an agent-mode boot may go without a Status report before it counts as lost.
+/// The same holds for the observer's Health reports.
 const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long to wait before connecting to the observer again while it doesn't listen.
+const OBSERVER_RETRY: Duration = Duration::from_secs(1);
 
 /// The shortest interval CPU use is computed over. Reports sent when the agent starts or
 /// exits can follow the previous one closely; they don't move the baseline.
@@ -82,6 +93,10 @@ enum Command {
         columns: u32,
         rows: u32,
     },
+    /// A connection attempt to the observer finished.
+    ObserverConnected(Result<File, String>),
+    /// From the data plane's thread.
+    Observed(Observed),
 }
 
 /// What a controller thread reports to the UI thread.
@@ -101,6 +116,10 @@ enum Event {
     Status(Status, Option<Cpu>),
     /// No Status arrived for `STATUS_TIMEOUT`.
     StatusLost,
+    /// The observer's latest Health.
+    Observer(Summary),
+    /// No Health arrived from the observer for `STATUS_TIMEOUT`.
+    ObserverStalled,
     /// The controller ended: the VM stopped, or failed with the error.
     Ended(Result<(), String>),
 }
@@ -150,10 +169,13 @@ impl Drop for Channel {
 }
 
 /// Runs a VM configured from `spec` on a new thread until it stops; its guest supervisor
-/// gets `start`. Returns the sender for asking it to stop.
+/// gets `start`. What the observer sees is stored for the boot `boot`, and the boot log is
+/// also written to `log_file`. Returns the sender for asking it to stop.
 fn spawn(
     spec: VmSpec,
     start: Start,
+    boot: i64,
+    log_file: File,
     report: impl Fn(Event) + Send + 'static,
 ) -> std::io::Result<Sender<Command>> {
     let (commands, received) = mpsc::channel();
@@ -162,7 +184,7 @@ fn spawn(
         .name("vm-control".into())
         .spawn(move || {
             report(Event::Ended(run(
-                &spec, start, &handlers, &received, &report,
+                &spec, start, boot, log_file, &handlers, &received, &report,
             )))
         })?;
     Ok(commands)
@@ -172,11 +194,14 @@ fn spawn(
 fn run(
     spec: &VmSpec,
     start: Start,
+    boot: i64,
+    log_file: File,
     commands: &Sender<Command>,
     received: &Receiver<Command>,
     report: &impl Fn(Event),
 ) -> Result<(), String> {
     let (vm, session, log) = Vm::create(spec)?;
+    let log = log.with_copy(log_file);
     let resized = commands.clone();
     let session = session.with_resize(move |columns, rows| {
         let _ = resized.send(Command::Resize {
@@ -219,6 +244,20 @@ fn run(
     let mut last_status: Option<Instant> = None;
     let mut status_lost = false;
     let mut baseline: Option<Status> = None;
+    // Agent mode only: the observer's data plane, as the command plane above, and when its
+    // last Health arrived (or the connecting started).
+    let mut stream: Option<observer::Stream> = None;
+    let mut observer_connecting = false;
+    let mut observer_next: Option<Instant> = None;
+    let mut last_health: Option<Instant> = None;
+    let mut observer_stalled = false;
+    // The shared folders as (guest path, Mac path), for the observer's file paths.
+    let mounts: Vec<(String, PathBuf)> = start
+        .mounts
+        .iter()
+        .zip(&spec.shares)
+        .map(|(mount, share)| (mount.guest_path.clone(), share.host_path.clone()))
+        .collect();
     let mut last = VmState::Starting;
     loop {
         let wait = [deadline, next_connect]
@@ -230,6 +269,7 @@ fn run(
             Ok(Command::Stop) if deadline.is_none() => {
                 hello_deadline = None;
                 last_status = None;
+                last_health = None;
                 deadline = Some(Instant::now() + STOP_TIMEOUT);
                 // Before the supervisor answers, the power button asks the guest instead.
                 let sent = channel
@@ -278,6 +318,8 @@ fn run(
                             Ok(()) => {
                                 if agent_mode {
                                     last_status = Some(Instant::now());
+                                    last_health = Some(Instant::now());
+                                    observer_next = Some(Instant::now());
                                 }
                                 report(Event::Ready);
                             }
@@ -341,6 +383,34 @@ fn run(
                     next_connect = Some(Instant::now() + CONNECT_RETRY);
                 }
             }
+            Ok(Command::ObserverConnected(connected)) => {
+                observer_connecting = false;
+                let report = commands.clone();
+                match connected.and_then(|socket| {
+                    observer::spawn(socket, boot, mounts.clone(), move |observed| {
+                        let _ = report.send(Command::Observed(observed));
+                    })
+                    .map_err(|error| error.to_string())
+                }) {
+                    Ok(opened) => stream = Some(opened),
+                    // The observer doesn't listen yet, or not at all.
+                    Err(_) if deadline.is_none() => {
+                        observer_next = Some(Instant::now() + OBSERVER_RETRY);
+                    }
+                    Err(_) => {}
+                }
+            }
+            Ok(Command::Observed(Observed::Health(summary))) if deadline.is_none() => {
+                last_health = Some(Instant::now());
+                observer_stalled = false;
+                report(Event::Observer(summary));
+            }
+            Ok(Command::Observed(Observed::Disconnected)) => {
+                stream = None;
+                if deadline.is_none() {
+                    observer_next = Some(Instant::now() + OBSERVER_RETRY);
+                }
+            }
             // A repeated stop request, a completion without error, or the poll interval.
             Ok(_) | Err(_) => {}
         }
@@ -357,9 +427,25 @@ fn run(
                 let _ = connected.send(Command::Connected(result));
             });
         }
+        if !observer_connecting
+            && stream.is_none()
+            && deadline.is_none()
+            && observer_next.is_some_and(|at| now >= at)
+        {
+            observer_next = None;
+            observer_connecting = true;
+            let connected = commands.clone();
+            vm.connect(data_plane::PORT, move |result| {
+                let _ = connected.send(Command::ObserverConnected(result));
+            });
+        }
         if !status_lost && last_status.is_some_and(|at| now >= at + STATUS_TIMEOUT) {
             status_lost = true;
             report(Event::StatusLost);
+        }
+        if !observer_stalled && last_health.is_some_and(|at| now >= at + STATUS_TIMEOUT) {
+            observer_stalled = true;
+            report(Event::ObserverStalled);
         }
         if hello_deadline.is_some_and(|at| now >= at) {
             hello_deadline = None;
@@ -413,6 +499,11 @@ struct Running {
     cpu: Option<Cpu>,
     /// Set while Status reports are overdue.
     status_lost: bool,
+    /// The boot's record in the database.
+    boot: i64,
+    /// Agent mode: the observer's latest Health, and whether it is overdue.
+    observed: Option<Summary>,
+    observer_stalled: bool,
 }
 
 /// Which of an instance's terminals is shown: the session (Terminal tab) or the boot log
@@ -476,9 +567,30 @@ impl VmControl {
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
         // Frozen right away, so Settings can't change the revision this boot just read.
-        if let Err(error) = self.db.mark_booted(id, revision) {
-            return self.failed(id, mode, &format!("couldn't record the boot: {error}"));
-        }
+        let mode_name = match mode {
+            BootMode::Agent => "agent",
+            BootMode::Maintenance => "maintenance",
+            BootMode::Provision => "provision",
+        };
+        let (boot, started_at) = match self
+            .db
+            .mark_booted(id, revision)
+            .and_then(|()| self.db.record_boot(id, revision, mode_name))
+        {
+            Ok(recorded) => recorded,
+            Err(error) => {
+                return self.failed(id, mode, &format!("couldn't record the boot: {error}"));
+            }
+        };
+        // The boot log is kept per boot, beyond the Logs tab's next start, named by the
+        // boot's start in unix seconds.
+        let name = format!("{}.log", started_at / 1000);
+        let log_file = match db::logs_dir(id).and_then(|dir| Ok(File::create(dir.join(name))?)) {
+            Ok(file) => file,
+            Err(error) => {
+                return self.failed(id, mode, &format!("couldn't create the boot log: {error}"));
+            }
+        };
         self.update_item(id, |item| {
             item.active_revision = revision as i32;
             item.saved_revision = revision as i32;
@@ -486,7 +598,7 @@ impl VmControl {
         });
         let cpus = spec.cpus;
         let event_id = id.to_owned();
-        let spawned = spawn(spec, start, move |event| {
+        let spawned = spawn(spec, start, boot, log_file, move |event| {
             let id = event_id.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(control) = CONTROL.with_borrow(Weak::upgrade) {
@@ -510,6 +622,9 @@ impl VmControl {
                 status: None,
                 cpu: None,
                 status_lost: false,
+                boot,
+                observed: None,
+                observer_stalled: false,
             },
         );
         self.show(id, mode, VmState::Starting);
@@ -848,10 +963,36 @@ impl VmControl {
                     },
                 );
             }
+            Event::Observer(..) | Event::ObserverStalled => {
+                let Some((mode, stopping)) = self.running.borrow_mut().get_mut(id).map(|run| {
+                    match event {
+                        Event::Observer(summary) => {
+                            run.observed = Some(summary);
+                            run.observer_stalled = false;
+                        }
+                        _ => run.observer_stalled = true,
+                    }
+                    (run.mode, run.stop.is_some())
+                }) else {
+                    return;
+                };
+                self.show(
+                    id,
+                    mode,
+                    if stopping {
+                        VmState::Stopping
+                    } else {
+                        VmState::Running
+                    },
+                );
+            }
             Event::Ended(result) => {
                 let Some(run) = self.running.borrow_mut().remove(id) else {
                     return;
                 };
+                if let Err(error) = self.db.end_boot(run.boot) {
+                    eprintln!("Couldn't record the end of the boot: {error}");
+                }
                 let quitting = self.quitting.get();
                 // The VM is down either way; a failed deletion shows the instance stopped.
                 if run.stop == Some(AfterStop::Delete) && self.finish_delete(id) {
@@ -999,12 +1140,19 @@ impl VmControl {
             value: value.into(),
             tone,
         };
-        let (status, cpu, lost, cpus) = self
+        let (status, cpu, lost, cpus, observed, observer_stalled) = self
             .running
             .borrow()
             .get(id)
-            .map_or((None, None, false, 0), |run| {
-                (run.status, run.cpu, run.status_lost, run.cpus)
+            .map_or((None, None, false, 0, None, false), |run| {
+                (
+                    run.status,
+                    run.cpu,
+                    run.status_lost,
+                    run.cpus,
+                    run.observed,
+                    run.observer_stalled,
+                )
             });
         let exit = |exit: AgentExit| {
             if exit.signal != 0 {
@@ -1038,7 +1186,13 @@ impl VmControl {
             _ if lost => reading("Unknown", Tone::Warn),
             None => reading("Not running", Tone::Neutral),
             Some(status) => match status.collector() {
-                CollectorState::Running => reading("Running", Tone::Ok),
+                CollectorState::Running if observer_stalled => reading("Stalled", Tone::Warn),
+                CollectorState::Running => match observed {
+                    Some(Summary { lost }) if lost > 0 => {
+                        reading(&format!("Running, {lost} events lost"), Tone::Warn)
+                    }
+                    _ => reading("Running", Tone::Ok),
+                },
                 CollectorState::Stalled => reading("Degraded", Tone::Warn),
                 CollectorState::Stopped => reading("Not running", Tone::Warn),
                 CollectorState::NotInstalled | CollectorState::Unspecified => {

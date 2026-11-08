@@ -1,7 +1,9 @@
-//! The local SQLite database: instances and their configuration revisions.
+//! The local SQLite database: instances, their configuration revisions, their boots and
+//! what the guest observer saw during agent boots.
 //!
-//! It lives in the user's Application Support folder and is used on the main
-//! thread; the queries here are small and rare.
+//! It lives in the user's Application Support folder. `Db` is used on the main thread;
+//! the queries there are small and rare. The data plane writes the observations on a
+//! thread of its own, through a connection from `open_writer` (see observer.rs).
 //!
 //! Each saved configuration is a revision. The latest revision stays editable
 //! while it is pending (never booted); the first boot that uses it freezes it,
@@ -201,20 +203,41 @@ pub fn app_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// An instance's folder, holding its root disk (`root.ext4`).
+/// An instance's folder, holding its root disk (`root.ext4`) and its logs (`logs_dir`).
 pub fn instance_dir(id: &str) -> Result<PathBuf> {
     Ok(app_dir()?.join("instances").join(id))
+}
+
+/// An instance's logs folder, created if needed. It keeps each boot's console output
+/// (the Logs tab) as `<start>.log`, named by the boot's start in unix seconds.
+pub fn logs_dir(id: &str) -> Result<PathBuf> {
+    let dir = instance_dir(id)?.join("logs");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
+/// Opens a connection to the database in `dir`. With WAL, the main thread's connection and
+/// the data plane's can read while the other writes.
+fn connect(dir: &Path) -> Result<Connection> {
+    let conn = Connection::open(dir.join(FILE_NAME))?;
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    conn.pragma_update(None, "foreign_keys", true)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    Ok(conn)
+}
+
+/// Opens another connection for a thread of its own. `Db::open` has already brought the
+/// schema up to date.
+pub fn open_writer() -> Result<Connection> {
+    connect(&app_dir()?)
 }
 
 impl Db {
     /// Opens the database and brings its schema up to date.
     pub fn open() -> Result<Db> {
         let dir = app_dir()?;
-        let mut conn = Connection::open(dir.join(FILE_NAME))?;
-        conn.pragma_update_and_check(None, "journal_mode", "WAL", |_| Ok(()))?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.pragma_update(None, "foreign_keys", true)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
+        let mut conn = connect(&dir)?;
 
         // Keep a copy before upgrading an existing database, so a failed upgrade can be undone.
         let migrations = migrations();
@@ -344,6 +367,26 @@ impl Db {
             [instance_id],
             |row| row.get(0),
         )?)
+    }
+
+    /// Records a boot of the instance with `revision` in `mode` ("agent", "maintenance" or
+    /// "provision"); returns its id and start time (unix milliseconds).
+    pub fn record_boot(&self, instance_id: &str, revision: i64, mode: &str) -> Result<(i64, i64)> {
+        Ok(self.conn.query_row(
+            "INSERT INTO boots (instance_id, revision, mode) VALUES (?1, ?2, ?3)
+             RETURNING id, started_at",
+            params![instance_id, revision, mode],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?)
+    }
+
+    /// Records that the boot ended.
+    pub fn end_boot(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE boots SET ended_at = CAST(unixepoch('subsec') * 1000 AS INTEGER) WHERE id = ?1",
+            [id],
+        )?;
+        Ok(())
     }
 
     /// Records that a provisioning run succeeded on the instance's disk.

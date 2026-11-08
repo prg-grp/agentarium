@@ -10,7 +10,7 @@
 //
 // In agent mode the supervisor also reports Status every STATUS_INTERVAL (see
 // src/lib.rs) and at once when the agent starts or exits. The app keeps only the latest
-// report; nothing is stored.
+// report; nothing is stored. What the agent does goes over the data plane instead.
 syntax = "proto3";
 
 package agent_toolbox.command_plane.v1;
@@ -145,12 +145,19 @@ message AgentUsage {
   uint64 oom_kills = 3;
 }
 
-// The activity collector. There is none yet, so the supervisor reports NOT_INSTALLED.
+// The activity collector: the observer (agentarium-observer), which the supervisor starts
+// in agent mode before the agent and starts again whenever it exits. Its events go to the
+// app over the data plane (see data_plane/proto/data_plane.proto).
 enum CollectorState {
   COLLECTOR_STATE_UNSPECIFIED = 0;
+  // The rootfs has no observer.
   COLLECTOR_STATE_NOT_INSTALLED = 1;
+  // It runs and its programs are attached.
   COLLECTOR_STATE_RUNNING = 2;
-  // Running, but its events stopped advancing.
+  // Running, but its events stopped advancing. The supervisor doesn't report it; the app
+  // decides it from the data plane.
   COLLECTOR_STATE_STALLED = 3;
+  // Not running: it is starting, exited and is about to start again, or the agent has no
+  // cgroup to observe. The agent runs unobserved meanwhile.
   COLLECTOR_STATE_STOPPED = 4;
 }

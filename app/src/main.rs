@@ -6,6 +6,7 @@ mod create;
 mod db;
 mod editor;
 mod net;
+mod observer;
 mod policy;
 mod preset;
 mod settings;
@@ -112,6 +113,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     let c = control.clone();
     ui.on_tab_changed(move |tab| c.set_view(if tab == 1 { View::Log } else { View::Session }));
+    // `open` shows the folder in Finder; it returns right after asking Finder.
+    ui.on_open_logs(|id| {
+        let opened = db::logs_dir(&id).and_then(|dir| {
+            std::process::Command::new("open").arg(dir).status()?;
+            Ok(())
+        });
+        if let Err(error) = opened {
+            eprintln!("Couldn't open the logs folder: {error}");
+        }
+    });
     if let Some(item) = usize::try_from(ui.get_selected_index())
         .ok()
         .and_then(|row| ui.get_instances().row_data(row))

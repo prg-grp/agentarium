@@ -9,7 +9,7 @@
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::fs::File;
-use std::io;
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -528,7 +528,7 @@ impl Drop for Terminal {
 
 /// Host end of one of the VM's serial consoles: two pipes, read and write.
 pub struct Console {
-    reader: File,
+    reader: ConsoleReader,
     writer: File,
     /// Passes the terminal's size on to the guest as (columns, lines), if set.
     resized: Option<Box<dyn FnMut(u16, u16) + Send>>,
@@ -546,7 +546,10 @@ impl Console {
             }
         }
         Ok(Console {
-            reader: File::from(reader),
+            reader: ConsoleReader {
+                pipe: File::from(reader),
+                copy: None,
+            },
             writer: File::from(writer),
             resized: None,
         })
@@ -557,6 +560,32 @@ impl Console {
     pub fn with_resize(mut self, resized: impl FnMut(u16, u16) + Send + 'static) -> Console {
         self.resized = Some(Box::new(resized));
         self
+    }
+
+    /// Also appends everything the guest writes to `file`.
+    pub fn with_copy(mut self, file: File) -> Console {
+        self.reader.copy = Some(file);
+        self
+    }
+}
+
+/// Reads a console's pipe, and copies what it reads to a file if one is set.
+pub struct ConsoleReader {
+    pipe: File,
+    copy: Option<File>,
+}
+
+impl Read for ConsoleReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let read = self.pipe.read(buf)?;
+        // A failing copy (a full disk, say) is given up, so the terminal keeps running.
+        if let Some(copy) = self.copy.as_mut()
+            && let Err(error) = copy.write_all(&buf[..read])
+        {
+            eprintln!("Couldn't write the console's log file: {error}");
+            self.copy = None;
+        }
+        Ok(read)
     }
 }
 
@@ -570,7 +599,7 @@ fn split_interest(interest: PollEvent) -> (PollEvent, PollEvent) {
 }
 
 impl EventedReadWrite for Console {
-    type Reader = File;
+    type Reader = ConsoleReader;
     type Writer = File;
 
     unsafe fn register(
@@ -581,7 +610,7 @@ impl EventedReadWrite for Console {
     ) -> io::Result<()> {
         let (read, write) = split_interest(interest);
         unsafe {
-            poll.add_with_mode(&self.reader, read, mode)?;
+            poll.add_with_mode(&self.reader.pipe, read, mode)?;
             poll.add_with_mode(&self.writer, write, mode)
         }
     }
@@ -593,16 +622,16 @@ impl EventedReadWrite for Console {
         mode: PollMode,
     ) -> io::Result<()> {
         let (read, write) = split_interest(interest);
-        poll.modify_with_mode(&self.reader, read, mode)?;
+        poll.modify_with_mode(&self.reader.pipe, read, mode)?;
         poll.modify_with_mode(&self.writer, write, mode)
     }
 
     fn deregister(&mut self, poll: &Arc<Poller>) -> io::Result<()> {
-        poll.delete(&self.reader)?;
+        poll.delete(&self.reader.pipe)?;
         poll.delete(&self.writer)
     }
 
-    fn reader(&mut self) -> &mut File {
+    fn reader(&mut self) -> &mut ConsoleReader {
         &mut self.reader
     }
 

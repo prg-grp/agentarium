@@ -4,8 +4,10 @@
 SIZE := 64G
 OUT := ../../target/rootfs
 
-# The guest supervisor binary (agentarium-supervisor); the root Makefile builds and sets it.
+# The guest supervisor (agentarium-supervisor) and observer (agentarium-observer) binaries;
+# the root Makefile builds and sets them.
 SUPERVISOR ?=
+OBSERVER ?=
 
 SHELL := /bin/bash
 .PHONY: all clean
@@ -13,7 +15,7 @@ SHELL := /bin/bash
 
 all: $(OUT)/base.ext4
 
-# Rebuilt when anything in base/ or the supervisor changes. The docker export is unpacked
+# Rebuilt when anything in base/ or a guest binary changes. The docker export is unpacked
 # in an Alpine container whose mkfs.ext4 writes a sparse raw ext4 image at its full virtual
 # size, so guests never need a resize: the file only takes the space of the blocks written
 # to it.
@@ -22,12 +24,13 @@ all: $(OUT)/base.ext4
 # virtio-blk disk (/dev/vda).
 # /.dockerenv is dropped: with it, systemd thinks it runs in a Docker container and skips
 # kernel command line conditions, timesyncd and its clock floor.
-# The supervisor binary is handed to Docker as the named build context "supervisor".
-$(OUT)/base.ext4: $(shell find base -type f) Makefile $(SUPERVISOR)
-	@test -n "$(SUPERVISOR)" || { echo 'SUPERVISOR is not set; run `make rootfs` from the repository root.' >&2; exit 1; }
-	mkdir -p $(OUT)/supervisor
+# The binaries are handed to Docker as the named build contexts "supervisor" and "observer".
+$(OUT)/base.ext4: $(shell find base -type f) Makefile $(SUPERVISOR) $(OBSERVER)
+	@test -n "$(SUPERVISOR)" && test -n "$(OBSERVER)" || { echo 'SUPERVISOR or OBSERVER is not set; run `make rootfs` from the repository root.' >&2; exit 1; }
+	mkdir -p $(OUT)/supervisor $(OUT)/observer
 	cp $(SUPERVISOR) $(OUT)/supervisor/agentarium-supervisor
-	docker build --platform linux/arm64 --build-context supervisor=$(OUT)/supervisor -t agent-toolbox/base base
+	cp $(OBSERVER) $(OUT)/observer/agentarium-observer
+	docker build --platform linux/arm64 --build-context supervisor=$(OUT)/supervisor --build-context observer=$(OUT)/observer -t agent-toolbox/base base
 	set -euo pipefail; \
 	cid=$$(docker create --platform linux/arm64 agent-toolbox/base); \
 	trap 'docker rm $$cid >/dev/null' EXIT; \
