@@ -28,9 +28,9 @@ RUN systemctl set-default multi-user.target && \
 # provisioning script in provision mode. The binary is built from guest_supervisor and
 # handed in as the build context "supervisor" (see vms/rootfs/Makefile).
 RUN systemctl mask serial-getty@hvc0.service serial-getty@hvc1.service getty@tty1.service
-COPY --from=supervisor --chmod=755 terrarium-supervisor /usr/local/sbin/terrarium-supervisor
-COPY terrarium-supervisor.service /etc/systemd/system/terrarium-supervisor.service
-RUN systemctl enable terrarium-supervisor.service
+COPY --from=supervisor --chmod=755 agentarium-supervisor /usr/local/sbin/agentarium-supervisor
+COPY agentarium-supervisor.service /etc/systemd/system/agentarium-supervisor.service
+RUN systemctl enable agentarium-supervisor.service
 
 # The command plane's vsock transport, loaded early so the supervisor can listen right away.
 RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf

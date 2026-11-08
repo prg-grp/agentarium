@@ -20,7 +20,7 @@ pub const PORT: u32 = 700;
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The tag of the virtio-fs device that holds an instance's shared folders.
-pub const SHARE_TAG: &str = "terrarium-shares";
+pub const SHARE_TAG: &str = "agentarium-shares";
 
 /// How often the supervisor reports `Status` in agent mode.
 pub const STATUS_INTERVAL: Duration = Duration::from_secs(2);

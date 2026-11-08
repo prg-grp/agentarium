@@ -1,4 +1,4 @@
-//! terrarium-supervisor: the only thing in the guest that starts a session.
+//! agentarium-supervisor: the only thing in the guest that starts a session.
 //!
 //! systemd starts it at boot. It listens on the command plane's vsock port, says Hello
 //! to the app, and waits for Start, which decides what this boot runs on the session
@@ -42,10 +42,10 @@ const SESSION_TTY: &str = "/dev/hvc1";
 /// How long to wait before starting an exited session again.
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 /// Where the provisioning script is written; a tmpfs, gone after the boot.
-const RUN_DIR: &str = "/run/terrarium";
+const RUN_DIR: &str = "/run/agentarium";
 /// Where the virtio-fs share with all shared folders is mounted. Root only: the session
 /// reaches each folder only where it is mounted.
-const SHARES_DIR: &str = "/run/terrarium/shares";
+const SHARES_DIR: &str = "/run/agentarium/shares";
 
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
@@ -60,7 +60,7 @@ struct AgentState {
 }
 
 /// The agent's cgroup (v2), beside the supervisor's own in the service's cgroup, which
-/// systemd delegates to it (`Delegate=` in terrarium-supervisor.service).
+/// systemd delegates to it (`Delegate=` in agentarium-supervisor.service).
 struct AgentCgroup {
     dir: PathBuf,
     /// Its `cgroup.procs`; a new session writes to it before exec, which moves it in.
@@ -99,7 +99,7 @@ fn main() {
     info!(
         version = env!("CARGO_PKG_VERSION"),
         protocol = PROTOCOL_VERSION,
-        "terrarium-supervisor starting"
+        "agentarium-supervisor starting"
     );
     // Without the session console, no mode can run; systemd starts the supervisor again.
     let tty = match Tty::new() {

@@ -4,7 +4,7 @@
 SIZE := 64G
 OUT := ../../target/rootfs
 
-# The guest supervisor binary (terrarium-supervisor); the root Makefile builds and sets it.
+# The guest supervisor binary (agentarium-supervisor); the root Makefile builds and sets it.
 SUPERVISOR ?=
 
 SHELL := /bin/bash
@@ -26,7 +26,7 @@ all: $(OUT)/base.ext4
 $(OUT)/base.ext4: $(shell find base -type f) Makefile $(SUPERVISOR)
 	@test -n "$(SUPERVISOR)" || { echo 'SUPERVISOR is not set; run `make rootfs` from the repository root.' >&2; exit 1; }
 	mkdir -p $(OUT)/supervisor
-	cp $(SUPERVISOR) $(OUT)/supervisor/terrarium-supervisor
+	cp $(SUPERVISOR) $(OUT)/supervisor/agentarium-supervisor
 	docker build --platform linux/arm64 --build-context supervisor=$(OUT)/supervisor -t agent-toolbox/base base
 	set -euo pipefail; \
 	cid=$$(docker create --platform linux/arm64 agent-toolbox/base); \

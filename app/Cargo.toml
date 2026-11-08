@@ -9,7 +9,7 @@ rust-version.workspace = true
 # macOS names an unbundled app after its executable in the app switcher and Dock,
 # so the binary carries the name from the window title.
 [[bin]]
-name = "TerrArIum"
+name = "Agentarium"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,9 +1,9 @@
 [Unit]
-Description=Terrarium guest supervisor: starts the boot mode the app sends over vsock
+Description=Agentarium guest supervisor: starts the boot mode the app sends over vsock
 After=systemd-networkd.service clock-from-host.service systemd-tmpfiles-setup.service
 
 [Service]
-ExecStart=/usr/local/sbin/terrarium-supervisor
+ExecStart=/usr/local/sbin/agentarium-supervisor
 # Its logs (and stderr, which follows stdout) also go to hvc0, the app's Logs tab.
 StandardOutput=journal+console
 Restart=on-failure

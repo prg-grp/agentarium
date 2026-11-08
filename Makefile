@@ -8,9 +8,9 @@ KERNEL := $(GUEST_DIR)/Image
 BASE_ROOTFS := $(abspath target/rootfs/base.ext4)
 # The guest supervisor, a static Linux binary baked into the base rootfs.
 GUEST_TARGET := aarch64-unknown-linux-musl
-SUPERVISOR := $(abspath target/$(GUEST_TARGET)/release/terrarium-supervisor)
+SUPERVISOR := $(abspath target/$(GUEST_TARGET)/release/agentarium-supervisor)
 # The app's Application Support folder (database, instance disks); named by db::APP_ID.
-APP_DATA := $(HOME)/Library/Application Support/com.programming-group.terrarium
+APP_DATA := $(HOME)/Library/Application Support/com.programming-group.agentarium
 
 .PHONY: guest rootfs run check clean-guest clean-app
 

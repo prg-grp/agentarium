@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// The app identifier; names the app's Application Support folder.
-pub const APP_ID: &str = "com.programming-group.terrarium";
-const FILE_NAME: &str = "terrarium.sqlite";
+pub const APP_ID: &str = "com.programming-group.agentarium";
+const FILE_NAME: &str = "agentarium.sqlite";
 
 // Users' databases are upgraded in place when the app starts, so migrations are
 // append-only: never edit, reorder or delete one that has shipped. Every schema

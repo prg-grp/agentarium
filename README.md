@@ -13,7 +13,7 @@ for UI/UX guidelines.
 
 - `app/` – the desktop app (Rust + [Slint](https://slint.dev) UI)
 - `command_plane/` – the protobuf protocol between the app and the guest supervisor, over virtio-vsock
-- `guest_supervisor/` – the guest supervisor (`terrarium-supervisor`), a static Linux binary baked into the base rootfs that starts the boot mode the app sends
+- `guest_supervisor/` – the guest supervisor (`agentarium-supervisor`), a static Linux binary baked into the base rootfs that starts the boot mode the app sends
 - `design/` – per-screen design specs (see DESIGN.md)
 - `vms/rootfs/` – Dockerfile for the base guest root filesystem, cloned for every instance
 - `vms/provision/` – the presets' provisioning scripts that install an agent harness in an instance, and the custom agent's template
