@@ -38,5 +38,5 @@ The dialog shown before entering maintenance mode, from "Restart in maintenance"
 ## Rules
 
 - State concrete effects, not just the mode name.
-- The network item must say what stays blocked, not only what opens.
+- The network item must say what stays blocked, not only what opens. When the instance allows its Mac and local network, the second sentence reads "Your Mac and local network are reachable too."
 - For a running instance, add "The running agent session will end." as the first item.

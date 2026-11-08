@@ -150,6 +150,9 @@ pub struct Config {
     /// What happens to destinations without a rule.
     pub network_default: NetworkAction,
     pub network_rules: Vec<NetworkRule>,
+    /// Whether the Mac and the local network go through the rules, instead of being
+    /// unreachable.
+    pub network_allow_local: bool,
     /// Bash script run as root in provision mode, before the first agent boot.
     pub provision_script: String,
 }
@@ -171,6 +174,7 @@ impl Default for Config {
             mounts: Vec::new(),
             network_default: NetworkAction::Deny,
             network_rules: Vec::new(),
+            network_allow_local: false,
             provision_script: String::new(),
         }
     }
@@ -360,7 +364,8 @@ const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
     FROM instances i";
 
 const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, command, arguments,
-    working_directory, environment, mounts, network_default, network_rules, provision_script
+    working_directory, environment, mounts, network_default, network_rules, network_allow_local,
+    provision_script
     FROM instance_revisions WHERE instance_id = ?1";
 
 fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
@@ -376,7 +381,8 @@ fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
             mounts: json(row, 7)?,
             network_default: row.get(8)?,
             network_rules: json(row, 9)?,
-            provision_script: row.get(10)?,
+            network_allow_local: row.get(10)?,
+            provision_script: row.get(11)?,
         },
     })
 }
@@ -396,14 +402,16 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
     conn.execute(
         "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, command,
              arguments, working_directory, environment, mounts, network_default, network_rules,
-             provision_script)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             network_allow_local, provision_script)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT (instance_id, revision) DO UPDATE SET
              cpus = excluded.cpus, memory_mib = excluded.memory_mib,
              command = excluded.command, arguments = excluded.arguments,
              working_directory = excluded.working_directory, environment = excluded.environment,
              mounts = excluded.mounts, network_default = excluded.network_default,
-             network_rules = excluded.network_rules, provision_script = excluded.provision_script
+             network_rules = excluded.network_rules,
+             network_allow_local = excluded.network_allow_local,
+             provision_script = excluded.provision_script
          WHERE booted_at IS NULL",
         params![
             instance_id,
@@ -417,6 +425,7 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
             serde_json::to_string(&config.mounts)?,
             config.network_default,
             serde_json::to_string(&config.network_rules)?,
+            config.network_allow_local,
             config.provision_script,
         ],
     )?;

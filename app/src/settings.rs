@@ -120,6 +120,8 @@ impl SettingsEditor {
             s.edit(|e| e.config.network_default = editor::action(deny))
         });
         let s = this.clone();
+        g.on_set_network_allow_local(move |allow| s.edit(|e| e.config.network_allow_local = allow));
+        let s = this.clone();
         g.on_add_rule(move |text, deny| {
             let mut error = "";
             s.edit(|e| error = editor::add_rule(&mut e.config, &text, deny));
@@ -233,6 +235,7 @@ impl SettingsEditor {
         g.set_command_error(command_error(&c.command).into());
         g.set_working_directory_error(working_directory_error(&c.working_directory).into());
         g.set_network_deny(c.network_default == NetworkAction::Deny);
+        g.set_network_allow_local(c.network_allow_local);
         self.lists.show(c);
 
         let changes = e
@@ -432,6 +435,7 @@ fn count_changes(old: &Config, new: &Config) -> [i32; 5] {
             + one(old.working_directory != new.working_directory),
         list_changes(&old.mounts, &new.mounts, |mount| mount.host_path.clone()),
         one(old.network_default != new.network_default)
+            + one(old.network_allow_local != new.network_allow_local)
             + list_changes(&old.network_rules, &new.network_rules, rule_key),
         list_changes(&old.environment, &new.environment, |var| var.name.clone()),
         one(old.cpus != new.cpus) + one(old.memory_mib != new.memory_mib),

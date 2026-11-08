@@ -592,12 +592,15 @@ export component FolderTable {
     }
 }
 
-// The default action and the Allowed and Denied lists.
+// The default action, access to the Mac and the local network, and the Allowed and
+// Denied lists.
 export component NetworkFields {
     in property <bool> deny;
+    in property <bool> allow-local;
     in property <[RuleRow]> allowed;
     in property <[RuleRow]> denied;
     callback set-deny(deny: bool);
+    callback set-allow-local(allow: bool);
     // Returns why the entry was refused, or "" once it is added.
     callback add-rule(text: string, deny: bool) -> string;
     callback toggle-scope(deny: bool, index: int);
@@ -634,6 +637,42 @@ export component NetworkFields {
                     color: Theme.tx2;
                     vertical-alignment: center;
                 }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 10px;
+
+            Text {
+                text: "Your Mac and local network";
+                font-size: Theme.font-section;
+                font-weight: Theme.weight-medium;
+                color: Theme.tx;
+            }
+
+            HorizontalLayout {
+                spacing: 12px;
+                alignment: start;
+
+                SegmentedControl {
+                    options: ["Block", "Allow"];
+                    selected: root.allow-local ? 1 : 0;
+                    changed(option) => {
+                        root.set-allow-local(option == 1);
+                    }
+                }
+
+                Text {
+                    text: root.allow-local ? "Local addresses follow the rules. Your Mac is host.internal." : "The agent can't reach your Mac or devices on your network, whatever the rules say.";
+                    color: Theme.tx2;
+                    vertical-alignment: center;
+                }
+            }
+
+            if root.allow-local: Message {
+                icon: @image-url("icons/alert-triangle.svg");
+                color: Theme.warn;
+                text: root.deny ? "The agent can reach the local addresses you allow. Allow 192.168.127.1 for services on your Mac." : "The agent can reach services on your Mac and other devices on your network.";
             }
         }
 

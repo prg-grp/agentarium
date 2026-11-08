@@ -166,6 +166,8 @@ impl Creator {
             c.edit(|d| d.config.network_default = editor::action(deny))
         });
         let c = this.clone();
+        g.on_set_network_allow_local(move |allow| c.edit(|d| d.config.network_allow_local = allow));
+        let c = this.clone();
         g.on_add_rule(move |text, deny| {
             let mut error = "";
             c.edit(|d| error = editor::add_rule(&mut d.config, &text, deny));
@@ -404,6 +406,7 @@ impl Creator {
         g.set_working_directory_error(working_directory_error(&c.working_directory).into());
 
         g.set_network_deny(c.network_default == NetworkAction::Deny);
+        g.set_network_allow_local(c.network_allow_local);
         self.lists.show(c);
 
         let issues = self.issues(d);

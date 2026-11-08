@@ -29,7 +29,7 @@ A running instance booted in maintenance mode: no agent, a root shell, internet 
 Maintenance must be unmistakable on every tab for the whole session:
 
 1. A 3 px `warn` line along the top edge of the main area.
-2. A banner directly below it, above the instance header: `warn` at 12% fill, `warn` at 35% bottom border, tool icon. "Maintenance session" in `warn` 500, followed by the effective network state in `tx2`: "Internet open, your Mac and local network blocked. Shared folders stay writable." The banner states the network state, not just the mode name.
+2. A banner directly below it, above the instance header: `warn` at 12% fill, `warn` at 35% bottom border, tool icon. "Maintenance session" in `warn` 500, followed by the effective network state in `tx2`: "Internet open, your Mac and local network blocked. Shared folders stay writable." When the instance allows its Mac and local network: "Internet, your Mac and local network open. Shared folders stay writable." The banner states the network state, not just the mode name.
 3. "Return to agent mode" (neutral with a `warn` border, refresh icon) at the right end of the banner. It reboots the instance in agent mode and restores the configured network policy.
 4. The active tab underline and the selected sidebar item's left bar use `warn` instead of `acc`.
 5. Sidebar summary: tool icon in `warn`, "Maintenance, internet open".

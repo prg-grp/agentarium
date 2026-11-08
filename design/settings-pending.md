@@ -37,7 +37,8 @@ Resources            │ api.anthropic.com      Exact name                      
 
 - Left column, 220 px, 1 px `line` right border: Agent and launch, Shared folders, Network, Environment, Resources.
 - All sections sit on one scrolling page; clicking a section scrolls to it, and the selection follows the scroll position.
-- Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px.
+- Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px. In Network, the default action and the Mac and local network setting each count as one change.
+- The Network description follows the Mac and local network setting: "Applies to agent boots. Your Mac and local network stay unreachable, whatever the rules say." or "Applies to agent boots. Your Mac and local network follow the rules, and maintenance boots can reach them too."
 - Agent and launch also holds the instance name. Renaming applies on save; the name isn't part of a revision.
 - There is no preset in Settings: the preset only fills in a new instance's first revision (see [create-harness.md](create-harness.md#presets)). Every setting, including the command and the network rules, is edited directly.
 

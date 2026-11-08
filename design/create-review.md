@@ -21,6 +21,7 @@ Shared folders  ~/code/billing-service  ✎ Read and write. Changes     Edit
                 ~/code/shared-protos      Read only
 ──────────────────────────────────────────────────────────────────────
 Network         Unlisted domains  Denied                              Edit
+                Mac and local network  Blocked
                 Allowed  api.anthropic.com, github.com, crates.io
                 Denied   gist.github.com, pastebin.com
 ──────────────────────────────────────────────────────────────────────

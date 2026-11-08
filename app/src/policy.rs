@@ -7,9 +7,10 @@
 //! really used (shared hosting, CDNs, encrypted DNS); it only carries the names that
 //! pointed to it.
 //!
-//! A destination is decided in this order: the Mac and the local network are never
-//! reachable; a matching deny rule blocks; a matching allow rule allows; otherwise the
-//! default action applies. A lookup is decided the same way by its name, and a refused one
+//! A destination is decided in this order: the Mac and the local network are unreachable
+//! unless the instance allows them; a matching deny rule blocks; a matching allow rule
+//! allows; otherwise the default action applies. Allowing them only lifts the first step,
+//! so local addresses then follow the rules like any other. A lookup is decided the same way by its name, and a refused one
 //! is answered with REFUSED.
 
 use std::collections::HashMap;
@@ -31,28 +32,32 @@ const MAX_TTL: u32 = 60 * 60;
 pub struct Policy {
     default: NetworkAction,
     rules: Vec<NetworkRule>,
+    /// Whether the Mac and the local network go through the rules, instead of being
+    /// unreachable.
+    allow_local: bool,
     /// Each address from a DNS answer with the names that returned it, and until when.
     names: Mutex<HashMap<IpAddr, Vec<(String, Instant)>>>,
 }
 
 impl Policy {
-    pub fn new(default: NetworkAction, rules: Vec<NetworkRule>) -> Policy {
+    pub fn new(default: NetworkAction, rules: Vec<NetworkRule>, allow_local: bool) -> Policy {
         Policy {
             default,
             rules,
+            allow_local,
             names: Mutex::default(),
         }
     }
 
     /// Maintenance and provision boots: the internet is open, the Mac and the local
-    /// network stay unreachable.
-    pub fn open() -> Policy {
-        Policy::new(NetworkAction::Allow, Vec::new())
+    /// network only if the instance allows them.
+    pub fn open(allow_local: bool) -> Policy {
+        Policy::new(NetworkAction::Allow, Vec::new(), allow_local)
     }
 
     /// Whether the guest may connect to `destination`.
     pub fn allows(&self, destination: IpAddr) -> bool {
-        if local(destination) {
+        if !self.allow_local && local(destination) {
             return false;
         }
         let now = Instant::now();
@@ -173,7 +178,8 @@ fn domain(name: String) -> RuleTarget {
     }
 }
 
-/// The Mac and the local network, which no rule can open: loopback, private, link-local,
+/// The Mac and the local network, which no rule can open unless the instance allows them:
+/// loopback, private, link-local,
 /// shared (carrier-grade NAT, also used by VPNs such as Tailscale), multicast, and
 /// reserved addresses. The guest's gateway is a private address, so this includes it.
 fn local(address: IpAddr) -> bool {

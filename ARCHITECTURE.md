@@ -163,11 +163,11 @@ Keep monitoring active where possible. Clearly report collector changes or missi
 Proposed safeguards:
 
 - Show the active mounts before entering maintenance mode.
-- Keep host-service and private-network access restricted even when internet restrictions are lifted.
+- Keep host-service and private-network access restricted even when internet restrictions are lifted, unless the instance allows them.
 - Preserve host-side network enforcement outside the guest.
 - Do not silently start the agent when maintenance preparation completes.
 
-Decided: the maintenance networking exception is the open policy (default allow, no rules). The Mac and the local network stay unreachable, so “internet restrictions lifted” never becomes access to host services (see [Decided policy](#decided-policy)).
+Decided: the maintenance networking exception is the open policy (default allow, no rules). The Mac and the local network stay unreachable unless the instance allows them, so “internet restrictions lifted” never becomes access to host services the user didn't opt into (see [Decided policy](#decided-policy)).
 
 ### Provision mode
 
@@ -244,7 +244,7 @@ Proposed initial behavior: deny overrides allow; restrictive mode denies unclass
 Enforced in `app/src/policy.rs`, called by the VM's userspace network stack (`net`) for every new TCP connection and UDP flow, and for every DNS query. The policy is fixed for a boot, as the boot freezes its revision; changed rules apply on the next boot.
 
 - **Destinations,** decided when a TCP connection or UDP flow opens:
-  1. The Mac and the local network are never reachable, in any mode and whatever the rules say: loopback, private (10/8, 172.16/12, 192.168/16, which includes the guest's gateway), link-local, shared 100.64/10 (carrier-grade NAT, VPNs such as Tailscale), multicast, 0/8 and 240/4, and their IPv6 counterparts (loopback, fc00::/7, fe80::/10, multicast, IPv4-mapped).
+  1. The Mac and the local network are unreachable, in any mode and whatever the rules say, unless the instance allows them (`network_allow_local`, off by default): loopback, private (10/8, 172.16/12, 192.168/16, which includes the guest's gateway), link-local, shared 100.64/10 (carrier-grade NAT, VPNs such as Tailscale), multicast, 0/8 and 240/4, and their IPv6 counterparts (loopback, fc00::/7, fe80::/10, multicast, IPv4-mapped). Allowing them only lifts this step: local addresses then go through steps 2 to 5 like any other, so under default deny each one needs an allow rule.
   2. The destination's names are the names whose DNS answers returned its address and haven't expired.
   3. A deny rule that matches the address (CIDR) or one of its names blocks it. Deny wins, also when an address has several names and only one of them is denied.
   4. Otherwise an allow rule that matches the address or one of its names allows it.
@@ -252,8 +252,9 @@ Enforced in `app/src/policy.rs`, called by the VM's userspace network stack (`ne
 - **DNS:** every UDP datagram to port 53, to the gateway or any other address, goes to the Mac's nameserver, so another resolver can't skip the check. Each query is decided by its name with steps 3 to 5; a refused query gets a `REFUSED` answer, an unreadable one `FORMERR`. Refusing stops lookups (and DNS-based exfiltration) of names the policy doesn't allow.
 - **Answers:** before the guest gets an answer, its A and AAAA records are recorded with the queried name and the names of the CNAME chain. An entry lasts for its TTL (at most one hour) plus five minutes, as programs keep using an address a little beyond its TTL. Expired entries are dropped as new answers arrive.
 - Blocked connection attempts are logged on the app's standard error. Recording policy decisions as events follows with the activity store.
-- Maintenance and provision boots use the open policy: default allow and no rules, so only step 1 applies; their DNS is forwarded unchecked but still recorded.
-- Limitations: DNS over TCP to the gateway is blocked by step 1, so a truncated UDP answer can't be retried over TCP. Encrypted DNS (DoH, DoT) and hard-coded addresses bypass the name association: such an address has no names, so under default allow only address rules can block it. A blocked TCP connection is accepted by the stack and closed right away, rather than refused.
+- **The Mac:** the guest's own loopback stays in the guest. A connection to the gateway's address (192.168.127.1, `host.internal` in the guest's `/etc/hosts`) is opened on the Mac's loopback, same port, when the policy allows it. As `host.internal` doesn't go through DNS, domain rules can't match it; address rules for 192.168.127.1 do. Other local addresses (the Mac's LAN address, other devices) are connected to as they are.
+- Maintenance and provision boots use the open policy: default allow and no rules, so only step 1 applies, which follows the instance's setting; their DNS is forwarded unchecked but still recorded.
+- Limitations: DNS over TCP to the gateway is blocked by step 1, so a truncated UDP answer can't be retried over TCP. With the Mac allowed, it reaches the Mac's loopback port 53 instead, where usually nothing listens. macOS may ask the user to allow the app on the local network (Privacy & Security → Local Network) before LAN connections succeed; the Mac's loopback isn't affected. Encrypted DNS (DoH, DoT) and hard-coded addresses bypass the name association: such an address has no names, so under default allow only address rules can block it. A blocked TCP connection is accepted by the stack and closed right away, rather than refused.
 
 ### Domain-policy limitation
 

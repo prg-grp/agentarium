@@ -32,6 +32,7 @@ export global Creation {
     in property <[EnvRow]> environment;
     in property <[MountRow]> mounts;
     in property <bool> network-deny: true;
+    in property <bool> network-allow-local;
     in property <[RuleRow]> allowed;
     in property <[RuleRow]> denied;
     in property <int> max-cpus: 1;
@@ -75,6 +76,7 @@ export global Creation {
     callback set-writable(index: int, writable: bool);
     callback remove-folder(index: int);
     callback set-network-deny(deny: bool);
+    callback set-network-allow-local(allow: bool);
     // Returns why the entry was refused, or "" once it is added.
     callback add-rule(text: string, deny: bool) -> string;
     callback toggle-scope(deny: bool, index: int);
@@ -574,10 +576,14 @@ export component CreateInstance {
 
                         NetworkFields {
                             deny: Creation.network-deny;
+                            allow-local: Creation.network-allow-local;
                             allowed: Creation.allowed;
                             denied: Creation.denied;
                             set-deny(deny) => {
                                 Creation.set-network-deny(deny);
+                            }
+                            set-allow-local(allow) => {
+                                Creation.set-network-allow-local(allow);
                             }
                             add-rule(text, deny) => {
                                 return Creation.add-rule(text, deny);
@@ -643,7 +649,7 @@ export component CreateInstance {
                             VerticalLayout {
                                 alignment: start;
                                 Image {
-                                    source: @image-url("icons/home-off.svg");
+                                    source: Creation.network-allow-local ? @image-url("icons/alert-triangle.svg") : @image-url("icons/home-off.svg");
                                     colorize: Theme.tx3;
                                     width: 16px;
                                     height: 16px;
@@ -652,7 +658,7 @@ export component CreateInstance {
                             }
 
                             Text {
-                                text: "Your Mac and local network stay unreachable, whatever the rules say.";
+                                text: Creation.network-allow-local ? "Your Mac and local network follow the rules. Reach services on your Mac at host.internal." : "Your Mac and local network stay unreachable, whatever the rules say.";
                                 color: Theme.tx2;
                                 font-size: Theme.font-small;
                                 wrap: word-wrap;
@@ -772,6 +778,11 @@ export component CreateInstance {
                         KeyValue {
                             key: "Unlisted";
                             value: Creation.network-deny ? "Denied" : "Allowed";
+                        }
+
+                        KeyValue {
+                            key: "Mac and local network";
+                            value: Creation.network-allow-local ? "Allowed" : "Blocked";
                         }
 
                         KeyValue {

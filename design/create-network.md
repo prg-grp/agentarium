@@ -8,6 +8,9 @@ Fourth creation step. Flow rules are in [create-harness.md](create-harness.md#cr
 Destinations not listed below                              │ How rules match
 [Deny|Allow]  The agent can reach only the domains you allow.│ github.com matches that exact
                                                             │ name. Turn on subdomains to
+Your Mac and local network                                  │
+[Block|Allow]  The agent can't reach your Mac or devices on…│
+                                                            │
 ✓ Allowed                       ⊘ Denied                    │ include api.github.com…
 api.anthropic.com  Exact name ×  gist.github.com Exact name × │
 github.com   Includes subdomains × pastebin.com Incl. subdom. ×│ When a domain is both allowed
@@ -31,6 +34,11 @@ Cancel                                        [< Back]  [Continue to review]
 - **Default action:** heading "Destinations not listed below" with a segmented control "Deny | Allow" (Deny is the default) and one explanatory sentence that changes with the choice:
   - Deny: "The agent can reach only the destinations you allow."
   - Allow: "The agent can reach any destination except the ones you deny."
+- **Mac and local network:** heading "Your Mac and local network" with a segmented control "Block | Allow" (Block is the default) and one sentence:
+  - Block: "The agent can't reach your Mac or devices on your network, whatever the rules say."
+  - Allow: "Local addresses follow the rules. Your Mac is host.internal."
+  - When allowed, a `warn` message with the alert-triangle icon below it. With default Deny: "The agent can reach the local addresses you allow. Allow 192.168.127.1 for services on your Mac." With default Allow: "The agent can reach services on your Mac and other devices on your network."
+  - The setting applies to every boot, maintenance included. See [ARCHITECTURE.md](../ARCHITECTURE.md#decided-policy).
 - **Allowed** and **Denied** lists side by side, each headed by an icon (`ok` circle-check, `bad` ban) and the word. Each rule row: the target (monospace), scope text in `tx2` 12 px, and a remove icon. An input at the bottom of each list ("Add a domain or address to allow" / "… to deny"); Return adds the entry.
 - **Rule targets:** a rule is either a domain or an address range.
   - Domain (`pypi.org`): the scope reads "Exact name" or "Includes subdomains" and toggles on click. Stored lowercase, without a trailing dot.
@@ -41,7 +49,7 @@ Cancel                                        [< Back]  [Continue to review]
   - "Addresses and ranges, like 203.0.113.7 or 10.0.0.0/8, match the destination directly, without DNS."
   - "When a destination is both allowed and denied, it's denied."
   - "Domain rules use DNS results to control destination addresses. A recorded address may be associated with more than one domain."
-  - With a home-off icon: "Your Mac and local network stay unreachable, whatever the rules say."
+  - With a home-off icon: "Your Mac and local network stay unreachable, whatever the rules say." When the Mac and local network are allowed, the icon becomes alert-triangle and the line reads "Your Mac and local network follow the rules. Reach services on your Mac at host.internal."
 
 ## Validation
 

@@ -8,7 +8,8 @@
 //! own runtime and threads, so one VM's traffic can't slow down another's.
 //!
 //! The guest is configured statically (base rootfs): 192.168.127.2/24, gateway and DNS
-//! at 192.168.127.1, IPv4 only.
+//! at 192.168.127.1, IPv4 only. Connections to the gateway's address (`host.internal` in
+//! the guest) go to the Mac's loopback, if the policy allows the Mac.
 
 use std::collections::HashMap;
 use std::io;
@@ -145,6 +146,16 @@ async fn run(host: UnixDatagram, dns: SocketAddr, policy: Arc<Policy>) -> io::Re
     }
 }
 
+/// Where a guest connection is opened on the Mac: the gateway's address stands for the
+/// Mac itself, so it becomes the Mac's loopback; any other address is used as it is.
+fn on_mac(destination: SocketAddr) -> SocketAddr {
+    if destination.ip() == GATEWAY_IP {
+        SocketAddr::new(Ipv4Addr::LOCALHOST.into(), destination.port())
+    } else {
+        destination
+    }
+}
+
 /// The reply frame to an ARP request for the gateway's address.
 fn arp_reply(payload: &[u8]) -> Option<Vec<u8>> {
     let request = ArpPacket::from_slice(payload).ok()?.try_eth_ipv4().ok()?;
@@ -174,8 +185,9 @@ async fn relay_tcp(mut listener: TcpListener, policy: Arc<Policy>) {
             eprintln!("Blocked a TCP connection to {destination}");
             continue;
         }
+        let upstream = on_mac(destination);
         tokio::spawn(async move {
-            let mut remote = match timeout(CONNECT_TIMEOUT, TcpStream::connect(destination)).await {
+            let mut remote = match timeout(CONNECT_TIMEOUT, TcpStream::connect(upstream)).await {
                 Ok(Ok(remote)) => remote,
                 Ok(Err(error)) => return eprintln!("Couldn't connect to {destination}: {error}"),
                 Err(_) => return eprintln!("Connecting to {destination} timed out"),
@@ -220,7 +232,7 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy:
         let (upstream, idle) = if is_dns {
             (dns, DNS_IDLE)
         } else if policy.allows(destination.ip()) {
-            (destination, UDP_IDLE)
+            (on_mac(destination), UDP_IDLE)
         } else {
             eprintln!("Blocked UDP to {destination}");
             continue;

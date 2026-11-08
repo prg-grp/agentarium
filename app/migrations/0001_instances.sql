@@ -24,6 +24,7 @@ CREATE TABLE instance_revisions (
     mounts            TEXT NOT NULL CHECK (json_valid(mounts)),        -- [{host_path, guest_path, writable, enabled}]
     network_default   TEXT NOT NULL CHECK (network_default IN ('deny', 'allow')),
     network_rules     TEXT NOT NULL CHECK (json_valid(network_rules)), -- [{target, action}]
+    network_allow_local INTEGER NOT NULL CHECK (network_allow_local IN (0, 1)), -- the Mac and local network
     provision_script  TEXT NOT NULL,                -- bash, run as root in provision mode
     PRIMARY KEY (instance_id, revision)
 ) STRICT;

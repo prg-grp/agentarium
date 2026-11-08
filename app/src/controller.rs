@@ -530,10 +530,14 @@ impl VmControl {
         };
         let config = revision.config;
         // Only agent boots are held to the network rules; maintenance and provision boots
-        // get open internet, but never the Mac or the local network.
+        // get open internet. The Mac and the local network stay unreachable in every mode
+        // unless the instance allows them.
+        let allow_local = config.network_allow_local;
         let network = match mode {
-            BootMode::Agent => Policy::new(config.network_default, config.network_rules),
-            BootMode::Maintenance | BootMode::Provision => Policy::open(),
+            BootMode::Agent => {
+                Policy::new(config.network_default, config.network_rules, allow_local)
+            }
+            BootMode::Maintenance | BootMode::Provision => Policy::open(allow_local),
         };
         let mut spec = VmSpec {
             cpus: config.cpus as usize,

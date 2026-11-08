@@ -53,11 +53,14 @@ RUN printf 'gpio_keys\n' > /etc/modules-load.d/power-button.conf
 
 # Network: the app runs the gateway (and DNS) at 192.168.127.1 on the virtio NIC and
 # forwards connections from the host. Static IPv4 only, so the app needs no DHCP server.
-# resolv.conf is a tmpfiles link because Docker bind-mounts it during the build.
+# host.internal is the gateway, which the app relays to the Mac's loopback when the
+# instance allows the Mac. resolv.conf and hosts are tmpfiles links because Docker
+# bind-mounts them during the build.
 RUN printf '[Match]\nType=ether\n\n[Network]\nAddress=192.168.127.2/24\nGateway=192.168.127.1\nLinkLocalAddressing=no\nIPv6AcceptRA=no\n' \
     > /etc/systemd/network/10-vm.network && \
     printf 'nameserver 192.168.127.1\n' > /etc/resolv.conf.static && \
-    printf 'L+ /etc/resolv.conf - - - - /etc/resolv.conf.static\n' > /etc/tmpfiles.d/dns.conf
+    printf '127.0.0.1 localhost\n::1 localhost ip6-localhost ip6-loopback\n192.168.127.1 host.internal\n' > /etc/hosts.static && \
+    printf 'L+ /etc/resolv.conf - - - - /etc/resolv.conf.static\nL+ /etc/hosts - - - - /etc/hosts.static\n' > /etc/tmpfiles.d/dns.conf
 
 # Install runtimes
 RUN ln -sf /usr/bin/python3 /usr/bin/python
