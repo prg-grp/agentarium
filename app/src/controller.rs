@@ -36,6 +36,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::db::{self, Db};
 use crate::editor::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
+use crate::netlog;
 use crate::observer::{self, Observed, Summary};
 use crate::policy::Policy;
 use crate::terminal::{Console, Terminal};
@@ -562,7 +563,7 @@ impl VmControl {
         if self.running.borrow().contains_key(id) {
             return;
         }
-        let (spec, start, mode, revision) = match self.prepare(id, mode) {
+        let (mut spec, start, mode, revision) = match self.prepare(id, mode) {
             Ok(prepared) => prepared,
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
@@ -591,6 +592,19 @@ impl VmControl {
                 return self.failed(id, mode, &format!("couldn't create the boot log: {error}"));
             }
         };
+        // Agent boots record their network on the Mac, for the Activity tab.
+        if mode == BootMode::Agent {
+            spec.netlog = match netlog::spawn(boot) {
+                Ok(log) => Some(log),
+                Err(error) => {
+                    return self.failed(
+                        id,
+                        mode,
+                        &format!("couldn't start the network log: {error}"),
+                    );
+                }
+            };
+        }
         self.update_item(id, |item| {
             item.active_revision = revision as i32;
             item.saved_revision = revision as i32;
@@ -630,6 +644,11 @@ impl VmControl {
         self.show(id, mode, VmState::Starting);
     }
 
+    /// The boot of the instance's VM while it runs.
+    pub fn running_boot(&self, id: &str) -> Option<i64> {
+        self.running.borrow().get(id).map(|running| running.boot)
+    }
+
     /// Describes the VM and the Start message for its guest supervisor from the instance's
     /// latest revision, which this boot freezes. Also returns the boot mode and revision
     /// number. An instance that isn't provisioned yet boots in provision mode instead of
@@ -660,6 +679,7 @@ impl VmControl {
             rootfs: instance.disk_path,
             shares: Vec::new(),
             network: Arc::new(network),
+            netlog: None,
         };
         let mut start = match mode {
             BootMode::Agent => Start {

@@ -167,7 +167,8 @@ pub struct ConnectEvent {
     pub family: u16,
     /// Host byte order.
     pub port: u16,
-    pub _pad: u16,
+    /// The guest's source port, host byte order; TCP only, 0 if unknown.
+    pub local_port: u16,
     /// IPv4 in the first 4 bytes, or IPv6.
     pub address: [u8; 16],
 }

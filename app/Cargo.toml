@@ -26,6 +26,7 @@ netstack-smoltcp = "0.2.5"
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-virtualization = "0.3"
+petname = { version = "3", default-features = false, features = ["default-rng", "default-words"] }
 polling = "3"
 rfd = "0.17.2"
 rusqlite = { version = "0.40", features = ["bundled"] }

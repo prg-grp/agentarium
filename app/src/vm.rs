@@ -26,6 +26,7 @@ use objc2_virtualization::{
 };
 
 use crate::net::{self, Network};
+use crate::netlog::NetLog;
 use crate::policy::Policy;
 use crate::terminal::Console;
 
@@ -58,6 +59,8 @@ pub struct VmSpec {
     pub shares: Vec<SharedFolder>,
     /// What the guest may reach over the network.
     pub network: Arc<Policy>,
+    /// Where the network's lookups and connections are recorded (agent boots).
+    pub netlog: Option<NetLog>,
 }
 
 /// A host folder in the instance's virtio-fs share.
@@ -133,7 +136,7 @@ impl Vm {
         let (log, log_port) = serial_port()?;
         let (session, session_port) = serial_port()?;
         let (network, guest_network) =
-            Network::start(spec.network.clone()).map_err(|e| e.to_string())?;
+            Network::start(spec.network.clone(), spec.netlog.clone()).map_err(|e| e.to_string())?;
 
         unsafe {
             let boot = VZLinuxBootLoader::initWithKernelURL(

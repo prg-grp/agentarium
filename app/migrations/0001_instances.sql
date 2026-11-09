@@ -42,16 +42,17 @@ CREATE TABLE boots (
 CREATE INDEX boots_by_instance ON boots (instance_id);
 
 -- What the guest observer saw in agent boots (data_plane/proto/data_plane.proto). `at`
--- and the other times are the guest's clock. `run` is the observer process
--- (Hello.run): the supervisor starts it again if it exits, and its execution numbers
--- count from 1 in each run. `execution` names the program run that did something, as
--- executions.execution within the same boot and run; 0 if unknown.
+-- and the other times are the guest's clock, which the guest sets from the Mac at boot.
+-- `observer_run` is the observer process (Hello.run): the supervisor starts it again if it
+-- exits, and its execution numbers count from 1 in each run. `execution` names the program
+-- run that did something, as executions.execution within the same boot and observer run;
+-- 0 if unknown.
 
 -- Programs the agent and its descendants ran, and attempts the kernel refused.
 CREATE TABLE executions (
     id             INTEGER PRIMARY KEY,
     boot_id        INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
-    run            INTEGER NOT NULL,
+    observer_run   INTEGER NOT NULL,
     execution      INTEGER,                         -- NULL for a refused attempt
     parent         INTEGER NOT NULL,                -- the execution that started it; 0: none
     pid            INTEGER NOT NULL,
@@ -73,13 +74,13 @@ CREATE TABLE executions (
     exit_code      INTEGER,                         -- -1 if ended by a signal
     exit_signal    INTEGER
 ) STRICT;
-CREATE UNIQUE INDEX executions_by_number ON executions (boot_id, run, execution);
+CREATE UNIQUE INDEX executions_by_number ON executions (boot_id, observer_run, execution);
 
 -- Files opened (the first time per process and access), deleted or renamed.
 CREATE TABLE file_accesses (
     id             INTEGER PRIMARY KEY,
     boot_id        INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
-    run            INTEGER NOT NULL,
+    observer_run   INTEGER NOT NULL,
     execution      INTEGER NOT NULL,
     pid            INTEGER NOT NULL,
     at             INTEGER NOT NULL,
@@ -89,28 +90,31 @@ CREATE TABLE file_accesses (
     new_path       TEXT,                            -- renames only
     path_truncated INTEGER NOT NULL DEFAULT 0 CHECK (path_truncated IN (0, 1))
 ) STRICT;
-CREATE INDEX file_accesses_by_execution ON file_accesses (boot_id, run, execution);
+CREATE INDEX file_accesses_by_boot ON file_accesses (boot_id, id);
 
--- Network destinations: TCP connections with their outcome, UDP destinations (DNS too).
+-- Network destinations as the guest saw them: TCP connections, UDP destinations (DNS
+-- too). A TCP "connected" only means the Mac's network stack accepted the connection; what
+-- happened next is in network_flows, matched by address, port and local_port.
 CREATE TABLE connections (
-    id        INTEGER PRIMARY KEY,
-    boot_id   INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
-    run       INTEGER NOT NULL,
-    execution INTEGER NOT NULL,
-    pid       INTEGER NOT NULL,
-    at        INTEGER NOT NULL,
-    protocol  TEXT NOT NULL CHECK (protocol IN ('tcp', 'udp', 'unknown')),
-    address   TEXT NOT NULL,
-    port      INTEGER NOT NULL,
-    result    TEXT NOT NULL CHECK (result IN ('connected', 'failed', 'sent', 'unknown'))
+    id           INTEGER PRIMARY KEY,
+    boot_id      INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
+    observer_run INTEGER NOT NULL,
+    execution    INTEGER NOT NULL,
+    pid          INTEGER NOT NULL,
+    at           INTEGER NOT NULL,
+    protocol     TEXT NOT NULL CHECK (protocol IN ('tcp', 'udp', 'unknown')),
+    address      TEXT NOT NULL,
+    port         INTEGER NOT NULL,
+    local_port   INTEGER NOT NULL DEFAULT 0,        -- the guest's source port; TCP only, 0 if unknown
+    result       TEXT NOT NULL CHECK (result IN ('connected', 'failed', 'sent', 'unknown'))
 ) STRICT;
-CREATE INDEX connections_by_execution ON connections (boot_id, run, execution);
+CREATE INDEX connections_by_boot ON connections (boot_id, id);
 
 -- Changes of a process's user or group IDs or capabilities: sudo, su, setuid programs.
 CREATE TABLE credential_changes (
     id                  INTEGER PRIMARY KEY,
     boot_id             INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
-    run                 INTEGER NOT NULL,
+    observer_run        INTEGER NOT NULL,
     execution           INTEGER NOT NULL,
     pid                 INTEGER NOT NULL,
     at                  INTEGER NOT NULL,
@@ -124,17 +128,62 @@ CREATE TABLE credential_changes (
     egid_after          INTEGER NOT NULL,
     capabilities_raised INTEGER NOT NULL CHECK (capabilities_raised IN (0, 1))
 ) STRICT;
-CREATE INDEX credential_changes_by_execution ON credential_changes (boot_id, run, execution);
+CREATE INDEX credential_changes_by_boot ON credential_changes (boot_id, id);
 
--- The observer's counters (Health), stored when events were lost, otherwise once a minute. `at` is the app's clock.
+-- The observer's counters (Health), stored when events were lost, otherwise once a minute.
+-- `at` is the app's clock.
 CREATE TABLE collector_health (
-    id          INTEGER PRIMARY KEY,
-    boot_id     INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
-    run         INTEGER NOT NULL,
-    at          INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)),
-    lost_kernel INTEGER NOT NULL,                   -- the kernel's buffer was full
-    lost_queue  INTEGER NOT NULL,                   -- the observer's queue was full
-    filtered    TEXT NOT NULL CHECK (json_valid(filtered)), -- {"repeated_open": 12, …}
-    processes   INTEGER NOT NULL,
-    sequence    INTEGER NOT NULL
+    id           INTEGER PRIMARY KEY,
+    boot_id      INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
+    observer_run INTEGER NOT NULL,
+    at           INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)),
+    lost_kernel  INTEGER NOT NULL,                  -- the kernel's buffer was full
+    lost_queue   INTEGER NOT NULL,                  -- the observer's queue was full
+    filtered     TEXT NOT NULL CHECK (json_valid(filtered)), -- {"repeated_open": 12, …}
+    processes    INTEGER NOT NULL,
+    sequence     INTEGER NOT NULL
 ) STRICT;
+CREATE INDEX collector_health_by_boot ON collector_health (boot_id, id);
+
+-- What the app's network stack on the Mac saw in agent boots (src/net.rs, src/netlog.rs).
+-- Recorded outside the guest; `at` is the Mac's clock.
+
+-- DNS lookups of the guest: every query to port 53 goes to the Mac's nameserver.
+CREATE TABLE dns_lookups (
+    id      INTEGER PRIMARY KEY,
+    boot_id INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
+    at      INTEGER NOT NULL,
+    name    TEXT NOT NULL,                          -- the queried name, lowercase, no trailing dot
+    type    TEXT NOT NULL,                          -- "A", "AAAA", "HTTPS", …
+    result  TEXT NOT NULL CHECK (result IN ('answered', 'refused')), -- refused: by the policy
+    rcode   TEXT,                                   -- the answer's code, e.g. "NoError", "NameError"
+    cnames  TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(cnames)) -- names of the CNAME chain
+) STRICT;
+CREATE INDEX dns_lookups_by_boot ON dns_lookups (boot_id, id);
+
+-- The addresses an answered lookup returned.
+CREATE TABLE dns_answers (
+    lookup_id INTEGER NOT NULL REFERENCES dns_lookups(id) ON DELETE CASCADE,
+    boot_id   INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
+    address   TEXT NOT NULL,
+    ttl       INTEGER NOT NULL                      -- seconds
+) STRICT;
+CREATE INDEX dns_answers_by_lookup ON dns_answers (lookup_id);
+
+-- TCP connections and UDP flows of the guest, as the Mac's policy decided them and, when
+-- allowed, whether the Mac reached the destination. DNS isn't here; see dns_lookups.
+CREATE TABLE network_flows (
+    id         INTEGER PRIMARY KEY,
+    boot_id    INTEGER NOT NULL REFERENCES boots(id) ON DELETE CASCADE,
+    at         INTEGER NOT NULL,
+    protocol   TEXT NOT NULL CHECK (protocol IN ('tcp', 'udp')),
+    local_port INTEGER NOT NULL,                    -- the guest's source port
+    address    TEXT NOT NULL,
+    port       INTEGER NOT NULL,
+    decision   TEXT NOT NULL CHECK (decision IN ('allowed', 'blocked')),
+    rule       TEXT,                                -- the deciding rule's target; 'local network' when
+                                                    -- the Mac and the local network are closed; NULL: the default action
+    outcome    TEXT CHECK (outcome IS NULL OR outcome IN ('connected', 'failed', 'timed out')),
+    error      TEXT                                 -- why connecting failed
+) STRICT;
+CREATE INDEX network_flows_by_boot ON network_flows (boot_id, id);

@@ -476,22 +476,6 @@ export component CreateInstance {
                     }
 
                     Section {
-                        title: "Sign-in";
-                        description: "How the agent signs in to its service.";
-
-                        Radio {
-                            label: "Sign in inside the terminal on first start";
-                            checked: true;
-                        }
-
-                        Radio {
-                            label: "Use an Anthropic API key";
-                            note: "Not available yet";
-                            enabled: false;
-                        }
-                    }
-
-                    Section {
                         title: "Environment variables";
                         description: "Visible to the agent and recorded with each run.";
 
@@ -727,11 +711,6 @@ export component CreateInstance {
                             key: "In";
                             value: Creation.working-directory;
                             mono: true;
-                        }
-
-                        KeyValue {
-                            key: "Sign-in";
-                            value: "Inside the terminal on first start";
                         }
                     }
 

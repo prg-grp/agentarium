@@ -1,0 +1,861 @@
+// Activity tab: what the agent did in one run, as commands, files, network and all events.
+// Selecting a row opens its detail page in place of the list. See design/activity-commands.md, activity-timeline.md
+// and activity-network.md. The views are built in src/activity_data.rs; this only shows
+// them and reports every input to the `Activity` callbacks.
+
+import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Tone, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem } from "types.slint";
+import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
+
+export global Activity {
+    // Shown instead of the tab when the instance has no agent run yet; "" otherwise.
+    in property <string> placeholder;
+    in property <[RunItem]> runs;
+    in property <int> run;
+    // 0 Commands, 1 Files, 2 Network, 3 All events.
+    in property <int> view;
+    in-out property <string> search;
+    in property <bool> show-reads: true;
+    in property <bool> failed-only;
+    // All events only.
+    in property <bool> show-processes: true;
+    in property <bool> show-files: true;
+    in property <bool> show-network: true;
+
+    in property <[ActivityRow]> rows;
+    in property <string> selected;
+    in property <[string]> counts;
+    in property <string> blocked;
+    in property <string> monitoring;
+    in property <Tone> monitoring-tone: Tone.muted;
+    in property <string> note;
+    in property <string> empty;
+
+    // The detail page, shown instead of the list while open.
+    in property <bool> detail-open;
+    in property <string> back-label;
+    in property <string> detail-kind;
+    in property <string> detail-headline;
+    in property <[DetailField]> detail-facts;
+    in property <string> detail-script;
+    in property <[string]> detail-argv;
+    in property <string> detail-argv-note;
+    in property <[DetailSection]> detail-sections;
+    in property <[DetailEntry]> detail-record;
+    in property <string> detail-note;
+    // Collapsed parts of the page; Rust closes them for every new page.
+    in-out property <bool> args-open;
+    in-out property <bool> record-open;
+
+    callback set-view(int);
+    callback pick-run(int);
+    callback search-edited(string);
+    callback toggle-reads();
+    callback toggle-failed();
+    // 0 processes, 1 files, 2 network.
+    callback toggle-kind(int);
+    callback toggle-row(string);
+    // A row of the list, or an item of a detail page, to open.
+    callback select-row(string);
+    // Back to the previous page, or to the list.
+    callback back();
+}
+
+// A filter chip: on or off.
+component Chip {
+    in property <string> text;
+    in property <bool> on;
+    callback clicked();
+
+    height: 26px;
+    horizontal-stretch: 0;
+    accessible-role: checkbox;
+    accessible-checked: on;
+    accessible-label: text;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Rectangle {
+        border-radius: 13px;
+        border-width: on ? 0px : 1px;
+        border-color: Theme.line2;
+        background: on ? Theme.raise : (touch.has-hover ? Theme.hover : transparent);
+    }
+
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 11px;
+
+        Text {
+            text: root.text;
+            color: on ? Theme.tx : Theme.tx2;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One row of a view. Clicking selects it (a heading toggles); the caret expands it.
+component Row inherits Rectangle {
+    in property <ActivityRow> item;
+    in property <bool> selected;
+    in property <bool> events;
+    callback toggle();
+    callback select();
+
+    // One height for every row, so the list measures them all alike.
+    height: 44px;
+    background: selected ? #1B2130 : item.heading ? Theme.panel : (touch.has-hover ? Theme.hover : transparent);
+    accessible-role: list-item;
+    accessible-label: item.title;
+    accessible-item-selected: selected;
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            if item.heading {
+                root.toggle();
+            } else {
+                root.select();
+            }
+        }
+    }
+
+    Rectangle {
+        x: 0;
+        width: 2px;
+        background: Theme.acc;
+        visible: selected;
+    }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: Theme.line;
+        visible: item.heading;
+    }
+
+    HorizontalLayout {
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 10px;
+
+        Text {
+            width: 100px;
+            text: item.time;
+            font-family: Theme.mono;
+            font-size: Theme.font-meta;
+            color: Theme.tx3;
+            vertical-alignment: center;
+        }
+
+        if events: Text {
+            width: 64px;
+            text: item.label;
+            font-size: Theme.font-small;
+            color: Theme.tx2;
+            vertical-alignment: center;
+        }
+
+        Rectangle {
+            width: item.depth * 18px;
+        }
+
+        Rectangle {
+            width: 14px;
+
+            Text {
+                text: !item.expandable ? "" : item.expanded ? "▾" : "▸";
+                color: Theme.tx2;
+                font-size: Theme.font-small;
+            }
+
+            if item.expandable: TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    root.toggle();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            spacing: 3px;
+
+            Text {
+                text: item.title;
+                font-family: item.heading ? "" : Theme.mono;
+                font-size: item.heading ? Theme.font-small : Theme.font-mono;
+                font-weight: item.heading ? Theme.weight-medium : Theme.weight-regular;
+                color: item.dim ? Theme.tx2 : Theme.tx;
+                overflow: elide;
+            }
+
+            if item.subtitle != "": Text {
+                text: item.subtitle;
+                font-size: Theme.font-meta;
+                color: Theme.tone-color(item.subtitle-tone);
+                overflow: elide;
+            }
+        }
+
+        if item.meta != "": Text {
+            width: 150px;
+            text: item.meta;
+            font-size: Theme.font-small;
+            color: Theme.tx2;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        Text {
+            width: 220px;
+            text: item.result;
+            font-size: Theme.font-small;
+            color: Theme.tone-color(item.tone);
+            horizontal-alignment: right;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A section toggle: "Arguments (82)" with a caret.
+component Disclosure {
+    in property <string> text;
+    in property <bool> open;
+    callback toggled();
+
+    height: 26px;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => {
+        root.toggled();
+    }
+
+    HorizontalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        Text {
+            text: root.open ? "▾" : "▸";
+            color: Theme.tx2;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+
+        Text {
+            text: root.text;
+            color: Theme.tx2;
+            font-size: Theme.font-meta;
+            vertical-alignment: center;
+        }
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.toggled();
+        }
+    }
+}
+
+// One item of a section. Items with a key open their own page.
+component SectionItem inherits Rectangle {
+    in property <DetailItem> item;
+    // The width the texts wrap at.
+    in property <length> text-width;
+
+    border-radius: Theme.radius-control;
+    background: item.key != "" && touch.has-hover ? Theme.hover : transparent;
+
+    touch := TouchArea {
+        enabled: item.key != "";
+        mouse-cursor: item.key != "" ? pointer : default;
+        clicked => {
+            Activity.select-row(item.key);
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 8px + item.depth * 18px;
+        padding-right: 8px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        spacing: 8px;
+
+        VerticalLayout {
+            spacing: 2px;
+
+            Text {
+                width: root.text-width - item.depth * 18px;
+                text: item.text;
+                font-family: item.mono ? Theme.mono : "";
+                font-size: item.mono ? Theme.font-mono : Theme.font-small;
+                color: Theme.tx;
+                wrap: char-wrap;
+            }
+
+            if item.detail != "": Text {
+                width: root.text-width - item.depth * 18px;
+                text: item.detail;
+                font-size: Theme.font-meta;
+                color: item.tone == Tone.neutral || item.tone == Tone.muted ? Theme.tx2 : Theme.tone-color(item.tone);
+                wrap: word-wrap;
+            }
+        }
+
+        Text {
+            width: 12px;
+            text: item.key != "" ? "›" : "";
+            color: Theme.tx3;
+            font-size: Theme.font-body;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// The selected row's page: a summary first, the full record last. Every wrapping text has
+// an explicit width, as Slint measures a wrapped text's height at its own width.
+component DetailPage inherits Rectangle {
+    background: Theme.bg;
+    // The width of the page's content.
+    property <length> page: min(root.width - 48px, 880px);
+
+    VerticalLayout {
+        Rectangle {
+            height: 44px;
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 20px;
+                // Centers the 26 px compact button in the 44 px bar.
+                padding-top: 9px;
+                padding-bottom: 9px;
+                spacing: 10px;
+
+                AppButton {
+                    text: Activity.back-label;
+                    kind: ButtonKind.ghost;
+                    compact: true;
+                    clicked => {
+                        Activity.back();
+                    }
+                }
+
+                Text {
+                    text: Activity.run >= 0 && Activity.run < Activity.runs.length ? Activity.runs[Activity.run].title : "";
+                    font-size: Theme.font-small;
+                    color: Theme.tx3;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            horizontal-scrollbar-policy: always-off;
+
+            VerticalLayout {
+                padding: 24px;
+                spacing: 18px;
+                alignment: start;
+
+                // Kind and headline
+                VerticalLayout {
+                    spacing: 4px;
+
+                    Text {
+                        text: Activity.detail-kind;
+                        font-size: Theme.font-meta;
+                        color: Theme.tx3;
+                    }
+
+                    Text {
+                        width: root.page;
+                        text: Activity.detail-headline;
+                        font-size: Theme.font-dialog;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.tx;
+                        wrap: char-wrap;
+                    }
+                }
+
+                // Facts
+                if Activity.detail-facts.length > 0: VerticalLayout {
+                    spacing: 6px;
+
+                    for fact in Activity.detail-facts: HorizontalLayout {
+                        spacing: 12px;
+                        alignment: start;
+
+                        Text {
+                            width: 140px;
+                            text: fact.label;
+                            font-size: Theme.font-small;
+                            color: Theme.tx3;
+                        }
+
+                        Text {
+                            width: root.page - 152px;
+                            text: fact.value;
+                            font-family: fact.mono ? Theme.mono : "";
+                            font-size: fact.mono ? Theme.font-mono : Theme.font-small;
+                            color: Theme.tx;
+                            wrap: char-wrap;
+                        }
+                    }
+                }
+
+                // What ran
+                if Activity.detail-script != "": VerticalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        text: "What ran";
+                        font-size: Theme.font-meta;
+                        color: Theme.tx3;
+                    }
+
+                    Rectangle {
+                        width: root.page;
+                        background: Theme.well;
+                        border-radius: Theme.radius-item;
+
+                        HorizontalLayout {
+                            padding: 12px;
+
+                            Text {
+                                width: root.page - 24px;
+                                text: Activity.detail-script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                color: Theme.tx;
+                                wrap: char-wrap;
+                            }
+                        }
+                    }
+
+                    if Activity.detail-argv-note != "": Text {
+                        text: Activity.detail-argv-note;
+                        font-size: Theme.font-meta;
+                        color: Theme.warn;
+                    }
+
+                    if Activity.detail-argv.length > 0: Disclosure {
+                        text: "Arguments (\{Activity.detail-argv.length})";
+                        open: Activity.args-open;
+                        toggled => {
+                            Activity.args-open = !Activity.args-open;
+                        }
+                    }
+
+                    if Activity.args-open: VerticalLayout {
+                        spacing: 3px;
+
+                        for arg[index] in Activity.detail-argv: HorizontalLayout {
+                            spacing: 8px;
+                            alignment: start;
+
+                            Text {
+                                width: 30px;
+                                text: index;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-meta;
+                                color: Theme.tx3;
+                                horizontal-alignment: right;
+                            }
+
+                            Text {
+                                width: root.page - 38px;
+                                text: arg;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-meta;
+                                color: Theme.tx2;
+                                wrap: char-wrap;
+                            }
+                        }
+                    }
+                }
+
+                // Sections
+                for part in Activity.detail-sections: VerticalLayout {
+                    spacing: 4px;
+
+                    Text {
+                        text: part.title;
+                        font-size: Theme.font-meta;
+                        font-weight: Theme.weight-medium;
+                        color: Theme.tx3;
+                    }
+
+                    if part.note != "": Text {
+                        width: root.page;
+                        text: part.note;
+                        font-size: Theme.font-meta;
+                        color: Theme.tx3;
+                        wrap: word-wrap;
+                    }
+
+                    for entry in part.items: SectionItem {
+                        item: entry;
+                        text-width: root.page - 36px;
+                    }
+                }
+
+                // Note
+                if Activity.detail-note != "": Rectangle {
+                    width: root.page;
+                    border-width: 1px;
+                    border-color: Theme.line2;
+                    border-radius: Theme.radius-item;
+
+                    HorizontalLayout {
+                        padding: 10px;
+
+                        Text {
+                            width: root.page - 20px;
+                            text: Activity.detail-note;
+                            font-size: Theme.font-small;
+                            color: Theme.tx2;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // Full record
+                if Activity.detail-record.length > 0: Disclosure {
+                    text: "Full record (\{Activity.detail-record.length})";
+                    open: Activity.record-open;
+                    toggled => {
+                        Activity.record-open = !Activity.record-open;
+                    }
+                }
+
+                if Activity.record-open: VerticalLayout {
+                    spacing: 4px;
+
+                    for entry in Activity.detail-record: HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        Text {
+                            width: 96px;
+                            text: entry.time;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-meta;
+                            color: Theme.tx3;
+                        }
+
+                        Text {
+                            width: root.page - 106px;
+                            text: entry.text;
+                            font-size: Theme.font-small;
+                            color: entry.tone == Tone.neutral ? Theme.tx : Theme.tone-color(entry.tone);
+                            wrap: char-wrap;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component ActivityTab inherits Rectangle {
+    background: Theme.bg;
+
+    if Activity.placeholder != "": Text {
+        text: Activity.placeholder;
+        color: Theme.tx3;
+        font-size: Theme.font-small;
+    }
+
+    // The list stays alive under the detail page, so it keeps its scroll position.
+    if Activity.placeholder == "": VerticalLayout {
+        visible: !Activity.detail-open;
+
+        // Toolbar
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 14px;
+            padding-bottom: 10px;
+            spacing: 10px;
+
+            SegmentedControl {
+                options: ["Commands", "Files", "Network", "All events"];
+                selected: Activity.view;
+                changed(index) => {
+                    Activity.set-view(index);
+                }
+            }
+
+            run-button := AppButton {
+                kind: ButtonKind.neutral;
+                compact: true;
+                icon: @image-url("icons/refresh.svg");
+                text: Activity.run >= 0 && Activity.run < Activity.runs.length
+                    ? Activity.runs[Activity.run].title + "  ▾" : "Run";
+                label: "Choose a run";
+                clicked => {
+                    picker.show();
+                }
+            }
+
+            picker := PopupWindow {
+                x: run-button.x;
+                y: run-button.y + run-button.height + 4px;
+                width: 440px;
+
+                Rectangle {
+                    background: #1C2028;
+                    border-width: 1px;
+                    border-color: Theme.line2;
+                    border-radius: 10px;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 2px;
+
+                        Text {
+                            text: "Agent runs";
+                            font-size: Theme.font-meta;
+                            color: Theme.tx3;
+                            height: 24px;
+                            vertical-alignment: center;
+                        }
+
+                        for run[index] in Activity.runs: Rectangle {
+                            height: 46px;
+                            border-radius: Theme.radius-control;
+                            background: index == Activity.run ? #232A38 : (pick.has-hover ? Theme.hover : transparent);
+
+                            pick := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    Activity.pick-run(index);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 10px;
+                                padding-right: 10px;
+                                spacing: 8px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    spacing: 2px;
+
+                                    Text {
+                                        text: run.title;
+                                        font-size: Theme.font-small;
+                                        color: Theme.tx;
+                                    }
+
+                                    Text {
+                                        text: run.detail;
+                                        font-size: Theme.font-meta;
+                                        color: Theme.tx3;
+                                    }
+                                }
+
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                }
+
+                                Text {
+                                    text: run.live ? "Running" : "";
+                                    font-size: Theme.font-meta;
+                                    color: Theme.ok;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            LineEdit {
+                width: 320px;
+                placeholder-text: "Search commands, paths, addresses, domains";
+                text <=> Activity.search;
+                edited(text) => {
+                    Activity.search-edited(text);
+                }
+            }
+        }
+
+        // Filters
+        HorizontalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-bottom: 10px;
+            spacing: 6px;
+
+            Chip {
+                text: "Show reads";
+                on: Activity.show-reads;
+                clicked => {
+                    Activity.toggle-reads();
+                }
+            }
+
+            Chip {
+                text: "Failed or blocked only";
+                on: Activity.failed-only;
+                clicked => {
+                    Activity.toggle-failed();
+                }
+            }
+
+            if Activity.view == 3: Rectangle {
+                width: 1px;
+                background: Theme.line2;
+            }
+
+            if Activity.view == 3: Chip {
+                text: "Processes";
+                on: Activity.show-processes;
+                clicked => {
+                    Activity.toggle-kind(0);
+                }
+            }
+
+            if Activity.view == 3: Chip {
+                text: "Files";
+                on: Activity.show-files;
+                clicked => {
+                    Activity.toggle-kind(1);
+                }
+            }
+
+            if Activity.view == 3: Chip {
+                text: "Network";
+                on: Activity.show-network;
+                clicked => {
+                    Activity.toggle-kind(2);
+                }
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+        }
+
+        // Counts
+        Rectangle {
+            height: 34px;
+            background: Theme.panel;
+
+            Rectangle {
+                y: 0;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            Rectangle {
+                y: parent.height - 1px;
+                height: 1px;
+                background: Theme.line;
+            }
+
+            HorizontalLayout {
+                padding-left: 20px;
+                padding-right: 20px;
+                spacing: 16px;
+
+                for count in Activity.counts: Text {
+                    text: count;
+                    font-size: Theme.font-small;
+                    color: Theme.tx;
+                    vertical-alignment: center;
+                }
+
+                if Activity.blocked != "": Text {
+                    text: Activity.blocked;
+                    font-size: Theme.font-small;
+                    color: Theme.bad;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                Text {
+                    text: Activity.monitoring;
+                    font-size: Theme.font-small;
+                    color: Theme.tone-color(Activity.monitoring-tone);
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        VerticalLayout {
+            vertical-stretch: 1;
+
+                if Activity.rows.length == 0: Rectangle {
+                    vertical-stretch: 1;
+
+                    Text {
+                        text: Activity.empty;
+                        color: Theme.tx3;
+                        font-size: Theme.font-small;
+                    }
+                }
+
+                if Activity.rows.length > 0: ListView {
+                    vertical-stretch: 1;
+
+                    for row in Activity.rows: Row {
+                        item: row;
+                        selected: row.key == Activity.selected;
+                        events: Activity.view == 3;
+                        toggle => {
+                            Activity.toggle-row(row.key);
+                        }
+                        select => {
+                            Activity.select-row(row.key);
+                        }
+                    }
+                }
+
+                if Activity.note != "": Text {
+                    height: 28px;
+                    text: Activity.note;
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+        }
+    }
+
+    if Activity.placeholder == "" && Activity.detail-open: DetailPage { }
+}

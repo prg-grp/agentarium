@@ -139,7 +139,9 @@ enum Protocol {
 
 enum ConnectionResult {
   CONNECTION_RESULT_UNSPECIFIED = 0;
-  // TCP: the handshake completed.
+  // TCP: the handshake completed. The app's network stack on the Mac accepts every guest
+  // connection before its policy decides and before it connects onward, so this doesn't
+  // say the destination was reached; the app records that outcome itself.
   CONNECTION_RESULT_CONNECTED = 1;
   // TCP: the connection was refused, timed out, or was given up.
   CONNECTION_RESULT_FAILED = 2;
@@ -155,6 +157,9 @@ message Connection {
   bytes address = 2;
   uint32 port = 3;
   ConnectionResult result = 4;
+  // The guest's source port; TCP only, 0 if unknown. With the destination it identifies
+  // the connection on the Mac's side.
+  uint32 local_port = 5;
 }
 
 // A process changed its user or group IDs or gained capabilities: sudo, su, a setuid

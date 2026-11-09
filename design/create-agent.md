@@ -12,9 +12,6 @@ Launch              Command [claude]
 What starts when…   Arguments [--permission-mode ×][acceptEdits ×] [Add argument]
                     Working directory inside the instance [/home/ubuntu/workspace]
 ───────────────────────────────────────────────────────────────────────
-Sign-in             (•) Sign in inside the terminal on first start
-How the agent…      ( ) Use an Anthropic API key   Not available yet
-───────────────────────────────────────────────────────────────────────
 Environment         [RUST_LOG        ] [info                     ] ×
 variables           [DATABASE_URL    ] [postgres://db.test/billing] ×
 Visible to agent…   + Add variable
@@ -24,12 +21,14 @@ Cancel                              [< Back]  [Continue to shared folders]
 
 ## Elements
 
+There is no sign-in setting: the agent signs in inside the terminal on its first start.
+
+
 - **Launch:**
   - Command field (200 px, monospace), set by the preset (`claude`, `codex`, `gemini`, `opencode`) and read-only, with "Set by the <preset> preset." in `tx2` beside it. It is editable, and starts empty, only for a custom agent.
   - Arguments shown as tokens (monospace on `raise`, 4 px radius, each with a remove icon), followed by an "Add argument" field. Return adds the typed argument. Arguments form an argv list, not a single string; each is passed as it is.
   - Working directory inside the instance (monospace, max 360 px). Default: `/home/ubuntu/workspace`, the agent user's `~/workspace`, where shared folders are placed by default.
   - Description: "What starts when the instance boots. Runs directly, not through a shell." If shell execution is supported later, it must be an explicit option.
-- **Sign-in:** a radio list. "Sign in inside the terminal on first start" is selected. "Use an Anthropic API key" is shown disabled with "Not available yet"; it will store the key in the macOS Keychain once credentials are supported.
 - **Environment variables:** two-column rows (name 200 px, value flexible, both monospace), each with a remove icon. An "Add variable" ghost button sits below. Description: "Visible to the agent and recorded with each run."
   - Values are stored as they are, in plain text, and passed to the instance as they are. A secret mode (Keychain-backed values) comes later; until then there is no secret detection or warning.
   - Rows left completely empty are dropped on create.
@@ -43,5 +42,5 @@ Cancel                              [< Back]  [Continue to shared folders]
 
 ## Copy
 
-- Section titles: "Launch", "Sign-in", "Environment variables"
+- Section titles: "Launch", "Environment variables"
 - Primary button: "Continue to shared folders"

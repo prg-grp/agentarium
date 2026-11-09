@@ -450,6 +450,7 @@ fn convert(
                 .into(),
                 address,
                 port: connect.port.into(),
+                local_port: connect.local_port.into(),
                 result: match connect.result {
                     result::CONNECTED => ConnectionResult::Connected,
                     result::FAILED => ConnectionResult::Failed,

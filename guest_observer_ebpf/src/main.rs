@@ -696,6 +696,8 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> i32 {
         address[..4].copy_from_slice(&v4.to_ne_bytes());
     }
     let port = read!((*sk).__bindgen_anon_3.__bindgen_anon_1.skc_dport).unwrap_or(0);
+    // The guest's own port, in host byte order; the Mac's network stack sees it too.
+    let local_port = read!((*sk).__bindgen_anon_3.__bindgen_anon_1.skc_num).unwrap_or(0);
     let Some(mut entry) = EVENTS.reserve::<ConnectEvent>(0) else {
         count(counter::LOST);
         return 0;
@@ -710,7 +712,7 @@ pub fn inet_sock_set_state(ctx: BtfTracePointContext) -> i32 {
         },
         family,
         port: u16::from_be(port),
-        _pad: 0,
+        local_port,
         address,
     });
     entry.submit(0);
@@ -763,7 +765,8 @@ fn datagram(ctx: &SockAddrContext, family: u16) {
         result: result::SENT,
         family,
         port: key.port,
-        _pad: 0,
+        // Not bound yet when the cgroup hooks run.
+        local_port: 0,
         address: key.address,
     });
     entry.submit(0);

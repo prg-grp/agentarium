@@ -14,7 +14,6 @@ Harness         Name          billing-service                     Edit
 ──────────────────────────────────────────────────────────────────────
 Agent           Runs       claude --permission-mode acceptEdits   Edit
                 In         /home/ubuntu/workspace
-                Sign-in    Inside the terminal on first start
 ──────────────────────────────────────────────────────────────────────
 Shared folders  ~/code/billing-service  ✎ Read and write. Changes     Edit
                                           modify your files immediately.

@@ -1,11 +1,14 @@
 // Prevent console window in addition to Slint window in Windows release builds when, e.g., starting the app via file manager. Ignored on other platforms.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod activity;
+mod activity_data;
 mod controller;
 mod create;
 mod db;
 mod editor;
 mod net;
+mod netlog;
 mod observer;
 mod policy;
 mod preset;
@@ -57,6 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let control = VmControl::new(&ui, db.clone(), instances.clone());
     let settings =
         settings::SettingsEditor::new(&ui, db.clone(), instances.clone(), control.clone());
+    let activity = activity::ActivityView::new(&ui, db.clone(), control.clone());
 
     // Closing the window or quitting shuts all VMs down gracefully first.
     let c = control.clone();
@@ -104,15 +108,21 @@ fn main() -> Result<(), Box<dyn Error>> {
     ui.on_create_instance(move || creator.open());
 
     // The Terminal tab shows the selected instance's session, the Logs tab its boot log;
-    // the Settings tab its configuration.
+    // the Activity tab its runs' activity, the Settings tab its configuration.
     let c = control.clone();
     let s = settings.clone();
+    let a = activity.clone();
     ui.on_instance_selected(move |id| {
         c.select(&id);
         s.open(&id);
+        a.open(&id);
     });
     let c = control.clone();
-    ui.on_tab_changed(move |tab| c.set_view(if tab == 1 { View::Log } else { View::Session }));
+    let a = activity.clone();
+    ui.on_tab_changed(move |tab| {
+        c.set_view(if tab == 1 { View::Log } else { View::Session });
+        a.set_visible(tab == 3);
+    });
     // `open` shows the folder in Finder; it returns right after asking Finder.
     ui.on_open_logs(|id| {
         let opened = db::logs_dir(&id).and_then(|dir| {
@@ -129,6 +139,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     {
         control.select(&item.id);
         settings.open(&item.id);
+        activity.open(&item.id);
     }
 
     let c = control.clone();
@@ -180,6 +191,20 @@ fn main() -> Result<(), Box<dyn Error>> {
             t.select_update(col, row);
         }
     });
+    let c = control.clone();
+    session.on_hover(move |col, row| {
+        if let Some(t) = c.shown_terminal() {
+            t.hover(Some((col, row)));
+        }
+    });
+    let c = control.clone();
+    session.on_hover_end(move || {
+        if let Some(t) = c.shown_terminal() {
+            t.hover(None);
+        }
+    });
+    let c = control.clone();
+    session.on_open_link(move |col, row| c.shown_terminal().is_some_and(|t| t.open_link(col, row)));
     session.on_jump_to_latest(move || {
         if let Some(t) = control.shown_terminal() {
             t.jump_to_latest();

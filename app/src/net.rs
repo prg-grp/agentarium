@@ -30,6 +30,7 @@ use tokio::runtime::Runtime;
 use tokio::sync::mpsc::{self, error::TrySendError};
 use tokio::time::{sleep, timeout};
 
+use crate::netlog::{Event, Flow, NetLog, Outcome};
 use crate::policy::Policy;
 
 /// MTU of the guest NIC and the stack. 1500 is Virtualization.framework's default.
@@ -49,8 +50,12 @@ pub struct Network {
 
 impl Network {
     /// Starts the network under `policy` and returns it with the guest's end of the
-    /// socketpair, which becomes the VM's network device.
-    pub fn start(policy: Arc<Policy>) -> io::Result<(Network, StdUnixDatagram)> {
+    /// socketpair, which becomes the VM's network device. With `log`, lookups and
+    /// connections are recorded (agent boots).
+    pub fn start(
+        policy: Arc<Policy>,
+        log: Option<NetLog>,
+    ) -> io::Result<(Network, StdUnixDatagram)> {
         let (guest, host) = StdUnixDatagram::pair()?;
         for socket in [&guest, &host] {
             set_buffers(socket)?;
@@ -67,7 +72,7 @@ impl Network {
             UnixDatagram::from_std(host)?
         };
         runtime.spawn(async move {
-            if let Err(error) = run(host, upstream_dns(), policy).await {
+            if let Err(error) = run(host, upstream_dns(), policy, log).await {
                 eprintln!("The VM network stopped: {error}");
             }
         });
@@ -90,15 +95,24 @@ impl Drop for Network {
 }
 
 /// Moves frames between the guest and the stack, and starts the TCP and UDP relays.
-async fn run(host: UnixDatagram, dns: SocketAddr, policy: Arc<Policy>) -> io::Result<()> {
+async fn run(
+    host: UnixDatagram,
+    dns: SocketAddr,
+    policy: Arc<Policy>,
+    log: Option<NetLog>,
+) -> io::Result<()> {
     let (stack, runner, udp, tcp) = StackBuilder::default()
         .enable_tcp(true)
         .enable_udp(true)
         .mtu(MTU)
         .build()?;
     tokio::spawn(runner.expect("TCP is enabled"));
-    tokio::spawn(relay_tcp(tcp.expect("TCP is enabled"), policy.clone()));
-    tokio::spawn(relay_udp(udp.expect("UDP is enabled"), dns, policy));
+    tokio::spawn(relay_tcp(
+        tcp.expect("TCP is enabled"),
+        policy.clone(),
+        log.clone(),
+    ));
+    tokio::spawn(relay_udp(udp.expect("UDP is enabled"), dns, policy, log));
 
     let host = Arc::new(host);
     let guest_mac = Arc::new(OnceLock::new());
@@ -178,21 +192,50 @@ fn arp_reply(payload: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Opens each guest TCP connection the policy allows on the Mac and copies data both ways.
-/// A blocked connection is closed right away.
-async fn relay_tcp(mut listener: TcpListener, policy: Arc<Policy>) {
-    while let Some((mut guest, _, destination)) = listener.next().await {
-        if !policy.allows(destination.ip()) {
+/// A blocked connection is closed right away. The stack has already accepted the guest's
+/// connection either way, so only `log` knows how it really went.
+async fn relay_tcp(mut listener: TcpListener, policy: Arc<Policy>, log: Option<NetLog>) {
+    while let Some((mut guest, guest_address, destination)) = listener.next().await {
+        let verdict = policy.verdict(destination.ip());
+        if !verdict.allowed {
             eprintln!("Blocked a TCP connection to {destination}");
+            if let Some(log) = &log {
+                log.record(Event::Flow(Flow {
+                    protocol: "tcp",
+                    guest: guest_address,
+                    destination,
+                    verdict,
+                    outcome: None,
+                }));
+            }
             continue;
         }
         let upstream = on_mac(destination);
+        let log = log.clone();
         tokio::spawn(async move {
-            let mut remote = match timeout(CONNECT_TIMEOUT, TcpStream::connect(upstream)).await {
+            let connected = timeout(CONNECT_TIMEOUT, TcpStream::connect(upstream)).await;
+            if let Some(log) = &log {
+                log.record(Event::Flow(Flow {
+                    protocol: "tcp",
+                    guest: guest_address,
+                    destination,
+                    verdict,
+                    outcome: Some(match &connected {
+                        Ok(Ok(_)) => Outcome::Connected,
+                        Ok(Err(error)) => Outcome::Failed(error.to_string()),
+                        Err(_) => Outcome::TimedOut,
+                    }),
+                }));
+            }
+            let mut remote = match connected {
                 Ok(Ok(remote)) => remote,
                 Ok(Err(error)) => return eprintln!("Couldn't connect to {destination}: {error}"),
                 Err(_) => return eprintln!("Connecting to {destination} timed out"),
             };
             let _ = remote.set_nodelay(true);
+            // Later: bytes per connection. `copy_bidirectional` returns the bytes sent to the
+            // destination and received from it once the connection ends; the network log
+            // could record them (with the end time) as an update of this connection's flow.
             let _ = tokio::io::copy_bidirectional(&mut guest, &mut remote).await;
         });
     }
@@ -201,7 +244,12 @@ async fn relay_tcp(mut listener: TcpListener, policy: Arc<Policy>) {
 /// Sends each guest UDP flow the policy allows from its own socket on the Mac. DNS queries,
 /// to the gateway or any other address, go to the Mac's nameserver if the policy allows
 /// their name, and are refused otherwise.
-async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy: Arc<Policy>) {
+async fn relay_udp(
+    socket: netstack_smoltcp::UdpSocket,
+    dns: SocketAddr,
+    policy: Arc<Policy>,
+    log: Option<NetLog>,
+) {
     let (mut from_guest, mut to_guest) = socket.split();
     let (reply_tx, mut reply_rx) = mpsc::channel::<UdpMsg>(256);
     tokio::spawn(async move {
@@ -216,8 +264,11 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy:
     while let Some((payload, source, destination)) = from_guest.next().await {
         let is_dns = destination.port() == DNS_PORT;
         // Each query is checked, as a flow can carry several.
-        if is_dns && let Some(refusal) = policy.check_query(&payload) {
+        if is_dns && let Some((refusal, queries)) = policy.check_query(&payload) {
             let _ = reply_tx.try_send((refusal, destination, source));
+            if let Some(log) = &log {
+                log.record(Event::Refused(queries));
+            }
             continue;
         }
         let payload = match flows.get(&(source, destination)) {
@@ -231,11 +282,24 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy:
         };
         let (upstream, idle) = if is_dns {
             (dns, DNS_IDLE)
-        } else if policy.allows(destination.ip()) {
-            (on_mac(destination), UDP_IDLE)
         } else {
-            eprintln!("Blocked UDP to {destination}");
-            continue;
+            let verdict = policy.verdict(destination.ip());
+            let allowed = verdict.allowed;
+            // A flow is recorded when it starts; its datagrams aren't.
+            if let Some(log) = &log {
+                log.record(Event::Flow(Flow {
+                    protocol: "udp",
+                    guest: source,
+                    destination,
+                    verdict,
+                    outcome: None,
+                }));
+            }
+            if !allowed {
+                eprintln!("Blocked UDP to {destination}");
+                continue;
+            }
+            (on_mac(destination), UDP_IDLE)
         };
         flows.retain(|_, flow| !flow.is_closed());
         let (flow_tx, flow_rx) = mpsc::channel(64);
@@ -248,13 +312,14 @@ async fn relay_udp(socket: netstack_smoltcp::UdpSocket, dns: SocketAddr, policy:
             upstream,
             idle,
             is_dns.then(|| policy.clone()),
+            log.clone(),
         ));
     }
 }
 
 /// One guest UDP flow: forwards its datagrams to `upstream` and the answers back to the
 /// guest, until it has been idle for `idle`. A DNS flow hands each answer to the policy
-/// (`dns`) before the guest gets it.
+/// (`dns`) before the guest gets it, and to `log`.
 async fn udp_flow(
     mut from_guest: mpsc::Receiver<Vec<u8>>,
     to_guest: mpsc::Sender<UdpMsg>,
@@ -262,6 +327,7 @@ async fn udp_flow(
     upstream: SocketAddr,
     idle: Duration,
     dns: Option<Arc<Policy>>,
+    log: Option<NetLog>,
 ) {
     let socket = match UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).await {
         Ok(socket) => socket,
@@ -282,8 +348,11 @@ async fn udp_flow(
             received = socket.recv(&mut buffer) => match received {
                 // Answers appear to come from the address the guest sent to.
                 Ok(len) => {
-                    if let Some(policy) = &dns {
-                        policy.record_answer(&buffer[..len]);
+                    if let Some(policy) = &dns
+                        && let Some(answer) = policy.record_answer(&buffer[..len])
+                        && let Some(log) = &log
+                    {
+                        log.record(Event::Answered(answer));
                     }
                     let reply = (buffer[..len].to_vec(), destination, guest);
                     if to_guest.send(reply).await.is_err() {

@@ -113,3 +113,62 @@ export struct CreateIssue {
     text: string,
     blocks-create: bool,
 }
+
+// The Activity tab (src/activity.rs, src/activity_data.rs).
+
+// One row of an Activity view. Headings group rows (an area, the destinations); depth
+// indents rows inside an expanded command.
+export struct ActivityRow {
+    key: string,
+    depth: int,
+    heading: bool,
+    expandable: bool,
+    expanded: bool,
+    time: string,
+    // A short type ("File", "DNS"), in All events only.
+    label: string,
+    title: string,
+    subtitle: string,
+    subtitle-tone: Tone,
+    // The processes behind the row, e.g. "claude, curl".
+    meta: string,
+    result: string,
+    tone: Tone,
+    // De-emphasized, e.g. reads.
+    dim: bool,
+}
+
+export struct DetailField {
+    label: string,
+    value: string,
+    mono: bool,
+}
+
+export struct DetailEntry {
+    time: string,
+    text: string,
+    tone: Tone,
+}
+
+// One line of a detail page's section; `key` names the page it opens, or is "".
+export struct DetailItem {
+    depth: int,
+    text: string,
+    detail: string,
+    tone: Tone,
+    key: string,
+    mono: bool,
+}
+
+export struct DetailSection {
+    title: string,
+    note: string,
+    items: [DetailItem],
+}
+
+// An agent run in the run picker.
+export struct RunItem {
+    title: string,
+    detail: string,
+    live: bool,
+}

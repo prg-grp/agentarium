@@ -20,6 +20,8 @@ export global TerminalSession {
     in property <string> cwd-label: "~";
     // Highlighted cells of the current mouse selection.
     in property <[TermSpan]> selection;
+    // Cells of the http(s) link under the pointer, underlined.
+    in property <[TermSpan]> link;
 
     // Raw key event; Rust maps it to bytes. Returns whether the key was used.
     callback key(text: string, control: bool, alt: bool, meta: bool, shift: bool) -> bool;
@@ -32,6 +34,11 @@ export global TerminalSession {
     // Mouse position in cell units; the fraction tells which half of the cell.
     callback select-start(col: float, row: float);
     callback select-update(col: float, row: float);
+    // Pointer position in cell units while not dragging, for the link underline.
+    callback hover(col: float, row: float);
+    callback hover-end();
+    // Cmd+click: opens the link there in the browser. Returns whether there was one.
+    callback open-link(col: float, row: float) -> bool;
 }
 
 export component TerminalView {
@@ -63,7 +70,8 @@ export component TerminalView {
 
             HorizontalLayout {
                 padding-left: 22px;
-                padding-right: 22px;
+                // The ghost button's own padding brings its label back to the 22px edge.
+                padding-right: root.log ? 12px : 22px;
                 spacing: 4px;
 
                 if !root.log: Text {
@@ -100,13 +108,20 @@ export component TerminalView {
                     vertical-alignment: center;
                 }
 
-                if root.log: AppButton {
-                    text: "Open logs";
-                    icon: @image-url("icons/folder.svg");
-                    kind: ButtonKind.ghost;
-                    compact: true;
-                    clicked => {
-                        root.open-logs();
+                if root.log: Rectangle {
+                    width: 4px;
+                }
+
+                if root.log: VerticalLayout {
+                    alignment: center;
+                    AppButton {
+                        text: "Open logs";
+                        icon: @image-url("icons/folder.svg");
+                        kind: ButtonKind.ghost;
+                        compact: true;
+                        clicked => {
+                            root.open-logs();
+                        }
                     }
                 }
 
@@ -218,6 +233,14 @@ export component TerminalView {
                     background: Theme.acc.with-alpha(0.3);
                 }
 
+                for span in TerminalSession.link: Rectangle {
+                    x: span.col * grid.cell-width;
+                    y: (span.row + 1) * grid.cell-height - 2px;
+                    width: span.width * grid.cell-width;
+                    height: 1px;
+                    background: Theme.terminal-fg;
+                }
+
                 if !root.log && !root.busy && TerminalSession.cursor-visible && TerminalSession.scroll-offset == 0 && !TerminalSession.exited: Rectangle {
                     x: TerminalSession.cursor-col * grid.cell-width;
                     y: TerminalSession.cursor-row * grid.cell-height;
@@ -229,11 +252,28 @@ export component TerminalView {
                 }
 
                 TouchArea {
-                    mouse-cursor: text;
+                    mouse-cursor: TerminalSession.link.length > 0 ? pointer : text;
+                    changed has-hover => {
+                        if !self.has-hover {
+                            TerminalSession.hover-end();
+                        }
+                    }
                     pointer-event(event) => {
+                        if event.kind == PointerEventKind.move && !self.pressed {
+                            TerminalSession.hover(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
+                        }
+                        if event.kind == PointerEventKind.cancel {
+                            TerminalSession.hover-end();
+                        }
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             focus.focus();
+                            // Cmd+click on a link opens it instead of selecting. On macOS, Slint
+                            // reports Cmd as `control` (and Ctrl as `meta`).
+                            let opened = event.modifiers.control ? TerminalSession.open-link(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height) : false;
                             // Shift+click extends the selection, also after scrolling.
+                            if opened {
+                                return;
+                            }
                             if event.modifiers.shift {
                                 TerminalSession.select-update(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
                             } else {

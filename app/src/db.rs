@@ -40,6 +40,16 @@ pub struct Db {
     conn: Connection,
 }
 
+/// An agent boot, for the Activity tab's run picker. Times are local.
+pub struct AgentRun {
+    pub id: i64,
+    pub number: i64,
+    pub revision: i64,
+    pub started: String,
+    /// `None` while it runs, or when the app quit before it noticed the end.
+    pub ended: Option<String>,
+}
+
 pub struct Instance {
     pub id: String,
     pub name: String,
@@ -378,6 +388,33 @@ impl Db {
             params![instance_id, revision, mode],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?)
+    }
+
+    /// The instance's agent boots, newest first, numbered from the first.
+    pub fn agent_runs(&self, instance_id: &str) -> Result<Vec<AgentRun>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, number, revision, started, ended FROM (
+                 SELECT id, row_number() OVER (ORDER BY id) AS number, revision,
+                 -- SQLite's strftime has no month names.
+                 substr('JanFebMarAprMayJunJulAugSepOctNovDec',
+                     strftime('%m', started_at / 1000, 'unixepoch', 'localtime') * 3 - 2, 3)
+                 || strftime(' %d, %H:%M', started_at / 1000, 'unixepoch', 'localtime') AS started,
+                 strftime('%H:%M', ended_at / 1000, 'unixepoch', 'localtime') AS ended
+                 FROM boots WHERE instance_id = ?1 AND mode = 'agent')
+             ORDER BY id DESC",
+        )?;
+        let runs = statement
+            .query_map([instance_id], |row| {
+                Ok(AgentRun {
+                    id: row.get(0)?,
+                    number: row.get(1)?,
+                    revision: row.get(2)?,
+                    started: row.get(3)?,
+                    ended: row.get(4)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(runs)
     }
 
     /// Records that the boot ended.

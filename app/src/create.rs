@@ -207,8 +207,17 @@ impl Creator {
             // At most half of the Mac, so the Mac stays usable.
             config.cpus = config.cpus.min((host.cpus / 2).max(1));
             config.memory_mib = config.memory_mib.min((host.memory_gb / 2).max(1) * 1024);
+            // A random name the user can keep or replace. A taken one is re-rolled a few
+            // times; if all are taken, the name validation reports it.
+            let mut name = String::new();
+            for _ in 0..10 {
+                name = petname::petname(2, "-").unwrap_or_default();
+                if self.name_error(&name).is_empty() {
+                    break;
+                }
+            }
             *self.draft.borrow_mut() = Some(Draft {
-                name: String::new(),
+                name,
                 preset,
                 config,
                 custom_command: String::new(),

@@ -19,15 +19,43 @@ use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use simple_dns::rdata::RData;
-use simple_dns::{Name, Packet, RCODE};
+use simple_dns::{Name, Packet, QTYPE, Question, RCODE};
 
 use crate::db::{NetworkAction, NetworkRule, RuleTarget, max_prefix};
 
 /// How long an address stays tied to its names after the TTL of the answer ran out,
 /// as programs in the guest may keep using an address a little longer than that.
-const DNS_GRACE: Duration = Duration::from_secs(5 * 60);
+pub const DNS_GRACE: Duration = Duration::from_secs(5 * 60);
 /// The longest TTL honored, so a long one doesn't tie an address to a name for days.
-const MAX_TTL: u32 = 60 * 60;
+pub const MAX_TTL: u32 = 60 * 60;
+
+/// How the policy decided a destination.
+pub struct Verdict {
+    pub allowed: bool,
+    /// What decided: a rule's target ("example.com", "10.0.0.0/8"), `LOCAL` when the Mac and
+    /// the local network are closed, or `None` for the default action.
+    pub rule: Option<String>,
+}
+
+/// `Verdict::rule` when the instance doesn't allow the Mac and the local network.
+pub const LOCAL: &str = "local network";
+
+/// A DNS question: the name and the record type ("A", "AAAA", "HTTPS", …).
+pub struct Query {
+    pub name: String,
+    pub kind: String,
+}
+
+/// What a DNS answer from the Mac's nameserver said, for the network log.
+pub struct Answer {
+    pub query: Query,
+    /// The answer's code, e.g. "NoError" or "NameError".
+    pub rcode: String,
+    /// The names of the CNAME chain, without the queried name.
+    pub cnames: Vec<String>,
+    /// Each returned address with its TTL in seconds.
+    pub addresses: Vec<(IpAddr, u32)>,
+}
 
 pub struct Policy {
     default: NetworkAction,
@@ -55,10 +83,13 @@ impl Policy {
         Policy::new(NetworkAction::Allow, Vec::new(), allow_local)
     }
 
-    /// Whether the guest may connect to `destination`.
-    pub fn allows(&self, destination: IpAddr) -> bool {
+    /// Whether the guest may connect to `destination`, and what decided it.
+    pub fn verdict(&self, destination: IpAddr) -> Verdict {
         if !self.allow_local && local(destination) {
-            return false;
+            return Verdict {
+                allowed: false,
+                rule: Some(LOCAL.to_owned()),
+            };
         }
         let now = Instant::now();
         let mut targets = vec![RuleTarget::Cidr {
@@ -76,8 +107,8 @@ impl Policy {
     }
 
     /// Decides a DNS query of the guest: `None` to forward it, or the reply that refuses
-    /// it. A query that can't be read is refused too.
-    pub fn check_query(&self, query: &[u8]) -> Option<Vec<u8>> {
+    /// it with the refused questions. A query that can't be read is refused too.
+    pub fn check_query(&self, query: &[u8]) -> Option<(Vec<u8>, Vec<Query>)> {
         if self.rules.is_empty() && self.default == NetworkAction::Allow {
             return None;
         }
@@ -87,7 +118,7 @@ impl Policy {
                     && packet
                         .questions
                         .iter()
-                        .all(|question| self.decide(&[domain(name(&question.qname))]));
+                        .all(|question| self.decide(&[domain(name(&question.qname))]).allowed);
                 if allowed {
                     return None;
                 }
@@ -100,18 +131,17 @@ impl Policy {
                 (id, Vec::new(), RCODE::FormatError)
             }
         };
+        let refused = questions.iter().map(to_query).collect();
         let mut reply = Packet::new_reply(id);
         reply.questions = questions;
         *reply.rcode_mut() = rcode;
-        reply.build_bytes_vec().ok()
+        Some((reply.build_bytes_vec().ok()?, refused))
     }
 
     /// Records the addresses of a DNS answer from the Mac's nameserver, each with the
-    /// queried names and the names of its CNAME chain.
-    pub fn record_answer(&self, reply: &[u8]) {
-        let Ok(packet) = Packet::parse(reply) else {
-            return;
-        };
+    /// queried names and the names of its CNAME chain. Returns what the answer said.
+    pub fn record_answer(&self, reply: &[u8]) -> Option<Answer> {
+        let packet = Packet::parse(reply).ok()?;
         let mut names: Vec<String> = packet
             .questions
             .iter()
@@ -122,6 +152,7 @@ impl Policy {
         names.sort();
         names.dedup();
 
+        let mut addresses = Vec::new();
         let now = Instant::now();
         let mut recorded = self.names();
         recorded.retain(|_, names| {
@@ -134,6 +165,7 @@ impl Policy {
                 RData::AAAA(aaaa) => IpAddr::V6(Ipv6Addr::from(aaaa.address)),
                 _ => continue,
             };
+            addresses.push((address, record.ttl));
             let expires = now + Duration::from_secs(record.ttl.min(MAX_TTL).into()) + DNS_GRACE;
             let known = recorded.entry(address).or_default();
             for name in &names {
@@ -143,21 +175,38 @@ impl Policy {
                 }
             }
         }
+        let query = to_query(packet.questions.first()?);
+        Some(Answer {
+            rcode: format!("{:?}", packet.rcode()),
+            cnames: names
+                .into_iter()
+                .filter(|name| *name != query.name)
+                .collect(),
+            query,
+            addresses,
+        })
     }
 
     /// Deny rules win over allow rules; without a matching rule, the default applies.
-    fn decide(&self, targets: &[RuleTarget]) -> bool {
-        let matches = |action| {
-            self.rules.iter().any(|rule| {
+    fn decide(&self, targets: &[RuleTarget]) -> Verdict {
+        let matching = |action| {
+            self.rules.iter().find(|rule| {
                 rule.action == action && targets.iter().any(|target| rule.target.covers(target))
             })
         };
-        if matches(NetworkAction::Deny) {
-            false
-        } else if matches(NetworkAction::Allow) {
-            true
-        } else {
-            self.default == NetworkAction::Allow
+        let (allowed, rule) = match matching(NetworkAction::Deny) {
+            Some(rule) => (false, Some(rule)),
+            None => match matching(NetworkAction::Allow) {
+                Some(rule) => (true, Some(rule)),
+                None => (self.default == NetworkAction::Allow, None),
+            },
+        };
+        Verdict {
+            allowed,
+            rule: rule.map(|rule| match &rule.target {
+                RuleTarget::Domain { name, .. } => name.clone(),
+                RuleTarget::Cidr { network } => network.clone(),
+            }),
         }
     }
 
@@ -169,6 +218,16 @@ impl Policy {
 /// A DNS name as rules store domains: lowercase, without a trailing dot.
 fn name(name: &Name) -> String {
     name.to_string().to_ascii_lowercase()
+}
+
+fn to_query(question: &Question) -> Query {
+    Query {
+        name: name(&question.qname),
+        kind: match question.qtype {
+            QTYPE::TYPE(kind) => format!("{kind:?}"),
+            other => format!("{other:?}"),
+        },
+    }
 }
 
 fn domain(name: String) -> RuleTarget {

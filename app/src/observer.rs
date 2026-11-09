@@ -110,7 +110,7 @@ fn serve(
                 if store {
                     conn.execute(
                         "INSERT INTO collector_health
-                         (boot_id, run, lost_kernel, lost_queue, filtered, processes, sequence)
+                         (boot_id, observer_run, lost_kernel, lost_queue, filtered, processes, sequence)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                         params![
                             boot,
@@ -148,7 +148,7 @@ fn store(
     match &event.kind {
         Some(event::Kind::Exec(exec)) => {
             tx.prepare_cached(
-                "INSERT INTO executions (boot_id, run, execution, parent, pid, ppid, started_at,
+                "INSERT INTO executions (boot_id, observer_run, execution, parent, pid, ppid, started_at,
                  uid, euid, gid, egid, path, binary, argv, argv_truncated, cwd, subcommand,
                  path_truncated)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
@@ -177,7 +177,7 @@ fn store(
         }
         Some(event::Kind::ExecFailed(failed)) => {
             tx.prepare_cached(
-                "INSERT INTO executions (boot_id, run, parent, pid, started_at, path, error)
+                "INSERT INTO executions (boot_id, observer_run, parent, pid, started_at, path, error)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             )?
             .execute(params![
@@ -193,13 +193,13 @@ fn store(
         Some(event::Kind::Exit(exit)) => {
             tx.prepare_cached(
                 "UPDATE executions SET exited_at = ?4, exit_code = ?5, exit_signal = ?6
-                 WHERE boot_id = ?1 AND run = ?2 AND execution = ?3",
+                 WHERE boot_id = ?1 AND observer_run = ?2 AND execution = ?3",
             )?
             .execute(params![boot, run, execution, at, exit.code, exit.signal])?;
         }
         Some(event::Kind::File(file)) => {
             tx.prepare_cached(
-                "INSERT INTO file_accesses (boot_id, run, execution, pid, at, path, host_path,
+                "INSERT INTO file_accesses (boot_id, observer_run, execution, pid, at, path, host_path,
                  access, new_path, path_truncated)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )?
@@ -218,9 +218,9 @@ fn store(
         }
         Some(event::Kind::Connection(connection)) => {
             tx.prepare_cached(
-                "INSERT INTO connections (boot_id, run, execution, pid, at, protocol, address,
-                 port, result)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                "INSERT INTO connections (boot_id, observer_run, execution, pid, at, protocol,
+                 address, port, local_port, result)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             )?
             .execute(params![
                 boot,
@@ -235,6 +235,7 @@ fn store(
                 },
                 address(connection),
                 connection.port,
+                connection.local_port,
                 match connection.result() {
                     ConnectionResult::Connected => "connected",
                     ConnectionResult::Failed => "failed",
@@ -245,7 +246,7 @@ fn store(
         }
         Some(event::Kind::Credentials(cred)) => {
             tx.prepare_cached(
-                "INSERT INTO credential_changes (boot_id, run, execution, pid, at, uid_before,
+                "INSERT INTO credential_changes (boot_id, observer_run, execution, pid, at, uid_before,
                  uid_after, euid_before, euid_after, gid_before, gid_after, egid_before,
                  egid_after, capabilities_raised)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",

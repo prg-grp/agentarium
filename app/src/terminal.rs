@@ -17,11 +17,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Term, TermMode, point_to_viewport, viewport_to_point};
 use alacritty_terminal::tty::{ChildEvent, EventedPty, EventedReadWrite};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor, Rgb};
@@ -35,6 +36,14 @@ use crate::{AppWindow, TermLine, TermRun, TermSpan, TerminalSession};
 const SCROLLBACK: usize = 100_000;
 const DEFAULT_FG: (u8, u8, u8) = (0xD6, 0xDC, 0xE5);
 const WELL_BG: (u8, u8, u8) = (0x0C, 0x0E, 0x12);
+
+thread_local! {
+    /// http(s) URLs, matched like Alacritty's URL hint. Lowercase escapes keep the search
+    /// case-insensitive.
+    static URL: RefCell<Option<RegexSearch>> = RefCell::new(
+        RegexSearch::new(r#"https?://[^\x00-\x1f\x7f-\x9f<>"\s{-}\^⟨⟩`\\]+"#).ok(),
+    );
+}
 
 /// Normal and bright ANSI colors, tuned to the app theme.
 const ANSI: [(u8, u8, u8); 16] = [
@@ -119,6 +128,8 @@ struct Link {
     shown: AtomicBool,
     /// Never writes to the console, not even replies to terminal queries.
     read_only: bool,
+    /// Pointer position in cell units, to underline the link under it.
+    hover: Mutex<Option<(f32, f32)>>,
 }
 
 impl Link {
@@ -236,6 +247,7 @@ impl Terminal {
             let session = ui.global::<TerminalSession>();
             session.set_lines(ModelRc::new(VecModel::<TermLine>::default()));
             session.set_selection(ModelRc::default());
+            session.set_link(ModelRc::default());
             session.set_scroll_offset(0);
             session.set_history_size(0);
             let message = self.exit_message.borrow();
@@ -279,6 +291,7 @@ impl Terminal {
             active: AtomicBool::new(true),
             shown: AtomicBool::new(self.shown.get()),
             read_only: self.read_only,
+            hover: Mutex::new(None),
         });
         let config = Config {
             scrolling_history: SCROLLBACK,
@@ -463,6 +476,39 @@ impl Terminal {
             }
         });
         self.redraw();
+    }
+
+    /// Underlines the link under the pointer, given in cell units; `None` when the
+    /// pointer left the terminal.
+    pub fn hover(&self, at: Option<(f32, f32)>) {
+        let at = at.map(|(col, row)| (col.floor(), row.floor()));
+        if let Some(session) = self.session.borrow().as_ref() {
+            let mut hover = session.link.hover.lock().unwrap();
+            if *hover == at {
+                return;
+            }
+            *hover = at;
+        }
+        self.redraw();
+    }
+
+    /// Opens the http(s) link at a position in cell units in the default browser.
+    /// Returns whether there was one.
+    pub fn open_link(&self, col: f32, row: f32) -> bool {
+        let Some(Some((_, url))) =
+            self.with_term(|term| link_at(term, selection_point(term, col, row).0))
+        else {
+            return false;
+        };
+        // The URL comes from the guest, so only web links are handed to `open`.
+        let lower = url.to_ascii_lowercase();
+        if !lower.starts_with("http://") && !lower.starts_with("https://") {
+            return false;
+        }
+        if let Err(error) = std::process::Command::new("open").arg(&url).status() {
+            eprintln!("Couldn't open {url}: {error}");
+        }
+        true
     }
 
     fn paste(&self) {
@@ -751,32 +797,79 @@ fn redraw(link: &Link, term: &Term<Listener>, ui: &AppWindow) {
     session.set_scroll_offset(content.display_offset as i32);
     session.set_history_size(term.grid().history_size() as i32);
 
-    // Selected cells per visible row; middle rows span the full width.
+    let offset = content.display_offset;
+    let selection = content.selection.map_or_else(Vec::new, |range| {
+        row_spans(term, offset, range.start, range.end)
+    });
+    session.set_selection(ModelRc::new(VecModel::from(selection)));
+
+    let hover = *link.hover.lock().unwrap();
+    let hovered = hover.and_then(|(col, row)| link_at(term, selection_point(term, col, row).0));
+    let underline = hovered.map_or_else(Vec::new, |(range, _)| {
+        row_spans(term, offset, *range.start(), *range.end())
+    });
+    session.set_link(ModelRc::new(VecModel::from(underline)));
+}
+
+/// Cells from `start` to `end` per visible row; rows in between span the full width.
+fn row_spans(
+    term: &Term<Listener>,
+    display_offset: usize,
+    start: Point,
+    end: Point,
+) -> Vec<TermSpan> {
     let mut spans = Vec::new();
-    if let Some(range) = content.selection {
-        for row in 0..rows {
-            let line = row as i32 - content.display_offset as i32;
-            if line < range.start.line.0 || line > range.end.line.0 {
-                continue;
-            }
-            let from = if line == range.start.line.0 {
-                range.start.column.0
-            } else {
-                0
-            };
-            let to = if line == range.end.line.0 {
-                range.end.column.0
-            } else {
-                term.columns() - 1
-            };
-            spans.push(TermSpan {
-                row: row as i32,
-                col: from as i32,
-                width: (to + 1 - from) as i32,
-            });
+    for row in 0..term.screen_lines() {
+        let line = row as i32 - display_offset as i32;
+        if line < start.line.0 || line > end.line.0 {
+            continue;
         }
+        let from = if line == start.line.0 {
+            start.column.0
+        } else {
+            0
+        };
+        let to = if line == end.line.0 {
+            end.column.0
+        } else {
+            term.columns() - 1
+        };
+        spans.push(TermSpan {
+            row: row as i32,
+            col: from as i32,
+            width: (to + 1 - from) as i32,
+        });
     }
-    session.set_selection(ModelRc::new(VecModel::from(spans)));
+    spans
+}
+
+/// The http(s) link covering a grid point, as its cells and its text. Links may wrap
+/// across rows.
+fn link_at(term: &Term<Listener>, point: Point) -> Option<(Match, String)> {
+    let start = term.line_search_left(point);
+    let end = term.line_search_right(point);
+    let found = URL.with_borrow_mut(|regex| {
+        let regex = regex.as_mut()?;
+        RegexIter::new(start, end, Direction::Right, term, regex).find(|m| m.contains(&point))
+    })?;
+    let mut url = term.bounds_to_string(*found.start(), *found.end());
+    // Punctuation after a link usually belongs to the sentence, as does a closing
+    // bracket without an opening one in the link.
+    let mut trimmed = 0;
+    while let Some(last) = url.chars().last() {
+        let trailing = match last {
+            ')' => url.matches('(').count() < url.matches(')').count(),
+            ']' => url.matches('[').count() < url.matches(']').count(),
+            _ => ".,:;!?'".contains(last),
+        };
+        if !trailing {
+            break;
+        }
+        url.pop();
+        trimmed += 1;
+    }
+    let end = found.end().sub(term, Boundary::Grid, trimmed);
+    (point <= end).then(|| (*found.start()..=end, url))
 }
 
 /// Converts a mouse position in cell units to a grid point and the half of
