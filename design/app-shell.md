@@ -55,7 +55,7 @@ The header carries no status readings; the Virtual machine, Agent and Monitoring
 - 44 px tall, 28 px gaps, 1 px `line` bottom border.
 - Tabs: Terminal, Logs, Status, Activity, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
 - Settings shows "2 pending" in `acc` 12 px when saved changes wait for the next boot.
-- Logs shows the instance's boot log in the same terminal view, read-only: kernel, systemd and supervisor output from boot to shutdown. Header: "Boot log" (`tx2`, 500) and "Serial console, not the agent session" (`tx3`). No cursor; typing and pasting do nothing, while selecting, copying, scrolling and "Jump to latest" work as in the Terminal tab. Output is kept until the next start.
+- Logs shows the instance's boot log in the same terminal view, read-only: kernel, systemd and supervisor output from boot to shutdown. Header: "Boot log" (`tx2`, 500) and "Serial console, not the agent session" (`tx3`). No cursor; typing and pasting do nothing, while selecting, copying, scrolling, the scrollbar, the scroll shortcuts and "Jump to latest" work as in the Terminal tab. Output is kept until the next start.
 - Status shows the readings and the live resource use; see [status-tab.md](status-tab.md).
 - On the Terminal tab only, a "Live activity" toggle sits at the right end (ghost, compact, sidebar-right icon). Pressed state: `raise` background and `tx` text. It shows or hides the live activity rail; the terminal takes the full width when hidden. Remember the choice per instance.
 

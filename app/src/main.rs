@@ -152,6 +152,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     });
     let c = control.clone();
+    session.on_scroll_to(move |offset| {
+        if let Some(t) = c.shown_terminal() {
+            t.scroll_to(offset);
+        }
+    });
+    let c = control.clone();
     session.on_select_start(move |col, row| {
         if let Some(t) = c.shown_terminal() {
             t.select_start(col, row);

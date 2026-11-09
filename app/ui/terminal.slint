@@ -15,6 +15,8 @@ export global TerminalSession {
     in property <string> exit-message;
     // Lines scrolled back from the latest output.
     in property <int> scroll-offset;
+    // Lines of output above the screen, i.e. the largest scroll-offset.
+    in property <int> history-size;
     in property <string> cwd-label: "~";
     // Highlighted cells of the current mouse selection.
     in property <[TermSpan]> selection;
@@ -24,6 +26,8 @@ export global TerminalSession {
     callback resized(cols: int, rows: int);
     // Positive values scroll back into older output.
     callback scrolled(lines: int);
+    // Scrolls to an absolute offset; 0 is the latest output.
+    callback scroll-to(offset: int);
     callback jump-to-latest();
     // Mouse position in cell units; the fraction tells which half of the cell.
     callback select-start(col: float, row: float);
@@ -255,6 +259,60 @@ export component TerminalView {
                 clicked => {
                     TerminalSession.jump-to-latest();
                     focus.focus();
+                }
+            }
+
+            // Scrollbar over the history, in the right gutter. Hidden without history, e.g.
+            // on the alternate screen of full-screen apps. Clicking the track jumps there.
+            if TerminalSession.history-size > 0: bar := Rectangle {
+                property <length> thumb-height: max(28px, self.height * grid.rows / (grid.rows + TerminalSession.history-size));
+                property <length> thumb-y: (self.height - self.thumb-height) * (1 - TerminalSession.scroll-offset / TerminalSession.history-size);
+                // Pointer position within the thumb while dragging.
+                property <length> grab;
+
+                x: parent.width - 16px;
+                y: 18px;
+                width: 14px;
+                height: parent.height - 36px;
+
+                function drag-to(pointer-y: length) {
+                    let fraction = max(0, min(1, (pointer-y - self.grab) / max(1px, self.height - self.thumb-height)));
+                    TerminalSession.scroll-to(round((1 - fraction) * TerminalSession.history-size));
+                }
+
+                Rectangle {
+                    x: 4px;
+                    width: 6px;
+                    border-radius: 3px;
+                    background: bar-touch.has-hover || bar-touch.pressed ? Theme.line.with-alpha(0.6) : transparent;
+
+                    Rectangle {
+                        y: bar.thumb-y;
+                        height: bar.thumb-height;
+                        border-radius: 3px;
+                        background: Theme.tx3.with-alpha(bar-touch.has-hover || bar-touch.pressed ? 0.7 : 0.35);
+                    }
+                }
+
+                bar-touch := TouchArea {
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            if self.mouse-y >= bar.thumb-y && self.mouse-y < bar.thumb-y + bar.thumb-height {
+                                bar.grab = self.mouse-y - bar.thumb-y;
+                            } else {
+                                bar.grab = bar.thumb-height / 2;
+                                bar.drag-to(self.mouse-y);
+                            }
+                        }
+                        if event.kind == PointerEventKind.up {
+                            focus.focus();
+                        }
+                    }
+                    moved => {
+                        if self.pressed {
+                            bar.drag-to(self.mouse-y);
+                        }
+                    }
                 }
             }
 

@@ -31,7 +31,8 @@ use slint::{Color, ComponentHandle, Model, ModelRc, VecModel, Weak};
 
 use crate::{AppWindow, TermLine, TermRun, TermSpan, TerminalSession};
 
-const SCROLLBACK: usize = 5000;
+/// alacritty's own maximum; history is allocated as it fills.
+const SCROLLBACK: usize = 100_000;
 const DEFAULT_FG: (u8, u8, u8) = (0xD6, 0xDC, 0xE5);
 const WELL_BG: (u8, u8, u8) = (0x0C, 0x0E, 0x12);
 
@@ -236,6 +237,7 @@ impl Terminal {
             session.set_lines(ModelRc::new(VecModel::<TermLine>::default()));
             session.set_selection(ModelRc::default());
             session.set_scroll_offset(0);
+            session.set_history_size(0);
             let message = self.exit_message.borrow();
             session.set_exited(message.is_some());
             session.set_exit_message(message.as_deref().unwrap_or_default().into());
@@ -356,6 +358,23 @@ impl Terminal {
             let _ = arboard::Clipboard::new().and_then(|mut c| c.set_text(text));
             return true;
         }
+        // Moving through the scrollback, also in the boot log and after the session ended.
+        let is = |key: Key| text.chars().eq([char::from(key)]);
+        let scroll = if cmd && is(Key::UpArrow) {
+            Some(Scroll::Top)
+        } else if cmd && is(Key::DownArrow) {
+            Some(Scroll::Bottom)
+        } else if shift && is(Key::PageUp) {
+            Some(Scroll::PageUp)
+        } else if shift && is(Key::PageDown) {
+            Some(Scroll::PageDown)
+        } else {
+            None
+        };
+        if let Some(scroll) = scroll {
+            self.scroll_display(scroll);
+            return true;
+        }
 
         let running = self
             .session
@@ -403,12 +422,23 @@ impl Terminal {
 
     /// Scrolls into older output (positive) or back towards the latest (negative).
     pub fn scroll(&self, lines: i32) {
-        self.with_term(|term| term.scroll_display(Scroll::Delta(lines)));
-        self.redraw();
+        self.scroll_display(Scroll::Delta(lines));
+    }
+
+    /// Scrolls to `offset` lines back from the latest output, clamped to the history.
+    pub fn scroll_to(&self, offset: i32) {
+        let Some(current) = self.with_term(|term| term.grid().display_offset()) else {
+            return;
+        };
+        self.scroll_display(Scroll::Delta(offset - current as i32));
     }
 
     pub fn jump_to_latest(&self) {
-        self.with_term(|term| term.scroll_display(Scroll::Bottom));
+        self.scroll_display(Scroll::Bottom);
+    }
+
+    fn scroll_display(&self, scroll: Scroll) {
+        self.with_term(|term| term.scroll_display(scroll));
         self.redraw();
     }
 
@@ -690,6 +720,7 @@ fn redraw(link: &Link, term: &Term<Listener>, ui: &AppWindow) {
     session.set_cursor_col(cursor_col as i32);
     session.set_cursor_visible(cursor.is_some() && content.cursor.shape != CursorShape::Hidden);
     session.set_scroll_offset(content.display_offset as i32);
+    session.set_history_size(term.grid().history_size() as i32);
 
     // Selected cells per visible row; middle rows span the full width.
     let mut spans = Vec::new();
