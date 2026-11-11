@@ -22,7 +22,6 @@ concurrency:
 
 env:
   REPO_URL: https://github.com/${{ github.repository }}
-  RELEASE_PR_BRANCH: release-please--branches--main
   VPK_VERSION: 1.2.161
 
 jobs:
@@ -51,6 +50,7 @@ jobs:
           RELEASE_TAG: ${{ steps.rp.outputs.tag_name }}
           RELEASE_VERSION: ${{ steps.rp.outputs.version }}
           RELEASE_BODY: ${{ steps.rp.outputs.body }}
+          RELEASE_PR: ${{ steps.rp.outputs.pr }}
           RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
@@ -68,7 +68,13 @@ jobs:
             } >> "$GITHUB_OUTPUT"
           elif [ "$PRS_CREATED" = "true" ]; then
             # The version the release PR will ship, with the run number as dev build number.
-            git fetch origin "$RELEASE_PR_BRANCH"
+            # release-please names the branch itself, so take it from the PR it reported.
+            branch=$(jq -r '.headBranchName // empty' <<< "$RELEASE_PR")
+            if [ -z "$branch" ]; then
+              echo "release-please reported no release PR branch" >&2
+              exit 1
+            fi
+            git fetch origin "$branch"
             next=$(git show FETCH_HEAD:.release-please-manifest.json | jq -r '."."')
             version="$next-dev.$RUN_NUMBER"
             # Deltas build on the previous dev release; the notes list what is new since the
