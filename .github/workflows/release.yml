@@ -294,7 +294,7 @@ jobs:
             --signEntitlements app/agent-toolbox.entitlements \
             --signAppIdentity "$APP_IDENTITY" --signInstallIdentity "$INSTALLER_IDENTITY" \
             --notaryProfile agentarium --keychain "$KEYCHAIN" \
-            "${license[@]}" -o dist/releases
+            ${license[@]+"${license[@]}"} -o dist/releases
 
       # Stable releases exist already (release-please created them); dev releases are created
       # here, after packing succeeded, with the notes of what is new in this build.
@@ -308,7 +308,7 @@ jobs:
           pre=()
           if [ "$MODE" = "dev" ]; then pre=(--pre); fi
           vpk upload github --repoUrl "$REPO_URL" --token "$GH_TOKEN" --channel "$CHANNEL" \
-            --tag "$TAG" --merge --publish "${pre[@]}" -o dist/releases
+            --tag "$TAG" --merge --publish ${pre[@]+"${pre[@]}"} -o dist/releases
           gh release upload "$TAG" dist/guest/agentarium-kernel.zst dist/guest/agentarium-rootfs.ext4.zst dist/guest/guest.json --clobber
 
       - name: Remove keychain
