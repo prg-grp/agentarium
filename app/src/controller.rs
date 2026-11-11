@@ -36,6 +36,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::db::{self, Db};
 use crate::editor::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
+use crate::guest;
 use crate::netlog;
 use crate::observer::{self, Observed, Summary};
 use crate::policy::Policy;
@@ -676,6 +677,7 @@ impl VmControl {
         let mut spec = VmSpec {
             cpus: config.cpus as usize,
             memory_mib: config.memory_mib.into(),
+            kernel: guest::kernel_path(&instance.kernel)?,
             rootfs: instance.disk_path,
             shares: Vec::new(),
             network: Arc::new(network),

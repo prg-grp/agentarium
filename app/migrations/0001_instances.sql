@@ -4,6 +4,7 @@ CREATE TABLE instances (
     id         TEXT PRIMARY KEY,                    -- UUIDv7, never reused
     name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
     disk_path  TEXT NOT NULL,                       -- persistent root disk image
+    kernel     TEXT NOT NULL,                       -- the guest kernel the disk's modules match (guest.rs)
     provisioned_at INTEGER,                         -- NULL until a provisioning run succeeded
     created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
 ) STRICT;
@@ -187,3 +188,9 @@ CREATE TABLE network_flows (
     error      TEXT                                 -- why connecting failed
 ) STRICT;
 CREATE INDEX network_flows_by_boot ON network_flows (boot_id, id);
+
+-- App-wide preferences, such as the update channel (update.rs).
+CREATE TABLE preferences (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) STRICT;

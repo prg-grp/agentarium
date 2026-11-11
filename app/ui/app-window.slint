@@ -10,8 +10,9 @@ import { Activity, ActivityTab } from "activity.slint";
 import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
+import { GuestImage, GuestState, Updates, UpdateState, GuestDownload, PreferencesView } from "preferences.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection }
+export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
@@ -20,6 +21,8 @@ export component AppWindow inherits Window {
     in-out property <int> current-tab: 0;
     // A new instance is being drafted; its screen shows while its row (or no row) is selected.
     in-out property <bool> creating;
+    // The Preferences view replaces the instance screens until an instance is picked.
+    in-out property <bool> show-preferences;
 
     callback create-instance();
     callback instance-action(string, InstanceAction);
@@ -135,6 +138,7 @@ export component AppWindow inherits Window {
                         icon: @image-url("icons/plus.svg");
                         label: "New instance";
                         clicked => {
+                            root.show-preferences = false;
                             root.create-instance();
                         }
                     }
@@ -158,7 +162,7 @@ export component AppWindow inherits Window {
                     vertical-stretch: 0;
 
                     Rectangle {
-                        property <bool> selected: index == root.selected-index;
+                        property <bool> selected: index == root.selected-index && !root.show-preferences;
 
                         border-radius: Theme.radius-item;
                         clip: true;
@@ -215,6 +219,7 @@ export component AppWindow inherits Window {
                         item-touch := TouchArea {
                             mouse-cursor: pointer;
                             clicked => {
+                                root.show-preferences = false;
                                 root.selected-index = index;
                                 root.current-tab = 0;
                             }
@@ -226,8 +231,33 @@ export component AppWindow inherits Window {
                     vertical-stretch: 1;
                 }
 
+                // The guest image's download, until new instances can be created.
+                if GuestImage.state != GuestState.ready: Rectangle {
+                    Rectangle {
+                        y: 0;
+                        height: 1px;
+                        background: Theme.line;
+                    }
+
+                    VerticalLayout {
+                        padding-left: 22px;
+                        padding-right: 18px;
+                        padding-top: 14px;
+                        padding-bottom: 14px;
+
+                        GuestDownload { }
+                    }
+                }
+
                 Rectangle {
                     height: 48px;
+                    background: root.show-preferences ? Theme.raise : (preferences-touch.has-hover ? Theme.hover : transparent);
+                    accessible-role: button;
+                    accessible-label: "Preferences";
+                    accessible-description: Updates.state == UpdateState.ready ? "Update ready" : "";
+                    accessible-action-default => {
+                        root.show-preferences = true;
+                    }
 
                     Rectangle {
                         y: 0;
@@ -237,14 +267,14 @@ export component AppWindow inherits Window {
 
                     HorizontalLayout {
                         padding-left: 22px;
+                        padding-right: 18px;
                         spacing: 8px;
-                        alignment: start;
 
                         VerticalLayout {
                             alignment: center;
                             Image {
                                 source: @image-url("icons/adjustments-horizontal.svg");
-                                colorize: Theme.tx2;
+                                colorize: root.show-preferences ? Theme.tx : Theme.tx2;
                                 width: 16px;
                                 height: 16px;
                                 accessible-role: none;
@@ -253,8 +283,24 @@ export component AppWindow inherits Window {
 
                         Text {
                             text: "Preferences";
-                            color: Theme.tx2;
+                            color: root.show-preferences ? Theme.tx : Theme.tx2;
+                            font-weight: root.show-preferences ? Theme.weight-medium : Theme.weight-regular;
                             vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        if Updates.state == UpdateState.ready: Text {
+                            text: "Update ready";
+                            color: Theme.acc;
+                            font-size: Theme.font-meta;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    preferences-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-preferences = true;
                         }
                     }
                 }
@@ -265,12 +311,17 @@ export component AppWindow inherits Window {
         Rectangle {
             horizontal-stretch: 1;
 
-            if show-creation: CreateInstance {
+            if show-preferences: PreferencesView {
                 width: parent.width;
                 height: parent.height;
             }
 
-            if instances.length == 0 && !creating: EmptyState {
+            if !show-preferences && show-creation: CreateInstance {
+                width: parent.width;
+                height: parent.height;
+            }
+
+            if !show-preferences && instances.length == 0 && !creating: EmptyState {
                 width: parent.width;
                 height: parent.height;
                 create => {
@@ -278,7 +329,7 @@ export component AppWindow inherits Window {
                 }
             }
 
-            if instances.length > 0 && !show-creation: VerticalLayout {
+            if !show-preferences && instances.length > 0 && !show-creation: VerticalLayout {
                 width: parent.width;
                 height: parent.height;
 

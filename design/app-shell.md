@@ -33,7 +33,8 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 - Instance items: 18 px icon column, name (14 / 400; 500 when selected), summary line below (12 / 16).
   - Selected item: `raise` background, 8 px radius, 2 px inset bar on the left in `acc` (in `warn` when the selected instance is in maintenance).
   - Icon and summary color follow state: running `ok` + "Running"; maintenance `warn` + "Maintenance, internet open"; startup failure `bad` + "Startup failed"; agent exited `tx2` + "Agent exited"; stopped `tx3` + "Stopped 2 days ago"; draft `acc` pencil + "Not created yet".
-- Bottom: "Preferences" with an adjustments icon, separated by a `line` top border. No account menu, because the manager has no application account.
+- Bottom: "Preferences" with an adjustments icon, separated by a `line` top border. No account menu, because the manager has no application account. It opens [preferences.md](preferences.md) and shows "Update ready" when an update waits for a restart.
+- Above Preferences, until the guest image is downloaded: the download panel with step, size, progress track and "Retry" after a failure (see [preferences.md](preferences.md)).
 - With no instances, the list area shows "No instances yet" in `tx3` (see [empty-state.md](empty-state.md)).
 
 ## Instance header

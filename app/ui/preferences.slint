@@ -1,0 +1,324 @@
+// Preferences: app updates and the guest image. See design/preferences.md.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
+import { Message } from "config-fields.slint";
+import { Group } from "settings.slint";
+
+export enum GuestState { ready, downloading, failed }
+
+// The guest kernel and base root filesystem that new instances start from.
+// Rust (src/guest.rs) owns it.
+export global GuestImage {
+    in property <GuestState> state: GuestState.ready;
+    // "Downloading kernel", then "Downloading root filesystem".
+    in property <string> step;
+    // "230 of 640 MB"
+    in property <string> amount;
+    in property <float> progress;
+    in property <string> error;
+    // Where the image comes from, e.g. "From release v1.0.0".
+    in property <string> source;
+    callback retry();
+}
+
+export enum UpdateState { unavailable, checking, up-to-date, downloading, ready, failed }
+
+// Updates of the app itself. Rust (src/update.rs) owns it.
+export global Updates {
+    in property <string> version;
+    // 0: stable releases, 1: dev builds.
+    in property <int> channel;
+    in property <UpdateState> state: UpdateState.checking;
+    in property <string> status;
+    in property <float> progress;
+    // The version being downloaded or waiting for the restart, and its release notes.
+    in property <string> available;
+    in property <string> notes;
+    callback set-channel(int);
+    callback check();
+    // Shuts the running instances down, then installs the update and relaunches.
+    callback restart();
+}
+
+// A thin progress track.
+component ProgressBar {
+    in property <float> progress;
+    in property <string> label;
+
+    height: 6px;
+    accessible-role: progress-indicator;
+    accessible-label: label;
+    accessible-value: round(progress * 100) + "%";
+
+    Rectangle {
+        border-radius: 3px;
+        clip: true;
+        background: Theme.raise;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.progress, 0, 1);
+            background: Theme.tx2;
+        }
+    }
+}
+
+// The guest image's download: its step, progress and size, or why it failed with Retry.
+// Shown in the sidebar until the image is ready, and in Preferences.
+export component GuestDownload {
+    VerticalLayout {
+        spacing: 8px;
+
+        if GuestImage.state == GuestState.downloading: HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                text: GuestImage.step;
+                color: Theme.tx;
+                font-size: Theme.font-small;
+                overflow: elide;
+                horizontal-stretch: 1;
+            }
+
+            Text {
+                text: GuestImage.amount;
+                color: Theme.tx3;
+                font-size: Theme.font-meta;
+                vertical-alignment: center;
+                horizontal-stretch: 0;
+            }
+        }
+
+        if GuestImage.state == GuestState.downloading: ProgressBar {
+            progress: GuestImage.progress;
+            label: GuestImage.step;
+        }
+
+        if GuestImage.state == GuestState.failed: Message {
+            icon: @image-url("icons/alert-triangle.svg");
+            text: GuestImage.error;
+            color: Theme.bad;
+        }
+
+        if GuestImage.state == GuestState.failed: HorizontalLayout {
+            alignment: start;
+            AppButton {
+                kind: ButtonKind.neutral;
+                compact: true;
+                text: "Retry";
+                icon: @image-url("icons/refresh.svg");
+                clicked => {
+                    GuestImage.retry();
+                }
+            }
+        }
+    }
+}
+
+// A label on the left, its value or control on the right.
+component Row {
+    in property <string> label;
+
+    HorizontalLayout {
+        spacing: 16px;
+
+        Text {
+            width: 120px;
+            text: root.label;
+            color: Theme.tx2;
+            font-size: Theme.font-small;
+            vertical-alignment: center;
+        }
+
+        @children
+    }
+}
+
+export component PreferencesView {
+    VerticalLayout {
+        HorizontalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 26px;
+            padding-bottom: 24px;
+
+            Text {
+                text: "Preferences";
+                font-size: Theme.font-title;
+                font-weight: Theme.weight-medium;
+                color: Theme.tx;
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        ScrollView {
+            vertical-stretch: 1;
+            content-width: self.visible-width;
+            horizontal-scrollbar-policy: always-off;
+
+            VerticalLayout {
+                padding-left: 28px;
+                padding-right: 28px;
+                padding-bottom: 28px;
+                alignment: start;
+
+                Group {
+                    first: true;
+                    title: "Updates";
+                    description: "Agentarium checks for new versions every few hours and downloads them in the background.";
+
+                    Row {
+                        label: "Version";
+                        Text {
+                            text: Updates.version;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            color: Theme.tx;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    Row {
+                        label: "Channel";
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                alignment: start;
+                                SegmentedControl {
+                                    options: ["Stable", "Dev builds"];
+                                    selected: Updates.channel;
+                                    changed(index) => {
+                                        Updates.set-channel(index);
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: Updates.channel == 1
+                                    ? "Every change to Agentarium as soon as it's built, and every release. Dev builds can have rough edges."
+                                    : "Releases only.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+
+                    Row {
+                        label: "Status";
+                        VerticalLayout {
+                            spacing: 8px;
+                            alignment: center;
+
+                            if Updates.state == UpdateState.failed: Message {
+                                icon: @image-url("icons/alert-triangle.svg");
+                                text: Updates.status;
+                                color: Theme.bad;
+                            }
+
+                            if Updates.state == UpdateState.ready: Message {
+                                icon: @image-url("icons/circle-check.svg");
+                                text: Updates.status;
+                                color: Theme.ok;
+                            }
+
+                            if Updates.state != UpdateState.failed && Updates.state != UpdateState.ready: Text {
+                                text: Updates.status;
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+
+                            if Updates.state == UpdateState.downloading: ProgressBar {
+                                progress: Updates.progress;
+                                label: Updates.status;
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: start;
+
+                        if Updates.state == UpdateState.ready: AppButton {
+                            kind: ButtonKind.primary;
+                            text: "Restart to update";
+                            icon: @image-url("icons/refresh.svg");
+                            clicked => {
+                                Updates.restart();
+                            }
+                        }
+
+                        if Updates.state != UpdateState.unavailable && Updates.state != UpdateState.ready: AppButton {
+                            kind: ButtonKind.neutral;
+                            text: "Check now";
+                            enabled: Updates.state == UpdateState.up-to-date || Updates.state == UpdateState.failed;
+                            clicked => {
+                                Updates.check();
+                            }
+                        }
+
+                        if Updates.state == UpdateState.ready: Text {
+                            text: "Running instances shut down first.";
+                            color: Theme.tx3;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if (Updates.state == UpdateState.ready || Updates.state == UpdateState.downloading) && Updates.notes != "": VerticalLayout {
+                        spacing: 6px;
+
+                        Text {
+                            text: "What's new in \{Updates.available}";
+                            color: Theme.tx;
+                            font-weight: Theme.weight-medium;
+                        }
+
+                        Text {
+                            text: Updates.notes;
+                            color: Theme.tx2;
+                            font-size: Theme.font-small;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Group {
+                    title: "Guest image";
+                    description: "The Linux kernel and root filesystem that new instances start from. Existing instances keep the one they were created with.";
+
+                    Row {
+                        label: "Source";
+                        Text {
+                            text: GuestImage.source;
+                            color: Theme.tx;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if GuestImage.state == GuestState.ready: Row {
+                        label: "Status";
+                        Text {
+                            text: "Ready";
+                            color: Theme.tx2;
+                            font-size: Theme.font-small;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    if GuestImage.state != GuestState.ready: GuestDownload { }
+                }
+            }
+        }
+    }
+}

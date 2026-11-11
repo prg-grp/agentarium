@@ -69,8 +69,8 @@ export global Settings {
     callback save(restart: bool);
 }
 
-// A section: heading and description above its fields.
-component Group {
+// A section: heading and description above its fields. Also used by Preferences.
+export component Group {
     in property <string> title;
     in property <string> description;
     in property <bool> first;

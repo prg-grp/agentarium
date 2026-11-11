@@ -7,6 +7,7 @@ mod controller;
 mod create;
 mod db;
 mod editor;
+mod guest;
 mod net;
 mod netlog;
 mod observer;
@@ -14,6 +15,7 @@ mod policy;
 mod preset;
 mod settings;
 mod terminal;
+mod update;
 mod vm;
 
 #[cfg(target_os = "macos")]
@@ -32,6 +34,10 @@ use vm::BootMode;
 slint::include_modules!();
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Velopack's install and update hooks run first and may exit; it also applies an update
+    // that was downloaded but not installed yet, and relaunches.
+    velopack::VelopackApp::build().run();
+
     // Let the sidebar run under the window buttons, as in the design.
     #[cfg(target_os = "macos")]
     {
@@ -61,6 +67,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings =
         settings::SettingsEditor::new(&ui, db.clone(), instances.clone(), control.clone());
     let activity = activity::ActivityView::new(&ui, db.clone(), control.clone());
+    let _guest = guest::GuestAssets::new(&ui, db.clone());
+    let updater = update::Updater::new(&ui, db.clone(), control.clone());
 
     // Closing the window or quitting shuts all VMs down gracefully first.
     let c = control.clone();
@@ -221,6 +229,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
 
     ui.run()?;
+    updater.install_pending();
 
     Ok(())
 }

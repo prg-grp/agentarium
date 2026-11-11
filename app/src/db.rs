@@ -55,6 +55,9 @@ pub struct Instance {
     pub name: String,
     /// The persistent root disk image.
     pub disk_path: PathBuf,
+    /// The guest kernel the disk was cloned for (`guest::kernel_path`): the disk's kernel
+    /// modules match only that kernel.
+    pub kernel: String,
     /// The launch command of the latest revision.
     pub command: String,
     /// Whether a provisioning run succeeded on the disk; until then, starting the
@@ -288,12 +291,13 @@ impl Db {
         id: &str,
         name: &str,
         disk_path: &Path,
+        kernel: &str,
         config: &Config,
     ) -> Result<Instance> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO instances (id, name, disk_path) VALUES (?1, ?2, ?3)",
-            params![id, name, disk_path.to_string_lossy()],
+            "INSERT INTO instances (id, name, disk_path, kernel) VALUES (?1, ?2, ?3, ?4)",
+            params![id, name, disk_path.to_string_lossy(), kernel],
         )?;
         put_revision(&tx, id, 1, config)?;
         tx.commit()?;
@@ -301,6 +305,7 @@ impl Db {
             id: id.into(),
             name: name.into(),
             disk_path: disk_path.into(),
+            kernel: kernel.into(),
             command: config.command.clone(),
             provisioned: false,
         })
@@ -435,12 +440,32 @@ impl Db {
         )?;
         Ok(())
     }
+
+    pub fn preference(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM preferences WHERE key = ?1",
+                [key],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    pub fn set_preference(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO preferences (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            [key, value],
+        )?;
+        Ok(())
+    }
 }
 
 const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
     (SELECT r.command FROM instance_revisions r WHERE r.instance_id = i.id
      ORDER BY r.revision DESC LIMIT 1),
-    i.provisioned_at IS NOT NULL
+    i.provisioned_at IS NOT NULL, i.kernel
     FROM instances i";
 
 const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, command, arguments,
@@ -474,6 +499,7 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
         disk_path: PathBuf::from(row.get::<_, String>(2)?),
         command: row.get(3)?,
         provisioned: row.get(4)?,
+        kernel: row.get(5)?,
     })
 }
 

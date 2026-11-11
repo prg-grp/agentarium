@@ -17,8 +17,8 @@ use crate::editor::{
     guest_path_errors, pick_folder, remove, rule_rows, same_target, sync, working_directory_error,
 };
 use crate::preset::Preset;
-use crate::vm;
 use crate::{AppWindow, CreateIssue, Creation, InstanceItem, InstanceState, PresetRow};
+use crate::{guest, vm};
 
 // Steps, as numbered in the step indicator (from 0).
 const HARNESS: i32 = 0;
@@ -304,9 +304,13 @@ impl Creator {
     fn create_instance(&self, id: &str, name: &str, config: &Config) -> db::Result<db::Instance> {
         let dir = db::instance_dir(id)?;
         let disk = dir.join("root.ext4");
-        let created = vm::create_disk(&disk)
+        let created = guest::base_rootfs()
+            .and_then(|base| vm::create_disk(&base, &disk))
             .map_err(Box::<dyn Error>::from)
-            .and_then(|()| self.db.create_instance(id, name, &disk, config));
+            .and_then(|()| {
+                let kernel = guest::current_kernel();
+                self.db.create_instance(id, name, &disk, kernel, config)
+            });
         if created.is_err() {
             let _ = std::fs::remove_dir_all(&dir);
         }

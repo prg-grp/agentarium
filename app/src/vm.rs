@@ -30,12 +30,6 @@ use crate::netlog::NetLog;
 use crate::policy::Policy;
 use crate::terminal::Console;
 
-/// The guest kernel, built into the workspace target directory by `make guest`.
-const KERNEL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image");
-
-/// Names the base root filesystem that instance disks are cloned from; `make run` sets it.
-const BASE_ROOTFS_VAR: &str = "AGENT_TOOLBOX_BASE_ROOTFS";
-
 /// What the guest does after booting. The app sends it to the guest supervisor over the
 /// command plane (`Start`); nothing runs on the session console before that.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -52,6 +46,8 @@ pub enum BootMode {
 pub struct VmSpec {
     pub cpus: usize,
     pub memory_mib: u64,
+    /// The uncompressed arm64 Linux kernel the rootfs was made for (`guest::kernel_path`).
+    pub kernel: PathBuf,
     /// Raw ext4 image, attached read-write as the guest's /dev/vda.
     pub rootfs: PathBuf,
     /// Host folders shared live through one virtio-fs device (`SHARE_TAG`); the guest
@@ -103,12 +99,9 @@ impl Vm {
         if !unsafe { VZVirtualMachine::isSupported() } {
             return Err("Virtualization isn't available on this Mac.".into());
         }
-        for path in [Path::new(KERNEL), &spec.rootfs] {
+        for path in [&spec.kernel, &spec.rootfs] {
             if !path.exists() {
-                return Err(format!(
-                    "{} is missing. Run `make guest` first.",
-                    path.display()
-                ));
+                return Err(format!("{} is missing.", path.display()));
             }
         }
 
@@ -141,7 +134,7 @@ impl Vm {
         unsafe {
             let boot = VZLinuxBootLoader::initWithKernelURL(
                 VZLinuxBootLoader::alloc(),
-                &file_url(Path::new(KERNEL)),
+                &file_url(&spec.kernel),
             );
             // Linux guests get no usable hardware clock, so the guest sets its clock from this.
             let now = SystemTime::now()
@@ -328,23 +321,17 @@ impl Vm {
     }
 }
 
-/// Creates an instance's root disk at `disk` as an APFS clone of the base rootfs: instant,
-/// and it shares the base's blocks until the guest writes. There is no copy fallback, as
-/// a copy would write out the whole sparse image.
-pub fn create_disk(disk: &Path) -> Result<(), String> {
-    let base = std::env::var_os(BASE_ROOTFS_VAR)
-        .map(PathBuf::from)
-        .filter(|base| base.exists())
-        .ok_or_else(|| {
-            format!("{BASE_ROOTFS_VAR} names no base rootfs. Start the app with `make run`.")
-        })?;
+/// Creates an instance's root disk at `disk` as an APFS clone of the base rootfs
+/// (`guest::base_rootfs`): instant, and it shares the base's blocks until the guest writes.
+/// There is no copy fallback, as a copy would write out the whole sparse image.
+pub fn create_disk(base: &Path, disk: &Path) -> Result<(), String> {
     if let Some(dir) = disk.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
     let c_path = |path: &Path| {
         std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string())
     };
-    let (from, to) = (c_path(&base)?, c_path(disk)?);
+    let (from, to) = (c_path(base)?, c_path(disk)?);
     if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) } != 0 {
         return Err(format!(
             "Couldn't clone {} to {}: {}. Both must be on the same APFS volume.",
