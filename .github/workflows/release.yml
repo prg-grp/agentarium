@@ -144,6 +144,14 @@ jobs:
       - if: steps.cache.outputs.cache-hit != 'true'
         run: cargo binstall -y bpf-linker
 
+      # The runner's resolver often times out on ubuntu.com (Canonical's name servers are
+      # partly unreachable from it). Docker containers take this file over as well.
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Use public DNS resolvers
+        run: |
+          sudo rm -f /etc/resolv.conf
+          printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\noptions timeout:3 attempts:3\n' | sudo tee /etc/resolv.conf
+
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Build kernel and base rootfs
         run: make guest
