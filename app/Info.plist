@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The release bundle's Info.plist, handed to vpk pack. The release workflow sets the versions.
+     CFBundleIdentifier matches db::APP_ID. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Agentarium</string>
+    <key>CFBundleDisplayName</key>
+    <string>Agentarium</string>
+    <key>CFBundleExecutable</key>
+    <string>Agentarium</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.programming-group.agentarium</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon.icns</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Instances that may reach the local network connect to devices on it through Agentarium.</string>
+</dict>
+</plist>

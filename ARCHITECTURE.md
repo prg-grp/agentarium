@@ -88,7 +88,8 @@ Decided:
 - One harness-agnostic base root filesystem (`vms/rootfs/base`, Ubuntu 24.04 arm64) is built as a sparse raw ext4 image at its full virtual size of 64 GiB. Inode tables and journal stay unwritten (mke2fs lazy init, guest mounts root with `noinit_itable`), so the image only takes the space of its contents. There is no resize step.
 - Each instance disk is an APFS `clonefile` of the base: created instantly, sharing the base's blocks until the guest writes, and growing on the Mac only by what the guest writes. Without a clone (another volume) creation fails; there is no copy fallback.
 - The agent harness is not part of the base. Each instance's provisioning script installs it in provision mode (see below). The base does include Node.js LTS with npm (NodeSource), which the Codex, Gemini CLI and OpenCode presets install from.
-- During development, `make run` names the base image with `AGENT_TOOLBOX_BASE_ROOTFS`. How a released app obtains the kernel and base image (e.g. a pinned, downloaded guest bundle) remains open.
+- Released apps download the kernel and base image from their own GitHub release (see [Releases and updates](#releases-and-updates)). During development, `make run` names the base image with `AGENT_TOOLBOX_BASE_ROOTFS` and the app boots `target/guest/Image`.
+- A disk's kernel modules match only the kernel it was cloned for, so each instance records its kernel (`instances.kernel`) and boots with it; a kernel is kept as long as an instance uses it.
 - The guest supervisor (`agentarium-supervisor`, crate `guest_supervisor`) is the boot authority in the guest. It is a static Rust binary for `aarch64-unknown-linux-musl`, cross-compiled on the Mac and baked into the base rootfs as a systemd service. No login runs on any console; nothing runs on the session console until the app sends Start over the command plane (see [Protobuf over vsock](#protobuf-over-vsock)). Each mode gives access to exactly one thing: the instance's launch command (agent), a root shell (maintenance), or the provisioning script (provision). The boot mode is no longer on the kernel command line. In agent mode the agent runs in a cgroup of its own below the supervisor's (systemd delegates the cpu and memory controllers with `Delegate=` and starts the supervisor in its own subgroup with `DelegateSubgroup=`), so its CPU and memory use include every process it starts.
 - The guest has two virtio consoles. `hvc1` carries only the session (the app's Terminal tab, the one interactive terminal). `hvc0` is the kernel console: kernel, systemd (boot and shutdown) and the supervisor's logs, shown read-only in the app's Logs tab, where only selecting and copying work. The app also writes its output, as raw console bytes, to one file per boot (`logs/<start>.log`, named by `boots.started_at` in unix seconds). `hvc0` also stays the path for a later rescue console.
 - The supervisor logs with `tracing` to stdout; systemd sends it to the journal and to `hvc0` (`StandardOutput=journal+console`). Logs name programs, users, directories and environment variable names, but never argument or variable values or the provisioning script. Lines the user needs in the session (an exit and restart, a start failure, the provisioning result) are also written to `hvc1`.
@@ -107,14 +108,23 @@ Open decisions:
 
 - Rust UI toolkit and terminal component.
 - Direct bindings versus a native bridge.
-- Minimum macOS version.
 - Supported Mac architectures.
-- Distribution and update process of the kernel and base image.
-- Signing, distribution, and entitlement configuration.
+
+Decided: macOS 26 is the minimum; release builds are arm64 only. Signing, notarization and distribution are described under [Releases and updates](#releases-and-updates).
 
 Virtualization.framework requires the virtualization entitlement for the process using its APIs. Packaging must account for this requirement. [Apple entitlement documentation](https://developer.apple.com/documentation/virtualization/adding-the-virtualization-entitlement-to-your-project).
 
 An Apple silicon first release with an arm64 Linux guest is a proposed scope reduction, not an established compatibility promise.
+
+### Releases and updates
+
+- Commits follow Conventional Commits. release-please keeps a release PR with the changelog on `main`; merging it creates the `vX.Y.Z` tag and GitHub release (the first release is 1.0.0).
+- `.github/workflows/release.yml` runs on every push to `main`, in one workflow so that `github.run_number` counts the dev builds:
+  - When the release PR is created or updated, it builds a **dev** release: version `<next version>-dev.<run number>`, prerelease `dev-<run number>`, notes with the features and fixes since the previous dev or stable release.
+  - When the release PR is merged, it builds the **stable** release into the release that release-please created.
+- Velopack (`vpk`) packages each build: a `.app` with the virtualization entitlement and hardened runtime, signed with Developer ID, a signed `.pkg` installer, a portable zip, full and delta packages and the channel's `releases.<channel>.json`. Both the app and the installer are notarized.
+- The guest kernel and base rootfs are built on an arm64 Linux runner (`make guest`), cached by the hash of their inputs, compressed with zstd and attached to every release. The app has the release tag and the compressed files' SHA-256 compiled in; it downloads missing assets at launch into Application Support, checks the hashes and unpacks the rootfs as a sparse file, so instance disks stay APFS clones of it.
+- The app updates itself through the `velopack` crate (`app/src/update.rs`). The stable channel reads `releases/latest/download`, which is always the newest stable release; the dev channel reads the newest GitHub releases and also takes a stable release once it is newer. The user picks the channel in Preferences (default: the channel of the installed build). Updates download in the background and install when the user restarts, after the instances have shut down gracefully.
 
 ## Instance configuration and lifecycle
 

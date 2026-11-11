@@ -60,3 +60,35 @@ rootfs is rebuilt only when files in `vms/rootfs/base`, the supervisor or the ob
 `make clean-guest` removes all guest artifacts. Instance disks are clones of the base taken
 at creation, so after a base change that existing instances can't use (such as a new
 supervisor protocol), run `make clean-app`.
+
+Development builds (`cargo run`, `make run`) use the kernel and base rootfs from `target/`
+and don't update themselves; Preferences says so.
+
+## Releases
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org): `feat:` and `fix:`
+commits make the changelog, `docs:`, `chore:`, `refactor:` and `ci:` don't.
+`.github/workflows/release.yml` runs on every push to `main`:
+
+- [release-please](https://github.com/googleapis/release-please) keeps a release PR with the
+  changelog. Whenever it creates or updates that PR, the workflow publishes a **dev** build:
+  prerelease `dev-<run number>`, version `<next version>-dev.<run number>`.
+- Merging the release PR creates the `vX.Y.Z` release; the workflow adds the **stable** build to it.
+- Each build is packaged, signed and notarized by [Velopack](https://velopack.io) (`.pkg`
+  installer, portable zip, full and delta update packages) and gets the guest kernel and base
+  rootfs, built on an arm64 Linux runner, attached.
+- Installed apps update themselves from these releases; the channel (stable or dev builds) is
+  chosen in Preferences.
+
+The signing job runs in the GitHub environment `release` with these secrets:
+
+| Secret | Content |
+|---|---|
+| `MACOS_APP_CERT_P12` | Developer ID Application certificate with its private key, `.p12`, base64 |
+| `MACOS_INSTALLER_CERT_P12` | Developer ID Installer certificate with its private key, `.p12`, base64 |
+| `MACOS_CERT_PASSWORD` | Password of both `.p12` files |
+| `ASC_KEY_ID`, `ASC_ISSUER_ID` | App Store Connect API key (role Developer), for notarization |
+| `ASC_KEY_P8` | The API key's `.p8` file content |
+
+The repository needs "Read and write permissions" and "Allow GitHub Actions to create and
+approve pull requests" under Settings → Actions → General. No personal access token is needed.
