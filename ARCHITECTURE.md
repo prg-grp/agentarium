@@ -23,7 +23,7 @@ The initial agent integration is Claude Code. New instances are created from pre
 
 | Area | Requirement |
 |---|---|
-| Host platform | macOS first |
+| Host platform | macOS first, Linux later; Windows is out of scope |
 | Implementation | Rust desktop application |
 | Virtualization | Apple Virtualization.framework |
 | Instances | Persistent, independently configured VMs |
@@ -81,7 +81,7 @@ Proposed implementation: a managed Linux image containing:
 
 Normal agent execution should use an unprivileged guest user. The privileged service should expose only the operations needed to manage that instance.
 
-Linux is the proposed guest operating system. Later Linux host support is a separate product target.
+Linux is the proposed guest operating system. Later Linux host support is a separate product target; its decisions and open questions are in [linux.md](linux.md). Windows hosts are out of scope.
 
 Decided:
 
@@ -424,7 +424,7 @@ The first release is complete when:
 
 ## Deferred scope
 
-- Windows and Linux host applications.
+- Linux host application (see [linux.md](linux.md)). Windows hosts are out of scope, not deferred.
 - Codex and custom-agent integrations.
 - Copied workspaces with diff review and selective apply.
 - Cloud synchronization, collaboration, and remote management.
