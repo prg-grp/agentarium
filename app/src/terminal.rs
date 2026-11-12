@@ -8,6 +8,7 @@
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -17,7 +18,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use alacritty_terminal::event::{Event, EventListener, OnResize, WindowSize};
 use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::cell::Flags;
@@ -38,10 +39,10 @@ const DEFAULT_FG: (u8, u8, u8) = (0xD6, 0xDC, 0xE5);
 const WELL_BG: (u8, u8, u8) = (0x0C, 0x0E, 0x12);
 
 thread_local! {
-    /// http(s) URLs, matched like Alacritty's URL hint. Lowercase escapes keep the search
-    /// case-insensitive.
-    static URL: RefCell<Option<RegexSearch>> = RefCell::new(
-        RegexSearch::new(r#"https?://[^\x00-\x1f\x7f-\x9f<>"\s{-}\^⟨⟩`\\]+"#).ok(),
+    /// Runs of characters a URL may contain, as in Alacritty's URL hint. Links start at
+    /// an http(s) scheme within them.
+    static URL_CHARS: RefCell<Option<RegexSearch>> = RefCell::new(
+        RegexSearch::new(r#"[^\x00-\x1f\x7f-\x9f<>"\s{-}\^⟨⟩`\\]+"#).ok(),
     );
 }
 
@@ -805,8 +806,11 @@ fn redraw(link: &Link, term: &Term<Listener>, ui: &AppWindow) {
 
     let hover = *link.hover.lock().unwrap();
     let hovered = hover.and_then(|(col, row)| link_at(term, selection_point(term, col, row).0));
-    let underline = hovered.map_or_else(Vec::new, |(range, _)| {
-        row_spans(term, offset, *range.start(), *range.end())
+    let underline = hovered.map_or_else(Vec::new, |(segments, _)| {
+        segments
+            .iter()
+            .flat_map(|run| row_spans(term, offset, *run.start(), *run.end()))
+            .collect()
     });
     session.set_link(ModelRc::new(VecModel::from(underline)));
 }
@@ -843,16 +847,60 @@ fn row_spans(
     spans
 }
 
-/// The http(s) link covering a grid point, as its cells and its text. Links may wrap
-/// across rows.
-fn link_at(term: &Term<Listener>, point: Point) -> Option<(Match, String)> {
-    let start = term.line_search_left(point);
-    let end = term.line_search_right(point);
-    let found = URL.with_borrow_mut(|regex| {
-        let regex = regex.as_mut()?;
-        RegexIter::new(start, end, Direction::Right, term, regex).find(|m| m.contains(&point))
-    })?;
-    let mut url = term.bounds_to_string(*found.start(), *found.end());
+/// The http(s) link covering a grid point, as its cells (one range per line) and its
+/// text. Links may wrap across rows, and may be broken across lines by the program
+/// itself, as Claude Code does with its sign-in link.
+fn link_at(term: &Term<Listener>, point: Point) -> Option<(Vec<Match>, String)> {
+    // Where a run's scheme starts, in cells.
+    let scheme = |run: &Match| {
+        let text = term.bounds_to_string(*run.start(), *run.end());
+        let lower = text.to_ascii_lowercase();
+        let at = ["http://", "https://"]
+            .iter()
+            .filter_map(|scheme| lower.find(scheme))
+            .min()?;
+        Some(text[..at].chars().count())
+    };
+    let line = url_runs(term, point);
+    let run = line.iter().find(|run| run.contains(&point))?.clone();
+    let mut segments = VecDeque::from([run]);
+
+    // Follow the run up to the line holding its scheme and down to where it stops.
+    let mut above = line.clone();
+    while segments.len() < 16 && scheme(&segments[0]).is_none() && above.first() == segments.front()
+    {
+        let top = term.line_search_left(*segments[0].start()).line;
+        if top <= term.topmost_line() {
+            break;
+        }
+        let upper = url_runs(term, Point::new(top - 1, Column(0)));
+        if !continues(term, &upper, &above) {
+            break;
+        }
+        segments.push_front(upper[upper.len() - 1].clone());
+        above = upper;
+    }
+    let mut below = line;
+    while segments.len() < 32 && below.last() == segments.back() {
+        let bottom = term.line_search_right(*below[0].end()).line;
+        if bottom >= term.bottommost_line() {
+            break;
+        }
+        let lower = url_runs(term, Point::new(bottom + 1, Column(0)));
+        if !continues(term, &below, &lower) || scheme(&lower[0]).is_some() {
+            break;
+        }
+        segments.push_back(lower[0].clone());
+        below = lower;
+    }
+
+    let mut segments = Vec::from(segments);
+    let at = scheme(&segments[0])?;
+    segments[0] = segments[0].start().add(term, Boundary::Grid, at)..=*segments[0].end();
+    let mut url: String = segments
+        .iter()
+        .map(|run| term.bounds_to_string(*run.start(), *run.end()))
+        .collect();
     // Punctuation after a link usually belongs to the sentence, as does a closing
     // bracket without an opening one in the link.
     let mut trimmed = 0;
@@ -868,8 +916,60 @@ fn link_at(term: &Term<Listener>, point: Point) -> Option<(Match, String)> {
         url.pop();
         trimmed += 1;
     }
-    let end = found.end().sub(term, Boundary::Grid, trimmed);
-    (point <= end).then(|| (*found.start()..=end, url))
+    while trimmed > 0 {
+        let last = segments.last_mut()?;
+        let cells = term
+            .bounds_to_string(*last.start(), *last.end())
+            .chars()
+            .count();
+        if trimmed < cells {
+            *last = *last.start()..=last.end().sub(term, Boundary::Grid, trimmed);
+            break;
+        }
+        segments.pop();
+        trimmed -= cells;
+    }
+    segments
+        .iter()
+        .any(|run| run.contains(&point))
+        .then_some((segments, url))
+}
+
+/// Runs of characters a URL may contain on the line (soft wraps joined) through `point`.
+fn url_runs(term: &Term<Listener>, point: Point) -> Vec<Match> {
+    let start = term.line_search_left(point);
+    let end = term.line_search_right(point);
+    URL_CHARS.with_borrow_mut(|regex| match regex.as_mut() {
+        Some(regex) => RegexIter::new(start, end, Direction::Right, term, regex).collect(),
+        None => Vec::new(),
+    })
+}
+
+/// Whether a program broke a URL off between two lines, given as their URL runs: the
+/// upper line ends in a run that reaches at least as close to the right edge as the
+/// lower line is indented, and the lower line starts with a run at that indentation.
+fn continues(term: &Term<Listener>, upper: &[Match], lower: &[Match]) -> bool {
+    let (Some(last), Some(first)) = (upper.last(), lower.first()) else {
+        return false;
+    };
+    let (end, start) = (*last.end(), *first.start());
+    let indent = start.column.0;
+    // Whether the cells `from..to` of a row are blank.
+    let blank = |line: Line, from: usize, to: usize| {
+        from >= to
+            || term
+                .bounds_to_string(
+                    Point::new(line, Column(from)),
+                    Point::new(line, Column(to - 1)),
+                )
+                .trim()
+                .is_empty()
+    };
+    end.line == term.line_search_right(end).line
+        && end.column.0 + indent + 1 >= term.columns()
+        && blank(end.line, end.column.0 + 1, term.columns())
+        && start.line == term.line_search_left(start).line
+        && blank(start.line, 0, indent)
 }
 
 /// Converts a mouse position in cell units to a grid point and the half of
