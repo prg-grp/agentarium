@@ -76,6 +76,7 @@ impl Preset {
             Preset::ClaudeCode => &[
                 ("api.anthropic.com", false),
                 ("claude.ai", false),
+                ("downloads.claude.ai", false),
                 ("platform.claude.com", false),
                 ("console.anthropic.com", false),
                 ("statsig.anthropic.com", false),
