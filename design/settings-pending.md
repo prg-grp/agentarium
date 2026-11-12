@@ -37,7 +37,7 @@ Resources            │ api.anthropic.com      Exact name                      
 
 - Left column, 220 px, 1 px `line` right border: Agent and launch, Shared folders, Network, Environment, Resources.
 - All sections sit on one scrolling page; clicking a section scrolls to it, and the selection follows the scroll position.
-- Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px. In Network, the default action and the Mac and local network setting each count as one change.
+- Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px. In Network, the default action and the Mac and local network setting each count as one change; so does each rule or forwarded port added or removed, and a forwarded port switched between This Mac and Local network.
 - The Network description follows the Mac and local network setting: "Applies to agent boots. Your Mac and local network stay unreachable, whatever the rules say." or "Applies to agent boots. Your Mac and local network follow the rules, and maintenance boots can reach them too."
 - Agent and launch also holds the instance name. Renaming applies on save; the name isn't part of a revision.
 - Resources: description "The virtual machine's processors, memory and disk. The instance takes memory and disk space from your Mac only as it uses them." The disk stepper starts at the disk's current size, since disks can grow but not shrink. A larger disk counts as one change and applies on the next boot, like processors and memory.

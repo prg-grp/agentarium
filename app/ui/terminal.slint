@@ -1,7 +1,7 @@
 // Agent terminal and boot log, see design/terminal-running.md and design/app-shell.md.
 
 import { Theme } from "theme.slint";
-import { TermLine, TermSpan } from "types.slint";
+import { TermLine, TermSpan, ForwardItem } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 
 // State of the running terminal session, written from Rust (src/terminal.rs).
@@ -50,8 +50,12 @@ export component TerminalView {
     // and takes no input meanwhile. The boot log stays visible, since it shows the progress.
     in property <string> transition;
     property <bool> busy: !log && transition != "";
+    // The running boot's forwarded ports, shown as chips in the session's header.
+    in property <[ForwardItem]> forwards;
     // The "Boot log" link in the session's header was clicked.
     callback open-log();
+    // A forwarded port's chip was clicked: open its URL in the browser.
+    callback open-url(string);
     // The boot log's "Open logs" button was clicked.
     callback open-logs();
 
@@ -124,6 +128,77 @@ export component TerminalView {
                             root.open-logs();
                         }
                     }
+                }
+
+                // Forwarded ports: a click opens the port in the browser. A port the Mac
+                // couldn't open says why and does nothing.
+                if !root.log: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: end;
+
+                    for forward in root.forwards: VerticalLayout {
+                        alignment: center;
+
+                        Rectangle {
+                            height: 24px;
+                            border-radius: 12px;
+                            border-width: 1px;
+                            border-color: Theme.line2;
+                            background: forward.url != "" && chip-touch.has-hover ? Theme.hover : transparent;
+                            accessible-role: button;
+                            accessible-enabled: forward.url != "";
+                            accessible-label: forward.url != "" ? "Open port " + forward.label + " in the browser" : "Port " + forward.label + ": " + forward.error;
+                            accessible-action-default => {
+                                if forward.url != "" {
+                                    root.open-url(forward.url);
+                                }
+                            }
+
+                            HorizontalLayout {
+                                padding-left: 9px;
+                                padding-right: 10px;
+                                spacing: 5px;
+
+                                VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        width: 13px;
+                                        height: 13px;
+                                        source: forward.url != "" ? @image-url("icons/external-link.svg") : @image-url("icons/alert-circle.svg");
+                                        colorize: forward.url != "" ? Theme.tx2 : Theme.bad;
+                                    }
+                                }
+
+                                Text {
+                                    text: forward.label;
+                                    color: Theme.tx2;
+                                    font-family: Theme.mono;
+                                    font-size: Theme.font-meta;
+                                    vertical-alignment: center;
+                                }
+
+                                if forward.error != "": Text {
+                                    text: forward.error;
+                                    color: Theme.bad;
+                                    font-size: Theme.font-meta;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            chip-touch := TouchArea {
+                                mouse-cursor: forward.url != "" ? pointer : default;
+                                clicked => {
+                                    if forward.url != "" {
+                                        root.open-url(forward.url);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if !root.log && root.forwards.length > 0: Rectangle {
+                    width: 12px;
                 }
 
                 if !root.log: Text {

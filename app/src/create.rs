@@ -14,7 +14,8 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::db::{self, Config, Db, NetworkAction};
 use crate::editor::{
     self, FolderProblem, Host, Lists, command_error, display_path, env_errors, folder_problem,
-    guest_path_errors, pick_folder, remove, rule_rows, same_target, sync, working_directory_error,
+    forward_label, guest_path_errors, pick_folder, remove, rule_rows, same_target, sync,
+    working_directory_error,
 };
 use crate::preset::Preset;
 use crate::{AppWindow, CreateIssue, Creation, InstanceItem, InstanceState, PresetRow};
@@ -73,6 +74,7 @@ impl Creator {
         g.set_layout(ModelRc::from(lists.layout.clone()));
         g.set_allowed(ModelRc::from(lists.allowed.clone()));
         g.set_denied(ModelRc::from(lists.denied.clone()));
+        g.set_forwards(ModelRc::from(lists.forwards.clone()));
         g.set_issues(ModelRc::from(this.issues.clone()));
         let presets: Vec<PresetRow> = Preset::ALL
             .iter()
@@ -182,6 +184,18 @@ impl Creator {
         g.on_remove_rule(move |deny, index| {
             c.edit(|d| editor::remove_rule(&mut d.config, deny, index))
         });
+        let c = this.clone();
+        g.on_add_forward(move |guest, host| {
+            let mut error = "";
+            c.edit(|d| error = editor::add_forward(&mut d.config, &guest, &host));
+            error.into()
+        });
+        let c = this.clone();
+        g.on_toggle_forward(move |index| {
+            c.edit(|d| editor::toggle_forward_scope(&mut d.config, index))
+        });
+        let c = this.clone();
+        g.on_remove_forward(move |index| c.edit(|d| remove(&mut d.config.port_forwards, index)));
 
         let c = this.clone();
         g.on_set_cpus(move |cpus| c.edit(|d| d.config.cpus = cpus.max(1) as u32));
@@ -205,8 +219,10 @@ impl Creator {
             let preset = Preset::ClaudeCode;
             let mut config = Config {
                 command: preset.command().into(),
+                arguments: preset.arguments(),
                 provision_script: preset.provision_script().into(),
                 network_rules: preset.network_rules(),
+                port_forwards: preset.port_forwards(),
                 ..Config::default()
             };
             // At most half of the Mac, so the Mac stays usable.
@@ -331,8 +347,8 @@ impl Creator {
     }
 
     /// Switches the draft to the preset at `index` in `Preset::ALL`. The preset sets the
-    /// command and script; its network rules replace the old preset's that the user left
-    /// alone, so rules the user added or changed stay.
+    /// command and script; its arguments, network rules and forwarded ports replace the old
+    /// preset's that the user left alone, so ones the user added or changed stay.
     fn set_preset(&self, index: i32) {
         let Some(&preset) = usize::try_from(index)
             .ok()
@@ -365,6 +381,20 @@ impl Creator {
                 });
                 if !present {
                     c.network_rules.push(rule);
+                }
+            }
+            if c.arguments == old.arguments() {
+                c.arguments = preset.arguments();
+            }
+            let old_forwards = old.port_forwards();
+            c.port_forwards
+                .retain(|forward| !old_forwards.contains(forward));
+            for forward in preset.port_forwards() {
+                let present = c.port_forwards.iter().any(|other| {
+                    other.guest_port == forward.guest_port && other.host_port == forward.host_port
+                });
+                if !present {
+                    c.port_forwards.push(forward);
                 }
             }
             d.preset = preset;
@@ -449,6 +479,12 @@ impl Creator {
         };
         g.set_review_allowed(targets(NetworkAction::Allow).into());
         g.set_review_denied(targets(NetworkAction::Deny).into());
+        let forwards: Vec<_> = c
+            .port_forwards
+            .iter()
+            .map(|forward| forward_label(forward.guest_port, forward.host_port))
+            .collect();
+        g.set_review_forwards(list_or_none(&forwards).into());
         let names: Vec<_> = c
             .environment
             .iter()

@@ -30,6 +30,7 @@ The harness is the  Harness  (•) Claude Code    Anthropic's coding agent
 agent that runs…             ( ) Codex          OpenAI's coding agent
                              ( ) Gemini CLI     Google's coding agent
                              ( ) OpenCode       Open-source agent; add your model provider's domain
+                             ( ) OpenClaw       Assistant gateway with a web UI; add your model provider's domain
                              ( ) Custom agent   Bring your own provisioning script and command
 ───────────────────────────────────────────────────────────────────────
 Provisioning script Show script
@@ -41,14 +42,15 @@ Cancel                                              [Continue to agent]
 
 ## Presets
 
-A preset is compiled into the app and defines three things:
-- the launch command, without arguments;
+A preset is compiled into the app and defines:
+- the launch command and its default arguments (OpenClaw: `gateway run --port 18789`; the others have none);
 - the provisioning script (`vms/provision/<preset>.sh`);
-- the initial network rules: the domains the agent needs, allowed.
+- the initial network rules: the domains the agent needs, allowed;
+- the forwarded ports (OpenClaw: 18789, where its gateway serves the Control UI, on a random Mac port). The OpenClaw script turns off the gateway's token, so the Control UI opens without signing in.
 
 A preset only exists while the instance is drafted. Creating the instance copies these values into its first revision; the chosen preset isn't stored, and later app versions don't change existing instances.
 
-The command and script of a preset can't be changed. The only way to use others is Custom agent. The network rules are only the initial selection: the user can change or remove them on the Network step, like any rule.
+The command and script of a preset can't be changed. The only way to use others is Custom agent. The arguments, network rules and forwarded ports are only the initial selection: the user can change or remove them on the Agent and Network steps.
 
 ## Elements
 
@@ -62,7 +64,7 @@ The command and script of a preset can't be changed. The only way to use others 
 
 - Switching preset sets the launch command and the provisioning script to the new preset's.
 - Switching away from Custom agent keeps its command and script in the draft, so switching back restores them.
-- Switching preset also swaps the network rules. The old preset's rules that the user left unchanged are removed, and the new preset's rules are added unless the same target is already in the same list. Rules the user added or changed stay.
+- Switching preset also swaps the network rules. The old preset's rules that the user left unchanged are removed, and the new preset's rules are added unless the same target is already in the same list. Rules the user added or changed stay. Forwarded ports are swapped the same way, and the arguments are replaced only while they still equal the old preset's.
 - A custom agent whose script is still the unchanged template can be created but not started. Review lists "Fill in the provisioning script so it installs your agent."
 - An empty custom script is a blocking problem on Review.
 - A duplicate name shows "Another instance already uses this name." below the field, which is outlined in `bad`.

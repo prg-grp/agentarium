@@ -44,6 +44,9 @@ Cancel                                        [< Back]  [Continue to review]
   - Domain (`pypi.org`): the scope reads "Exact name" or "Includes subdomains" and toggles on click. Stored lowercase, without a trailing dot.
   - IP address (`203.0.113.7`, IPv4 or IPv6): stored as a single-address range (`/32` or `/128`). The scope reads "Single address".
   - CIDR range (`10.0.0.0/8`): the scope reads "Address range". Host bits are cleared, so `10.1.2.3/8` is stored as `10.0.0.0/8`.
+- **Forwarded ports:** heading "Forwarded ports" below the lists, with the sentence "Opens a port of the VM on your Mac, for example an agent's web interface. Applies in agent and maintenance mode." in `tx2`. They start with the preset's ports (OpenClaw: 18789); see [ARCHITECTURE.md](../ARCHITECTURE.md#forwarded-ports).
+  - Each row: the ports in monospace, "18789 → 8080" (VM → Mac) or "18789 → random port", then scope text in `tx2` 12 px, "This Mac" or "Local network", which toggles on click, and a remove icon. A row on the local network has a `warn` message with the alert-triangle icon: "Other devices on your network can reach this port."
+  - Below the rows: "Port in VM" field → "Port on your Mac" field (placeholder "Random"), both monospace and 140 px, and a neutral "Add" button. Return in either field adds too. An empty Mac port means a random one, picked at every boot. New forwards are on This Mac.
 - **Help column** ("How rules match"):
   - "github.com matches that exact name. Turn on subdomains to include api.github.com and others."
   - "Addresses and ranges, like 203.0.113.7 or 10.0.0.0/8, match the destination directly, without DNS."
@@ -59,6 +62,7 @@ Cancel                                        [< Back]  [Continue to review]
   - Overlapping address ranges: "Overlaps a denied range. Deny rules win where they overlap."
   - Domains and addresses are not compared with each other, since a domain's addresses are only known from DNS.
 - **Duplicate:** the input refuses the duplicate and says "Already in this list."
+- **Forwarded ports:** both fields are outlined in `bad` and a `bad` message follows, keeping what was typed: "Enter the port in the VM, a number from 1 to 65535.", "Enter a port on your Mac from 1 to 65535, or leave it empty for a random one.", "Already in this list." or, for a Mac port another forward uses, "That port on your Mac is already forwarded." Whether a port is free on the Mac is only known at boot.
 
 ## Advanced
 

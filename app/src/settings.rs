@@ -70,6 +70,7 @@ impl SettingsEditor {
         g.set_layout(ModelRc::from(lists.layout.clone()));
         g.set_allowed(ModelRc::from(lists.allowed.clone()));
         g.set_denied(ModelRc::from(lists.denied.clone()));
+        g.set_forwards(ModelRc::from(lists.forwards.clone()));
 
         let s = this.clone();
         g.on_set_name(move |name| s.edit(|e| e.name = name.into()));
@@ -138,6 +139,18 @@ impl SettingsEditor {
         g.on_remove_rule(move |deny, index| {
             s.edit(|e| editor::remove_rule(&mut e.config, deny, index))
         });
+        let s = this.clone();
+        g.on_add_forward(move |guest, host| {
+            let mut error = "";
+            s.edit(|e| error = editor::add_forward(&mut e.config, &guest, &host));
+            error.into()
+        });
+        let s = this.clone();
+        g.on_toggle_forward(move |index| {
+            s.edit(|e| editor::toggle_forward_scope(&mut e.config, index))
+        });
+        let s = this.clone();
+        g.on_remove_forward(move |index| s.edit(|e| remove(&mut e.config.port_forwards, index)));
 
         let s = this.clone();
         g.on_set_cpus(move |cpus| s.edit(|e| e.config.cpus = cpus.max(1) as u32));
@@ -449,7 +462,10 @@ fn count_changes(old: &Config, new: &Config) -> [i32; 5] {
         list_changes(&old.mounts, &new.mounts, |mount| mount.host_path.clone()),
         one(old.network_default != new.network_default)
             + one(old.network_allow_local != new.network_allow_local)
-            + list_changes(&old.network_rules, &new.network_rules, rule_key),
+            + list_changes(&old.network_rules, &new.network_rules, rule_key)
+            + list_changes(&old.port_forwards, &new.port_forwards, |forward| {
+                (forward.guest_port, forward.host_port)
+            }),
         list_changes(&old.environment, &new.environment, |var| var.name.clone()),
         one(old.cpus != new.cpus)
             + one(old.memory_mib != new.memory_mib)

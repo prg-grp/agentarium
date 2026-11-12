@@ -25,6 +25,7 @@ use objc2_virtualization::{
     VZVirtualMachine, VZVirtualMachineConfiguration, VZVirtualMachineState,
 };
 
+use crate::db::PortForward;
 use crate::net::{self, Network};
 use crate::netlog::NetLog;
 use crate::policy::Policy;
@@ -57,6 +58,9 @@ pub struct VmSpec {
     pub network: Arc<Policy>,
     /// Where the network's lookups and connections are recorded (agent boots).
     pub netlog: Option<NetLog>,
+    /// Guest ports opened on the Mac once the session starts (agent and maintenance boots).
+    /// The controller serves them, not the VM; they're here as part of the boot's settings.
+    pub forwards: Vec<PortForward>,
 }
 
 /// A host folder in the instance's virtio-fs share.

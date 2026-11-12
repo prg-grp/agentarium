@@ -23,6 +23,7 @@ Network         Unlisted domains  Denied                              Edit
                 Mac and local network  Blocked
                 Allowed  api.anthropic.com, github.com, crates.io
                 Denied   gist.github.com, pastebin.com
+                Forwarded ports  18789 → random port
 ──────────────────────────────────────────────────────────────────────
 Environment     Variables    RUST_LOG, DATABASE_URL                   Edit
 ──────────────────────────────────────────────────────────────────────

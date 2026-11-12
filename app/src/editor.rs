@@ -12,10 +12,10 @@ use std::rc::Rc;
 use slint::{Model, SharedString, VecModel};
 
 use crate::db::{
-    self, Config, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget, mask32, mask128,
-    max_prefix, parse_network,
+    self, Config, EnvVar, Mount, NetworkAction, NetworkRule, PortForward, RuleTarget, mask32,
+    mask128, max_prefix, parse_network,
 };
-use crate::{EnvRow, InstanceItem, InstanceState, LayoutRow, MountRow, RuleRow};
+use crate::{EnvRow, ForwardRow, InstanceItem, InstanceState, LayoutRow, MountRow, RuleRow};
 
 /// The agent user's ~/workspace inside the instance; shared folders go below it by default.
 const WORKSPACE: &str = "/home/ubuntu/workspace";
@@ -30,6 +30,7 @@ pub struct Lists {
     pub layout: Rc<VecModel<LayoutRow>>,
     pub allowed: Rc<VecModel<RuleRow>>,
     pub denied: Rc<VecModel<RuleRow>>,
+    pub forwards: Rc<VecModel<ForwardRow>>,
 }
 
 impl Lists {
@@ -81,6 +82,16 @@ impl Lists {
         sync(
             &self.denied,
             rule_rows(&c.network_rules, NetworkAction::Deny),
+        );
+        sync(
+            &self.forwards,
+            c.port_forwards
+                .iter()
+                .map(|forward| ForwardRow {
+                    label: forward_label(forward.guest_port, forward.host_port).into(),
+                    local_network: forward.all_interfaces,
+                })
+                .collect(),
         );
     }
 }
@@ -170,6 +181,60 @@ pub fn remove_rule(c: &mut Config, deny: bool, index: i32) {
     if let Some(i) = rule_index(rules, action(deny), index) {
         rules.remove(i);
     }
+}
+
+/// Adds a forwarded port from what the user typed: the VM's port, and the Mac's port or
+/// nothing for one picked at every boot. Returns why it was refused, or "".
+pub fn add_forward(c: &mut Config, guest: &str, host: &str) -> &'static str {
+    let (guest, host) = (guest.trim(), host.trim());
+    if guest.is_empty() && host.is_empty() {
+        return "";
+    }
+    let port = |text: &str| text.parse::<u16>().ok().filter(|&port| port > 0);
+    let Some(guest_port) = port(guest) else {
+        return "Enter the port in the VM, a number from 1 to 65535.";
+    };
+    let host_port = match host {
+        "" => None,
+        host => match port(host) {
+            Some(port) => Some(port),
+            None => {
+                return "Enter a port on your Mac from 1 to 65535, or leave it empty for a random one.";
+            }
+        },
+    };
+    let forwards = &mut c.port_forwards;
+    if forwards
+        .iter()
+        .any(|other| other.guest_port == guest_port && other.host_port == host_port)
+    {
+        return "Already in this list.";
+    }
+    if host_port.is_some() && forwards.iter().any(|other| other.host_port == host_port) {
+        return "That port on your Mac is already forwarded.";
+    }
+    forwards.push(PortForward {
+        guest_port,
+        host_port,
+        all_interfaces: false,
+    });
+    ""
+}
+
+/// Switches a forwarded port between your Mac only and the local network.
+pub fn toggle_forward_scope(c: &mut Config, index: i32) {
+    if let Some(forward) = usize::try_from(index)
+        .ok()
+        .and_then(|index| c.port_forwards.get_mut(index))
+    {
+        forward.all_interfaces = !forward.all_interfaces;
+    }
+}
+
+/// "18789 → 8080": the VM's port and the Mac's, or "random port" for one picked at boot.
+pub fn forward_label(guest_port: u16, host_port: Option<u16>) -> String {
+    let host = host_port.map_or("random port".to_owned(), |port| port.to_string());
+    format!("{guest_port} → {host}")
 }
 
 pub fn remove<T>(list: &mut Vec<T>, index: i32) {

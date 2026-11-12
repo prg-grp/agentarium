@@ -16,6 +16,10 @@ include!(concat!(
 /// in a Linux guest, so the agent user can't pose as the supervisor.
 pub const PORT: u32 = 700;
 
+/// The vsock port the supervisor accepts forwarded ports on, each connection starting
+/// with a `Forward`. Below 1024 for the same reason as `PORT`.
+pub const FORWARD_PORT: u32 = 702;
+
 /// Sent in `Hello`; the app refuses a supervisor that speaks another version.
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -72,7 +76,8 @@ pub mod vsock {
                 size_of::<libc::sockaddr_vm>() as libc::socklen_t,
             )
         };
-        if bound < 0 || unsafe { libc::listen(socket.as_raw_fd(), 1) } < 0 {
+        // Room for the burst of connections a browser opens to a forwarded port.
+        if bound < 0 || unsafe { libc::listen(socket.as_raw_fd(), libc::SOMAXCONN) } < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(socket)

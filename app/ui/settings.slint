@@ -3,7 +3,7 @@
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { InstanceItem, InstanceState, EnvRow, MountRow, LayoutRow, RuleRow } from "types.slint";
+import { InstanceItem, InstanceState, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -28,6 +28,7 @@ export global Settings {
     in property <bool> network-allow-local;
     in property <[RuleRow]> allowed;
     in property <[RuleRow]> denied;
+    in property <[ForwardRow]> forwards;
     in property <int> max-cpus: 1;
     in property <int> max-memory-gb: 1;
     // The disk's current size: it can only grow.
@@ -66,6 +67,10 @@ export global Settings {
     callback add-rule(text: string, deny: bool) -> string;
     callback toggle-scope(deny: bool, index: int);
     callback remove-rule(deny: bool, index: int);
+    // The VM's port and the Mac's ("" for a random one); returns why it was refused, or "".
+    callback add-forward(guest: string, host: string) -> string;
+    callback toggle-forward(index: int);
+    callback remove-forward(index: int);
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
     callback set-disk(gb: int);
@@ -412,6 +417,7 @@ export component SettingsTab {
                             allow-local: Settings.network-allow-local;
                             allowed: Settings.allowed;
                             denied: Settings.denied;
+                            forwards: Settings.forwards;
                             set-deny(deny) => {
                                 Settings.set-network-deny(deny);
                             }
@@ -426,6 +432,15 @@ export component SettingsTab {
                             }
                             remove-rule(deny, index) => {
                                 Settings.remove-rule(deny, index);
+                            }
+                            add-forward(guest, host) => {
+                                return Settings.add-forward(guest, host);
+                            }
+                            toggle-forward(index) => {
+                                Settings.toggle-forward(index);
+                            }
+                            remove-forward(index) => {
+                                Settings.remove-forward(index);
                             }
                         }
                     }

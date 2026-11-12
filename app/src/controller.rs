@@ -15,34 +15,44 @@
 //! session is ready, and again whenever that connection closes. A thread of its own (see
 //! observer.rs) stores what the observer saw; the controller only passes on its health
 //! every two seconds, and notices when it stops arriving.
+//!
+//! In agent and maintenance mode it opens the instance's forwarded ports on the Mac once
+//! the session is ready (see forward.rs), and connects each accepted connection to the
+//! supervisor's forward port.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
+use std::net::TcpStream;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use command_plane::{
-    AgentExit, CollectorState, EnvVar, GuestMessage, HostMessage, Launch, Mode, Mount, PORT,
-    PROTOCOL_VERSION, Resize, Start, Status, Stop, guest_message, host_message,
+    AgentExit, CollectorState, EnvVar, FORWARD_PORT, GuestMessage, HostMessage, Launch, Mode,
+    Mount, PORT, PROTOCOL_VERSION, Resize, Start, Status, Stop, guest_message, host_message,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::db::{self, Db};
-use crate::editor::{FolderProblem, display_path, env_errors, folder_problem, guest_path_errors};
+use crate::editor::{
+    FolderProblem, display_path, env_errors, folder_problem, forward_label, guest_path_errors,
+};
+use crate::forward::{self, Forwarded, Forwards};
 use crate::guest;
 use crate::netlog;
 use crate::observer::{self, Observed, Summary};
 use crate::policy::Policy;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
-use crate::{AppWindow, Deletion, InstanceItem, InstanceState, StatusReading, Tone, Usage};
+use crate::{
+    AppWindow, Deletion, ForwardItem, InstanceItem, InstanceState, StatusReading, Tone, Usage,
+};
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
 
@@ -99,6 +109,11 @@ enum Command {
     ObserverConnected(Result<File, String>),
     /// From the data plane's thread.
     Observed(Observed),
+    /// A connection to a forwarded port on the Mac, for this guest port.
+    Forward {
+        client: TcpStream,
+        guest_port: u16,
+    },
 }
 
 /// What a controller thread reports to the UI thread.
@@ -111,6 +126,8 @@ enum Event {
     State(VmState),
     /// The guest supervisor got Start, so the session is about to run.
     Ready,
+    /// The forwarded ports were opened on the Mac, or closed (empty) as the guest stops.
+    Forwards(Vec<Forwarded>),
     /// The provisioning script finished with this exit code.
     Provisioned(i32),
     /// The supervisor's latest Status, with the CPU use since an earlier one if enough
@@ -253,6 +270,8 @@ fn run(
     let mut observer_next: Option<Instant> = None;
     let mut last_health: Option<Instant> = None;
     let mut observer_stalled = false;
+    // The forwarded ports' listeners, from the first Start until the stop.
+    let mut forwards: Option<Forwards> = None;
     // The shared folders as (guest path, Mac path), for the observer's file paths.
     let mounts: Vec<(String, PathBuf)> = start
         .mounts
@@ -273,6 +292,9 @@ fn run(
                 last_status = None;
                 last_health = None;
                 deadline = Some(Instant::now() + STOP_TIMEOUT);
+                if forwards.take().is_some() {
+                    report(Event::Forwards(Vec::new()));
+                }
                 // Before the supervisor answers, the power button asks the guest instead.
                 let sent = channel
                     .as_mut()
@@ -324,6 +346,26 @@ fn run(
                                     observer_next = Some(Instant::now());
                                 }
                                 report(Event::Ready);
+                                // Start is sent again on every new connection; only the
+                                // first counts in the guest, so the ports open once.
+                                if forwards.is_none() && !spec.forwards.is_empty() {
+                                    let accepted = commands.clone();
+                                    match Forwards::start(
+                                        &spec.forwards,
+                                        move |client, guest_port| {
+                                            let _ = accepted
+                                                .send(Command::Forward { client, guest_port });
+                                        },
+                                    ) {
+                                        Ok((opened, list)) => {
+                                            forwards = Some(opened);
+                                            report(Event::Forwards(list));
+                                        }
+                                        Err(error) => {
+                                            eprintln!("Couldn't open the forwarded ports: {error}")
+                                        }
+                                    }
+                                }
                             }
                             Err(error) => {
                                 eprintln!("Couldn't send Start to the guest supervisor: {error}")
@@ -411,6 +453,18 @@ fn run(
                 stream = None;
                 if deadline.is_none() {
                     observer_next = Some(Instant::now() + OBSERVER_RETRY);
+                }
+            }
+            Ok(Command::Forward { client, guest_port }) => {
+                // The connection closes (dropped) if the supervisor can't be reached.
+                if let Some(handle) = forwards.as_ref().and_then(Forwards::handle) {
+                    // The completion handler may only be called once, but it is an Fn.
+                    let client = Mutex::new(Some(client));
+                    vm.connect(FORWARD_PORT, move |guest| {
+                        if let (Ok(guest), Some(client)) = (guest, client.lock().unwrap().take()) {
+                            handle.spawn(forward::relay(client, guest, guest_port));
+                        }
+                    });
                 }
             }
             // A repeated stop request, a completion without error, or the poll interval.
@@ -689,6 +743,7 @@ impl VmControl {
             shares: Vec::new(),
             network: Arc::new(network),
             netlog: None,
+            forwards: Vec::new(),
         };
         let mut start = match mode {
             BootMode::Agent => Start {
@@ -744,6 +799,13 @@ impl VmControl {
             }
         }
 
+        // Agent and maintenance boots only: provisioning returned above.
+        start.forward_ports = config
+            .port_forwards
+            .iter()
+            .map(|forward| forward.guest_port.into())
+            .collect();
+        spec.forwards = config.port_forwards;
         start.environment = config
             .environment
             .into_iter()
@@ -961,6 +1023,32 @@ impl VmControl {
                     return;
                 };
                 self.show(id, mode, VmState::Running);
+            }
+            Event::Forwards(list) => {
+                if !self.running.borrow().contains_key(id) {
+                    return;
+                }
+                let items: Vec<ForwardItem> = list
+                    .into_iter()
+                    .map(|forwarded| {
+                        let scheme = if forwarded.guest_port == 443 {
+                            "https"
+                        } else {
+                            "http"
+                        };
+                        ForwardItem {
+                            label: forward_label(forwarded.guest_port, forwarded.host_port).into(),
+                            url: match (&forwarded.error, forwarded.host_port) {
+                                (None, Some(port)) => format!("{scheme}://127.0.0.1:{port}").into(),
+                                _ => SharedString::new(),
+                            },
+                            error: forwarded.error.unwrap_or_default().into(),
+                        }
+                    })
+                    .collect();
+                self.update_item(id, |item| {
+                    item.forwards = ModelRc::new(VecModel::from(items));
+                });
             }
             Event::Provisioned(code) => {
                 if let Some(run) = self.running.borrow_mut().get_mut(id) {
@@ -1350,6 +1438,10 @@ impl VmControl {
         item.agent_status = agent;
         item.monitoring = monitoring;
         item.usage = usage;
+        // Forwarded ports are only open while the VM runs.
+        if !self.running.borrow().contains_key(id) {
+            item.forwards = ModelRc::default();
+        }
         self.instances.set_row_data(row, item);
     }
 }

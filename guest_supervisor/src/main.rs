@@ -14,6 +14,9 @@
 //! observer streams what the agent does to the app over the data plane. Maintenance and
 //! provision boots aren't observed: nothing starts the observer there.
 //!
+//! In agent and maintenance mode it also accepts forwarded ports from the app on their
+//! own vsock port and connects each to the guest port it names, on the guest's loopback.
+//!
 //! The supervisor logs with `tracing` to stdout, which systemd sends to the journal and
 //! to the kernel console (`hvc0`, the app's read-only Logs tab). Logs name programs and
 //! variables but never contain argument or variable values or the provisioning script.
@@ -22,6 +25,7 @@
 use std::ffi::{CStr, CString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
+use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, TcpStream};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
@@ -34,9 +38,9 @@ use std::time::Duration;
 
 use command_plane::vsock::{accept, listen};
 use command_plane::{
-    AgentExit, AgentUsage, CollectorState, EnvVar, GuestMessage, Hello, HostMessage, Mode, Mount,
-    PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, STATUS_INTERVAL, Start, StartFailed,
-    Status, guest_message, host_message,
+    AgentExit, AgentUsage, CollectorState, EnvVar, FORWARD_PORT, Forward, GuestMessage, Hello,
+    HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG,
+    STATUS_INTERVAL, Start, StartFailed, Status, guest_message, host_message, read_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -150,6 +154,66 @@ fn main() {
     }
 }
 
+/// Accepts the app's forwarded ports for this boot. Each connection names its guest port in
+/// a Forward and is then relayed to that port on the guest's loopback, if the boot's Start
+/// allows the port.
+fn forward(ports: Vec<u32>) {
+    let listener = match listen(FORWARD_PORT) {
+        Ok(listener) => listener,
+        Err(error) => {
+            return error!(port = FORWARD_PORT, %error, "couldn't listen for forwarded ports");
+        }
+    };
+    info!(port = FORWARD_PORT, ?ports, "listening for forwarded ports");
+    loop {
+        let connection = match accept(&listener) {
+            Ok((connection, ..)) => connection,
+            Err(error) => {
+                warn!(%error, "couldn't accept a forwarded connection");
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let ports = ports.clone();
+        thread::spawn(move || {
+            let mut connection = connection;
+            let port = match read_message::<Forward>(&mut connection) {
+                Ok(request) => request.port,
+                Err(error) => return debug!(%error, "a forwarded connection sent no port"),
+            };
+            if !ports.contains(&port) {
+                return warn!(port, "refused a forward to a port that isn't forwarded");
+            }
+            let Ok(port16) = u16::try_from(port) else {
+                return;
+            };
+            // Servers bound to `localhost` may listen on ::1 only.
+            let target = TcpStream::connect((Ipv4Addr::LOCALHOST, port16))
+                .or_else(|_| TcpStream::connect((Ipv6Addr::LOCALHOST, port16)));
+            match target {
+                Ok(target) => relay(connection, target),
+                Err(error) => debug!(port, %error, "nothing accepts the forwarded port"),
+            }
+        });
+    }
+}
+
+/// Copies both directions between a forwarded connection and its guest port until both
+/// ends are done, passing on each end's close of its sending side.
+fn relay(connection: File, target: TcpStream) {
+    let (Ok(mut from_app), Ok(mut to_target)) = (connection.try_clone(), target.try_clone()) else {
+        return;
+    };
+    let inbound = thread::spawn(move || {
+        let _ = io::copy(&mut from_app, &mut to_target);
+        let _ = to_target.shutdown(Shutdown::Write);
+    });
+    let (mut from_target, mut to_app) = (target, connection);
+    let _ = io::copy(&mut from_target, &mut to_app);
+    unsafe { libc::shutdown(to_app.as_raw_fd(), libc::SHUT_WR) };
+    let _ = inbound.join();
+}
+
 /// Says Hello on a new connection from the app, then follows its messages until it closes.
 /// The session keeps running when the connection closes.
 fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>) {
@@ -244,6 +308,10 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
             warn!("couldn't report the failed start: the app isn't connected");
         }
         return power_off();
+    }
+    if matches!(mode, Mode::Agent | Mode::Maintenance) && !start.forward_ports.is_empty() {
+        let ports = start.forward_ports.clone();
+        thread::spawn(move || forward(ports));
     }
     match mode {
         Mode::Agent => {

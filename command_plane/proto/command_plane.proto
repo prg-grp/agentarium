@@ -8,6 +8,9 @@
 // The guest has two serial consoles: the session runs alone on hvc1 (the app's Terminal
 // tab); hvc0 carries the kernel, systemd and supervisor output (the read-only Logs tab).
 //
+// Forwarded ports use connections of their own to vsock port FORWARD_PORT (see
+// src/lib.rs): the app sends one Forward, then both sides relay the connection's bytes.
+//
 // In agent mode the supervisor also reports Status every STATUS_INTERVAL (see
 // src/lib.rs) and at once when the agent starts or exits. The app keeps only the latest
 // report; nothing is stored. What the agent does goes over the data plane instead.
@@ -62,6 +65,15 @@ message Start {
   // Agent and maintenance modes: the shared folders, mounted before the session starts.
   // If one can't be mounted, the supervisor sends StartFailed and powers off.
   repeated Mount mounts = 5;
+  // Agent and maintenance modes: the guest TCP ports the app may forward to. The
+  // supervisor listens on FORWARD_PORT once the shared folders are mounted.
+  repeated uint32 forward_ports = 6;
+}
+
+// The first and only message on a forward connection: connect it to this guest TCP port
+// on the guest's loopback. A port not in Start.forward_ports is refused by closing.
+message Forward {
+  uint32 port = 1;
 }
 
 // The agent's command, run directly (not through a shell).

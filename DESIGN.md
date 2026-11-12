@@ -213,7 +213,7 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 | Create: harness | [design/create-harness.md](design/create-harness.md) | Creation flow, name, presets, provisioning script |
 | Create: agent | [design/create-agent.md](design/create-agent.md) | Launch, environment |
 | Create: shared folders | [design/create-shared-folders.md](design/create-shared-folders.md) | Folder table, access levels, direct-write warning |
-| Create: network | [design/create-network.md](design/create-network.md) | Default action, domain and address allow/deny lists, conflicts |
+| Create: network | [design/create-network.md](design/create-network.md) | Default action, domain and address allow/deny lists, conflicts, forwarded ports |
 | Create: review | [design/create-review.md](design/create-review.md) | Read-back, resources, start choice, create |
 | Running instance (terminal) | [design/terminal-running.md](design/terminal-running.md) | Agent terminal with live activity rail |
 | Status tab | [design/status-tab.md](design/status-tab.md) | Readings, live CPU and memory meters, agent restarts |

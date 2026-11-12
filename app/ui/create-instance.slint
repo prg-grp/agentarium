@@ -3,7 +3,7 @@
 
 import { TextEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue } from "types.slint";
+import { PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, CreateIssue } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Link, Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -37,6 +37,7 @@ export global Creation {
     in property <bool> network-allow-local;
     in property <[RuleRow]> allowed;
     in property <[RuleRow]> denied;
+    in property <[ForwardRow]> forwards;
     in property <int> max-cpus: 1;
     in property <int> max-memory-gb: 1;
     in property <int> min-disk-gb: 1;
@@ -56,6 +57,7 @@ export global Creation {
     in property <string> review-script;
     in property <string> review-allowed;
     in property <string> review-denied;
+    in property <string> review-forwards;
     in property <string> review-env;
 
     callback go(step: int);
@@ -84,6 +86,10 @@ export global Creation {
     callback add-rule(text: string, deny: bool) -> string;
     callback toggle-scope(deny: bool, index: int);
     callback remove-rule(deny: bool, index: int);
+    // The VM's port and the Mac's ("" for a random one); returns why it was refused, or "".
+    callback add-forward(guest: string, host: string) -> string;
+    callback toggle-forward(index: int);
+    callback remove-forward(index: int);
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
     callback set-disk(gb: int);
@@ -578,6 +584,7 @@ export component CreateInstance {
                             allow-local: Creation.network-allow-local;
                             allowed: Creation.allowed;
                             denied: Creation.denied;
+                            forwards: Creation.forwards;
                             set-deny(deny) => {
                                 Creation.set-network-deny(deny);
                             }
@@ -592,6 +599,15 @@ export component CreateInstance {
                             }
                             remove-rule(deny, index) => {
                                 Creation.remove-rule(deny, index);
+                            }
+                            add-forward(guest, host) => {
+                                return Creation.add-forward(guest, host);
+                            }
+                            toggle-forward(index) => {
+                                Creation.toggle-forward(index);
+                            }
+                            remove-forward(index) => {
+                                Creation.remove-forward(index);
                             }
                         }
                     }
@@ -788,6 +804,12 @@ export component CreateInstance {
                         KeyValue {
                             key: "Denied";
                             value: Creation.review-denied;
+                            mono: true;
+                        }
+
+                        KeyValue {
+                            key: "Forwarded ports";
+                            value: Creation.review-forwards;
                             mono: true;
                         }
                     }

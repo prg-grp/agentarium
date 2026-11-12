@@ -86,6 +86,17 @@ pub struct Mount {
     pub enabled: bool,
 }
 
+/// A TCP port of the guest opened on the Mac while the instance runs.
+#[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
+pub struct PortForward {
+    pub guest_port: u16,
+    /// None: a free port picked at every boot.
+    pub host_port: Option<u16>,
+    /// Listens on all of the Mac's addresses, so the local network reaches it too;
+    /// otherwise only on 127.0.0.1.
+    pub all_interfaces: bool,
+}
+
 /// A network rule: what happens to connections to its target.
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct NetworkRule {
@@ -173,6 +184,8 @@ pub struct Config {
     /// Whether the Mac and the local network go through the rules, instead of being
     /// unreachable.
     pub network_allow_local: bool,
+    /// Guest ports opened on the Mac in agent and maintenance boots.
+    pub port_forwards: Vec<PortForward>,
     /// Bash script run as root in provision mode, before the first agent boot.
     pub provision_script: String,
 }
@@ -198,6 +211,7 @@ impl Default for Config {
             network_default: NetworkAction::Deny,
             network_rules: Vec::new(),
             network_allow_local: false,
+            port_forwards: Vec::new(),
             provision_script: String::new(),
         }
     }
@@ -478,7 +492,7 @@ const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
 
 const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, disk_gb, command, arguments,
     working_directory, environment, mounts, network_default, network_rules, network_allow_local,
-    provision_script
+    provision_script, port_forwards
     FROM instance_revisions WHERE instance_id = ?1";
 
 fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
@@ -497,6 +511,7 @@ fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
             network_rules: json(row, 10)?,
             network_allow_local: row.get(11)?,
             provision_script: row.get(12)?,
+            port_forwards: json(row, 13)?,
         },
     })
 }
@@ -517,8 +532,8 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
     conn.execute(
         "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
              command, arguments, working_directory, environment, mounts, network_default,
-             network_rules, network_allow_local, provision_script)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             network_rules, network_allow_local, provision_script, port_forwards)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT (instance_id, revision) DO UPDATE SET
              cpus = excluded.cpus, memory_mib = excluded.memory_mib, disk_gb = excluded.disk_gb,
              command = excluded.command, arguments = excluded.arguments,
@@ -526,7 +541,8 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
              mounts = excluded.mounts, network_default = excluded.network_default,
              network_rules = excluded.network_rules,
              network_allow_local = excluded.network_allow_local,
-             provision_script = excluded.provision_script
+             provision_script = excluded.provision_script,
+             port_forwards = excluded.port_forwards
          WHERE booted_at IS NULL",
         params![
             instance_id,
@@ -543,6 +559,7 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
             serde_json::to_string(&config.network_rules)?,
             config.network_allow_local,
             config.provision_script,
+            serde_json::to_string(&config.port_forwards)?,
         ],
     )?;
     Ok(())

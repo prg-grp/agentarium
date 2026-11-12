@@ -27,6 +27,7 @@ CREATE TABLE instance_revisions (
     network_default   TEXT NOT NULL CHECK (network_default IN ('deny', 'allow')),
     network_rules     TEXT NOT NULL CHECK (json_valid(network_rules)), -- [{target, action}]
     network_allow_local INTEGER NOT NULL CHECK (network_allow_local IN (0, 1)), -- the Mac and local network
+    port_forwards     TEXT NOT NULL CHECK (json_valid(port_forwards)), -- [{guest_port, host_port (null: random per boot), all_interfaces}]
     provision_script  TEXT NOT NULL,                -- bash, run as root in provision mode
     PRIMARY KEY (instance_id, revision)
 ) STRICT;

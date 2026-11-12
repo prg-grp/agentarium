@@ -39,6 +39,16 @@ export struct Usage {
     oom-kills: int,
 }
 
+// A forwarded port of the running boot, shown in the terminal's header (src/controller.rs).
+export struct ForwardItem {
+    // "18789 → 51234": the guest port and the Mac's port.
+    label: string,
+    // What a click opens; "" when the Mac couldn't listen.
+    url: string,
+    // Why the Mac doesn't listen, e.g. "in use"; "" while it does.
+    error: string,
+}
+
 export struct InstanceItem {
     id: string,
     name: string,
@@ -59,6 +69,8 @@ export struct InstanceItem {
     has-terminal: bool,
     // Label of the start, stop or restart in progress, shown over the terminal; "" when none.
     transition: string,
+    // The forwarded ports while the VM runs.
+    forwards: [ForwardItem],
 }
 
 // One styled stretch of terminal text, starting at column `col`.
@@ -107,6 +119,12 @@ export struct LayoutRow {
     depth: int,
     source: string,
     shared: bool,
+}
+
+// A forwarded port in the Network settings: "18789 → 8080" or "18789 → random port".
+export struct ForwardRow {
+    label: string,
+    local-network: bool,
 }
 
 export struct RuleRow {

@@ -4,7 +4,7 @@
 
 import { LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { EnvRow, MountRow, LayoutRow, RuleRow } from "types.slint";
+import { EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow } from "types.slint";
 import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 
 export component Link {
@@ -646,19 +646,34 @@ export component FolderTable {
     }
 }
 
-// The default action, access to the Mac and the local network, and the Allowed and
-// Denied lists.
+// The default action, access to the Mac and the local network, the Allowed and Denied
+// lists, and the ports forwarded from the Mac into the VM.
 export component NetworkFields {
     in property <bool> deny;
     in property <bool> allow-local;
     in property <[RuleRow]> allowed;
     in property <[RuleRow]> denied;
+    in property <[ForwardRow]> forwards;
     callback set-deny(deny: bool);
     callback set-allow-local(allow: bool);
     // Returns why the entry was refused, or "" once it is added.
     callback add-rule(text: string, deny: bool) -> string;
     callback toggle-scope(deny: bool, index: int);
     callback remove-rule(deny: bool, index: int);
+    // The VM's port and the Mac's ("" for a random one); returns why it was refused, or ""
+    // once it is added.
+    callback add-forward(guest: string, host: string) -> string;
+    callback toggle-forward(index: int);
+    callback remove-forward(index: int);
+    property <string> forward-error;
+
+    function add-forward-fields() {
+        root.forward-error = root.add-forward(guest-port.text, host-port.text);
+        if root.forward-error == "" {
+            guest-port.text = "";
+            host-port.text = "";
+        }
+    }
 
     VerticalLayout {
         spacing: 24px;
@@ -759,6 +774,135 @@ export component NetworkFields {
                 remove-rule(index) => {
                     root.remove-rule(true, index);
                 }
+            }
+        }
+
+        VerticalLayout {
+            spacing: 10px;
+
+            Text {
+                text: "Forwarded ports";
+                font-size: Theme.font-section;
+                font-weight: Theme.weight-medium;
+                color: Theme.tx;
+            }
+
+            Text {
+                text: "Opens a port of the VM on your Mac, for example an agent's web interface. Applies in agent and maintenance mode.";
+                color: Theme.tx2;
+                wrap: word-wrap;
+            }
+
+            for row[index] in root.forwards: VerticalLayout {
+                spacing: 4px;
+
+                HorizontalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: row.label;
+                        color: Theme.tx;
+                        font-family: Theme.mono;
+                        font-size: Theme.font-mono;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    // Switches between your Mac only and the local network.
+                    Rectangle {
+                        horizontal-stretch: 0;
+                        accessible-role: button;
+                        accessible-label: row.local-network ? "Local network" : "This Mac";
+                        accessible-action-default => {
+                            root.toggle-forward(index);
+                        }
+
+                        HorizontalLayout {
+                            Text {
+                                text: row.local-network ? "Local network" : "This Mac";
+                                color: forward-scope-touch.has-hover ? Theme.tx : Theme.tx2;
+                                font-size: Theme.font-meta;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        forward-scope-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.toggle-forward(index);
+                            }
+                        }
+                    }
+
+                    AppButton {
+                        kind: ButtonKind.ghost;
+                        compact: true;
+                        icon: @image-url("icons/x.svg");
+                        label: "Remove forward " + row.label;
+                        clicked => {
+                            root.remove-forward(index);
+                        }
+                    }
+                }
+
+                if row.local-network: Message {
+                    icon: @image-url("icons/alert-triangle.svg");
+                    color: Theme.warn;
+                    text: "Other devices on your network can reach this port.";
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                guest-port := Field {
+                    width: 180px;
+                    mono: true;
+                    placeholder: "Port in VM";
+                    invalid: root.forward-error != "";
+                    edited => {
+                        root.forward-error = "";
+                    }
+                    accepted => {
+                        root.add-forward-fields();
+                    }
+                }
+
+                Text {
+                    text: "→";
+                    color: Theme.tx3;
+                    vertical-alignment: center;
+                }
+
+                host-port := Field {
+                    width: 180px;
+                    mono: true;
+                    placeholder: "Random";
+                    label: "Port on your Mac, empty for a random one";
+                    invalid: root.forward-error != "";
+                    edited => {
+                        root.forward-error = "";
+                    }
+                    accepted => {
+                        root.add-forward-fields();
+                    }
+                }
+
+                AppButton {
+                    text: "Add";
+                    kind: ButtonKind.neutral;
+                    clicked => {
+                        root.add-forward-fields();
+                    }
+                }
+            }
+
+            if root.forward-error != "": Message {
+                icon: @image-url("icons/alert-circle.svg");
+                color: Theme.bad;
+                text: root.forward-error;
             }
         }
     }
