@@ -26,8 +26,9 @@ Network         Unlisted domains  Denied                              Edit
 ──────────────────────────────────────────────────────────────────────
 Environment     Variables    RUST_LOG, DATABASE_URL                   Edit
 ──────────────────────────────────────────────────────────────────────
-Resources       Processors [2 −+]  Memory (GB) [4 −+]  Disk 64 GB, grows as used
+Resources       Processors [2 −+]  Memory (GB) [4 −+]  Disk (GB) [16 −+]
 Defaults suit…  Your Mac has 12 processors and 36 GB of memory. 412 GB of disk is free.
+                The disk can grow later, but not shrink.
 ──────────────────────────────────────────────────────────────────────
 Start           Create only sets the instance up; start it later from its header.
 ──────────────────────────────────────────────────────────────────────
@@ -40,10 +41,10 @@ Cancel                       [< Back]  [Create]  [▶ Create and start]
 - Writable shares repeat the `warn` direct-write sentence in short form.
 - Harness shows the preset's name, and for provisioning "Script from the <preset> preset", "Template, not filled in yet" (custom agent, unchanged template), or "Custom script".
 - Environment shows variable names only; values are not repeated.
-- **Resources** are only editable here (the "advanced" section from the brief): steppers for processors and memory, plus a `tx3` line with what the Mac has available.
+- **Resources** are only editable here (the "advanced" section from the brief): steppers for processors, memory and disk, plus a `tx3` line with what the Mac has available and that the disk can grow later, but not shrink. Section description: "The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them."
   - Defaults: 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.
-  - Limits: processors up to the Mac's count; memory up to the Mac's memory minus 2 GB.
-  - Disk is read-only: "64 GB, grows as used". Instance disks are copy-on-write clones of the base image and take space only as the guest writes. Resizing is not offered yet.
+  - Limits: processors up to the Mac's count; memory up to the Mac's memory minus 2 GB; disk from 8 to 1024 GB, not capped by the Mac's free space, since it only takes what the guest writes.
+  - Disk: 16 GB by default; the base system takes about 2. Coding agents mostly work in shared folders, so the disk holds the agent, caches and builds. Instance disks are sparse copy-on-write clones of the base image and take space on the Mac only as the guest writes.
 - **Start:** a sentence explaining the two create buttons: "Create only sets the instance up; start it later from its header. You can change its settings before the first start."
 - Footer: two create buttons. "Create" (neutral) creates the instance without starting it. "Create and start" (primary, play icon) also starts it right away, which runs its provisioning script first.
 

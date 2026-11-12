@@ -152,11 +152,16 @@ pub fn mask128(prefix: u8) -> u128 {
     u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0)
 }
 
+/// The smallest disk an instance can have, in GiB; the base system takes about 2.
+pub const DISK_MIN_GB: u32 = 8;
+
 /// An instance's configuration, as saved in one revision.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Config {
     pub cpus: u32,
     pub memory_mib: u32,
+    /// The root disk's size in GiB. The boot extends the disk to it; it never shrinks.
+    pub disk_gb: u32,
     pub command: String,
     pub arguments: Vec<String>,
     pub working_directory: String,
@@ -181,6 +186,9 @@ impl Default for Config {
             // The VM only takes memory from the Mac as the guest uses it.
             cpus: 2,
             memory_mib: 4096,
+            // Room for the agent, caches and builds; the work itself is mostly in shared
+            // folders. The disk takes space on the Mac only as the guest writes to it.
+            disk_gb: 16,
             command: String::new(),
             arguments: Vec::new(),
             // The agent user's ~/workspace, which the preset scripts create and trust.
@@ -468,7 +476,7 @@ const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
     i.provisioned_at IS NOT NULL, i.kernel
     FROM instances i";
 
-const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, command, arguments,
+const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, disk_gb, command, arguments,
     working_directory, environment, mounts, network_default, network_rules, network_allow_local,
     provision_script
     FROM instance_revisions WHERE instance_id = ?1";
@@ -479,15 +487,16 @@ fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
         config: Config {
             cpus: row.get(1)?,
             memory_mib: row.get(2)?,
-            command: row.get(3)?,
-            arguments: json(row, 4)?,
-            working_directory: row.get(5)?,
-            environment: json(row, 6)?,
-            mounts: json(row, 7)?,
-            network_default: row.get(8)?,
-            network_rules: json(row, 9)?,
-            network_allow_local: row.get(10)?,
-            provision_script: row.get(11)?,
+            disk_gb: row.get(3)?,
+            command: row.get(4)?,
+            arguments: json(row, 5)?,
+            working_directory: row.get(6)?,
+            environment: json(row, 7)?,
+            mounts: json(row, 8)?,
+            network_default: row.get(9)?,
+            network_rules: json(row, 10)?,
+            network_allow_local: row.get(11)?,
+            provision_script: row.get(12)?,
         },
     })
 }
@@ -506,12 +515,12 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
 /// Inserts a revision, or updates it if it exists and is still pending.
 fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Config) -> Result<()> {
     conn.execute(
-        "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, command,
-             arguments, working_directory, environment, mounts, network_default, network_rules,
-             network_allow_local, provision_script)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+        "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
+             command, arguments, working_directory, environment, mounts, network_default,
+             network_rules, network_allow_local, provision_script)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
          ON CONFLICT (instance_id, revision) DO UPDATE SET
-             cpus = excluded.cpus, memory_mib = excluded.memory_mib,
+             cpus = excluded.cpus, memory_mib = excluded.memory_mib, disk_gb = excluded.disk_gb,
              command = excluded.command, arguments = excluded.arguments,
              working_directory = excluded.working_directory, environment = excluded.environment,
              mounts = excluded.mounts, network_default = excluded.network_default,
@@ -524,6 +533,7 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
             number,
             config.cpus,
             config.memory_mib,
+            config.disk_gb,
             config.command,
             serde_json::to_string(&config.arguments)?,
             config.working_directory,

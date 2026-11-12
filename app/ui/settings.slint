@@ -18,6 +18,7 @@ export global Settings {
     in-out property <string> script;
     in-out property <int> cpus;
     in-out property <int> memory-gb;
+    in-out property <int> disk-gb;
 
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
@@ -28,6 +29,8 @@ export global Settings {
     in property <[RuleRow]> denied;
     in property <int> max-cpus: 1;
     in property <int> max-memory-gb: 1;
+    // The disk's current size: it can only grow.
+    in property <int> min-disk-gb: 1;
     in property <string> host-line;
 
     in property <string> name-error;
@@ -64,6 +67,7 @@ export global Settings {
     callback remove-rule(deny: bool, index: int);
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
+    callback set-disk(gb: int);
     callback discard();
     // Saves the edits; with restart, also boots the instance in agent mode.
     callback save(restart: bool);
@@ -444,19 +448,24 @@ export component SettingsTab {
 
                     s4 := Group {
                         title: "Resources";
-                        description: "The instance takes memory from your Mac only as it uses it.";
+                        description: "The instance takes memory and disk space from your Mac only as it uses them.";
 
                         ResourceFields {
                             cpus <=> Settings.cpus;
                             memory-gb <=> Settings.memory-gb;
+                            disk-gb <=> Settings.disk-gb;
                             max-cpus: Settings.max-cpus;
                             max-memory-gb: Settings.max-memory-gb;
+                            min-disk-gb: Settings.min-disk-gb;
                             host-line: Settings.host-line;
                             set-cpus(cpus) => {
                                 Settings.set-cpus(cpus);
                             }
                             set-memory(gb) => {
                                 Settings.set-memory(gb);
+                            }
+                            set-disk(gb) => {
+                                Settings.set-disk(gb);
                             }
                         }
                     }

@@ -29,6 +29,8 @@ struct Shown {
     saved: Config,
     /// The newest booted revision's configuration, if the instance was ever booted.
     active: Option<Config>,
+    /// The disk's current size in GiB, at least `DISK_MIN_GB`: disks only grow.
+    min_disk_gb: u32,
     name: String,
     config: Config,
     /// Why the last save failed; cleared by the next edit.
@@ -140,6 +142,10 @@ impl SettingsEditor {
         g.on_set_cpus(move |cpus| s.edit(|e| e.config.cpus = cpus.max(1) as u32));
         let s = this.clone();
         g.on_set_memory(move |gb| s.edit(|e| e.config.memory_mib = gb.max(1) as u32 * 1024));
+        let s = this.clone();
+        g.on_set_disk(move |gb| {
+            s.edit(|e| e.config.disk_gb = (gb.max(0) as u32).max(e.min_disk_gb))
+        });
 
         let s = this.clone();
         g.on_discard(move || {
@@ -171,6 +177,10 @@ impl SettingsEditor {
                     saved_name: instance.name.clone(),
                     provisioned: instance.provisioned,
                     active: self.db.active_revision(id)?.map(|revision| revision.config),
+                    min_disk_gb: (std::fs::metadata(&instance.disk_path)?
+                        .len()
+                        .div_ceil(1 << 30) as u32)
+                        .max(db::DISK_MIN_GB),
                     name: instance.name,
                     config: saved.clone(),
                     saved,
@@ -217,6 +227,8 @@ impl SettingsEditor {
         g.set_working_directory(c.working_directory.as_str().into());
         g.set_cpus(c.cpus as i32);
         g.set_memory_gb((c.memory_mib / 1024) as i32);
+        g.set_min_disk_gb(e.min_disk_gb as i32);
+        g.set_disk_gb(c.disk_gb as i32);
     }
 
     /// Shows the lists, the checks, and whether and how the edits can be saved.
@@ -438,7 +450,9 @@ fn count_changes(old: &Config, new: &Config) -> [i32; 5] {
             + one(old.network_allow_local != new.network_allow_local)
             + list_changes(&old.network_rules, &new.network_rules, rule_key),
         list_changes(&old.environment, &new.environment, |var| var.name.clone()),
-        one(old.cpus != new.cpus) + one(old.memory_mib != new.memory_mib),
+        one(old.cpus != new.cpus)
+            + one(old.memory_mib != new.memory_mib)
+            + one(old.disk_gb != new.disk_gb),
     ]
 }
 

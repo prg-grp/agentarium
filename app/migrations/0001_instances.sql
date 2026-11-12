@@ -18,6 +18,7 @@ CREATE TABLE instance_revisions (
     booted_at         INTEGER,
     cpus              INTEGER NOT NULL CHECK (cpus > 0),
     memory_mib        INTEGER NOT NULL CHECK (memory_mib > 0),
+    disk_gb           INTEGER NOT NULL CHECK (disk_gb > 0), -- GiB; the disk only grows
     command           TEXT NOT NULL,                -- from the preset, unless custom
     arguments         TEXT NOT NULL CHECK (json_valid(arguments)),     -- ["--flag", …]
     working_directory TEXT NOT NULL,

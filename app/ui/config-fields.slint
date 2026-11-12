@@ -715,10 +715,14 @@ export component ResourceFields {
     in-out property <int> cpus;
     in-out property <int> memory-gb;
     in property <int> max-cpus: 1;
+    in-out property <int> disk-gb;
     in property <int> max-memory-gb: 1;
+    // The disk can grow, but not shrink below this.
+    in property <int> min-disk-gb: 1;
     in property <string> host-line;
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
+    callback set-disk(gb: int);
 
     VerticalLayout {
         spacing: 14px;
@@ -769,20 +773,24 @@ export component ResourceFields {
                 spacing: 6px;
 
                 Label {
-                    text: "Disk";
+                    text: "Disk (GB)";
                 }
 
-                Text {
-                    height: Theme.control-height;
-                    text: "64 GB, grows as used";
-                    color: Theme.tx;
-                    vertical-alignment: center;
+                SpinBox {
+                    width: 120px;
+                    minimum: root.min-disk-gb;
+                    maximum: 1024;
+                    value <=> root.disk-gb;
+                    accessible-label: "Disk in GB";
+                    edited(value) => {
+                        root.set-disk(value);
+                    }
                 }
             }
         }
 
         Text {
-            text: root.host-line;
+            text: root.host-line + " The disk can grow later, but not shrink.";
             color: Theme.tx3;
             font-size: Theme.font-small;
             wrap: word-wrap;

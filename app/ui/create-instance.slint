@@ -20,6 +20,7 @@ export global Creation {
     in-out property <string> working-directory;
     in-out property <int> cpus;
     in-out property <int> memory-gb;
+    in-out property <int> disk-gb;
 
     in property <[PresetRow]> presets;
     // The selected preset, as an index into presets. Only the custom agent's script and
@@ -37,6 +38,7 @@ export global Creation {
     in property <[RuleRow]> denied;
     in property <int> max-cpus: 1;
     in property <int> max-memory-gb: 1;
+    in property <int> min-disk-gb: 1;
     in property <string> host-line;
 
     // Validation
@@ -83,6 +85,7 @@ export global Creation {
     callback remove-rule(deny: bool, index: int);
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
+    callback set-disk(gb: int);
 }
 
 // Two-column section: title and description on the left, fields on the right.
@@ -793,19 +796,24 @@ export component CreateInstance {
 
                     Section {
                         title: "Resources";
-                        description: "The defaults suit most agents. The instance takes memory from your Mac only as it uses it.";
+                        description: "The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them.";
 
                         ResourceFields {
                             cpus <=> Creation.cpus;
                             memory-gb <=> Creation.memory-gb;
+                            disk-gb <=> Creation.disk-gb;
                             max-cpus: Creation.max-cpus;
                             max-memory-gb: Creation.max-memory-gb;
+                            min-disk-gb: Creation.min-disk-gb;
                             host-line: Creation.host-line;
                             set-cpus(cpus) => {
                                 Creation.set-cpus(cpus);
                             }
                             set-memory(gb) => {
                                 Creation.set-memory(gb);
+                            }
+                            set-disk(gb) => {
+                                Creation.set-disk(gb);
                             }
                         }
                     }

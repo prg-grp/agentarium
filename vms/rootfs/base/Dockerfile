@@ -20,6 +20,12 @@ RUN systemctl set-default multi-user.target && \
     e2scrub_reap.service \
     systemd-firstboot.service
 
+# The base image is just bigger than its contents; the app extends each instance's disk to
+# its configured size. systemd-growfs-root grows the mounted root to fill the disk early on
+# every boot, before the supervisor starts, and does nothing once it fills it. The kernel
+# mounts root itself (no initrd); this entry only adds the growing and keeps the options.
+RUN printf '/dev/vda / ext4 rw,noinit_itable,x-systemd.growfs 0 1\n' > /etc/fstab
+
 # The guest has two virtio consoles. hvc0 is the kernel console: kernel, systemd and the
 # supervisor's logs, shown read-only in the app's Logs tab. hvc1 is the session, shown
 # in the app's Terminal tab. No login runs on either, or anywhere: the supervisor alone

@@ -186,6 +186,10 @@ impl Creator {
         g.on_set_cpus(move |cpus| c.edit(|d| d.config.cpus = cpus.max(1) as u32));
         let c = this.clone();
         g.on_set_memory(move |gb| c.edit(|d| d.config.memory_mib = gb.max(1) as u32 * 1024));
+        let c = this.clone();
+        g.on_set_disk(move |gb| {
+            c.edit(|d| d.config.disk_gb = (gb.max(0) as u32).max(db::DISK_MIN_GB))
+        });
 
         this
     }
@@ -230,6 +234,7 @@ impl Creator {
             g.set_create_error("".into());
             g.set_max_cpus(host.cpus as i32);
             g.set_max_memory_gb(host.max_memory_gb() as i32);
+            g.set_min_disk_gb(db::DISK_MIN_GB as i32);
             g.set_host_line(host.line().into());
             self.show_fields();
         }
@@ -384,6 +389,7 @@ impl Creator {
         g.set_working_directory(c.working_directory.as_str().into());
         g.set_cpus(c.cpus as i32);
         g.set_memory_gb((c.memory_mib / 1024) as i32);
+        g.set_disk_gb(c.disk_gb as i32);
     }
 
     /// Shows the draft's lists, checks and read-back, and keeps its sidebar row in sync.

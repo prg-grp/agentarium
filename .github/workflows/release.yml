@@ -156,8 +156,8 @@ jobs:
         name: Build kernel and base rootfs
         run: make guest
 
-      # The rootfs is a sparse 64G image with about 1-2G of data; zstd turns the holes into
-      # almost nothing. The app checks the compressed files against these hashes.
+      # The rootfs is a sparse image just bigger than its 1-2G of data; zstd turns the holes
+      # into almost nothing. The app checks the compressed files against these hashes.
       - if: steps.cache.outputs.cache-hit != 'true'
         name: Package guest assets
         run: |

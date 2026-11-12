@@ -674,6 +674,13 @@ impl VmControl {
             }
             BootMode::Maintenance | BootMode::Provision => Policy::open(allow_local),
         };
+        // A new or grown disk size: the file is extended (sparse) and the guest grows the
+        // filesystem to fill it on boot. Disks never shrink.
+        let disk = File::options().write(true).open(&instance.disk_path)?;
+        let disk_bytes = u64::from(config.disk_gb) << 30;
+        if disk.metadata()?.len() < disk_bytes {
+            disk.set_len(disk_bytes)?;
+        }
         let mut spec = VmSpec {
             cpus: config.cpus as usize,
             memory_mib: config.memory_mib.into(),
