@@ -26,8 +26,9 @@ export global TerminalSession {
     // Raw key event; Rust maps it to bytes. Returns whether the key was used.
     callback key(text: string, control: bool, alt: bool, meta: bool, shift: bool) -> bool;
     callback resized(cols: int, rows: int);
-    // Positive values scroll back into older output.
-    callback scrolled(lines: int);
+    // Mouse wheel; positive values scroll back into older output. The pointer position is in
+    // cell units, for apps that take wheel events themselves.
+    callback scrolled(lines: int, col: float, row: float);
     // Scrolls to an absolute offset; 0 is the latest output.
     callback scroll-to(offset: int);
     callback jump-to-latest();
@@ -291,7 +292,7 @@ export component TerminalView {
                         if grid.scroll-rest >= grid.cell-height || grid.scroll-rest <= -grid.cell-height {
                             let lines = grid.scroll-rest > 0 ? floor(grid.scroll-rest / grid.cell-height) : -floor(-grid.scroll-rest / grid.cell-height);
                             grid.scroll-rest -= lines * grid.cell-height;
-                            TerminalSession.scrolled(lines);
+                            TerminalSession.scrolled(lines, self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);
                             // Keep the selection end under the pointer while dragging.
                             if self.pressed {
                                 TerminalSession.select-update(self.mouse-x / grid.cell-width, self.mouse-y / grid.cell-height);

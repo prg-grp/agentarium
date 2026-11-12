@@ -3,8 +3,9 @@
 //!
 //! `alacritty_terminal` reads a console, parses its output on its own I/O
 //! thread, and answers terminal queries. This module forwards input, resizes,
-//! and scrolling to it, and sends the visible screen to the UI as rows of
-//! styled runs (`TermLine`), replacing only rows that changed.
+//! and scrolling to it (or the wheel to full-screen apps), and sends the visible
+//! screen to the UI as rows of styled runs (`TermLine`), replacing only rows that
+//! changed.
 
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
@@ -434,9 +435,57 @@ impl Terminal {
         self.redraw();
     }
 
-    /// Scrolls into older output (positive) or back towards the latest (negative).
-    pub fn scroll(&self, lines: i32) {
-        self.scroll_display(Scroll::Delta(lines));
+    /// Handles the mouse wheel at a position in cell units: scrolls into older output
+    /// (positive) or back towards the latest (negative). The alternate screen has no
+    /// scrollback, so there the wheel goes to the app, as in other terminals: as wheel
+    /// reports if it asked for mouse events (Claude Code, say), otherwise as arrow keys.
+    pub fn scroll(&self, lines: i32, col: f32, row: f32) {
+        let Some(mode) = self.with_term(|term| *term.mode()) else {
+            return;
+        };
+        let running = !self.read_only
+            && self
+                .session
+                .borrow()
+                .as_ref()
+                .is_some_and(|session| session.link.active.load(Ordering::Acquire));
+        let up = lines > 0;
+        let bytes = if running && mode.intersects(TermMode::MOUSE_MODE) {
+            let button = if up { 64 } else { 65 };
+            let (screen_lines, cols) = self.size.get();
+            let col = (col.max(0.0) as usize).min(cols - 1) + 1;
+            let row = (row.max(0.0) as usize).min(screen_lines - 1) + 1;
+            if mode.contains(TermMode::SGR_MOUSE) {
+                format!("\x1b[<{button};{col};{row}M").into_bytes()
+            } else if col <= 223 && row <= 223 {
+                // The legacy encoding can't express positions beyond 223.
+                vec![
+                    0x1b,
+                    b'[',
+                    b'M',
+                    32 + button,
+                    32 + col as u8,
+                    32 + row as u8,
+                ]
+            } else {
+                return;
+            }
+        } else if running && mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+            let prefix = if mode.contains(TermMode::APP_CURSOR) {
+                b'O'
+            } else {
+                b'['
+            };
+            vec![0x1b, prefix, if up { b'A' } else { b'B' }]
+        } else {
+            self.scroll_display(Scroll::Delta(lines));
+            return;
+        };
+        if let Some(session) = self.session.borrow().as_ref() {
+            session
+                .link
+                .write(bytes.repeat(lines.unsigned_abs() as usize));
+        }
     }
 
     /// Scrolls to `offset` lines back from the latest output, clamped to the history.

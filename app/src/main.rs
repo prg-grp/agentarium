@@ -178,9 +178,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let c = control.clone();
     session.on_resized(move |cols, rows| c.resize(cols, rows));
     let c = control.clone();
-    session.on_scrolled(move |lines| {
+    session.on_scrolled(move |lines, col, row| {
         if let Some(t) = c.shown_terminal() {
-            t.scroll(lines);
+            t.scroll(lines, col, row);
         }
     });
     let c = control.clone();
