@@ -25,7 +25,8 @@ export global Deletion {
 }
 
 // One item of the effect list: an icon, optional monospace paths, and a sentence.
-component Effect {
+// Also lists the needed files in the guest download dialog.
+export component Effect {
     in property <image> icon;
     in property <color> icon-color;
     in property <[string]> paths;

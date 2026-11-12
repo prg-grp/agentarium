@@ -6,7 +6,6 @@ import { Theme } from "theme.slint";
 import { PresetRow, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Link, Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
-import { GuestImage, GuestState } from "preferences.slint";
 
 // The draft being created. Rust (src/create.rs) owns it and checks it after every edit.
 export global Creation {
@@ -848,13 +847,10 @@ export component CreateInstance {
                 }
             }
 
-            // New instances are clones of the guest image, so they wait for its download.
             Text {
                 horizontal-stretch: 1;
-                text: Creation.create-error != "" ? Creation.create-error
-                    : Creation.step == 4 && GuestImage.state != GuestState.ready ? "Creating works once the guest image has downloaded."
-                    : "";
-                color: Creation.create-error != "" ? Theme.bad : Theme.tx3;
+                text: Creation.create-error;
+                color: Theme.bad;
                 font-size: Theme.font-small;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -880,7 +876,7 @@ export component CreateInstance {
 
             if Creation.step == 4: AppButton {
                 kind: ButtonKind.neutral;
-                enabled: Creation.can-create && GuestImage.state == GuestState.ready;
+                enabled: Creation.can-create;
                 text: "Create";
                 clicked => {
                     Creation.create(false);
@@ -889,7 +885,7 @@ export component CreateInstance {
 
             if Creation.step == 4: AppButton {
                 kind: ButtonKind.primary;
-                enabled: Creation.can-create && Creation.can-start && GuestImage.state == GuestState.ready;
+                enabled: Creation.can-create && Creation.can-start;
                 text: "Create and start";
                 icon: @image-url("icons/player-play.svg");
                 clicked => {

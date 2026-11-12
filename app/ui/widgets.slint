@@ -156,3 +156,26 @@ export component SegmentedControl {
         }
     }
 }
+
+// A thin progress track.
+export component ProgressBar {
+    in property <float> progress;
+    in property <string> label;
+
+    height: 6px;
+    accessible-role: progress-indicator;
+    accessible-label: label;
+    accessible-value: round(progress * 100) + "%";
+
+    Rectangle {
+        border-radius: 3px;
+        clip: true;
+        background: Theme.raise;
+
+        Rectangle {
+            x: 0;
+            width: parent.width * clamp(root.progress, 0, 1);
+            background: Theme.tx2;
+        }
+    }
+}

@@ -2,26 +2,10 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
+import { AppButton, ButtonKind, SegmentedControl, ProgressBar } from "widgets.slint";
 import { Message } from "config-fields.slint";
 import { Group } from "settings.slint";
-
-export enum GuestState { ready, downloading, failed }
-
-// The guest kernel and base root filesystem that new instances start from.
-// Rust (src/guest.rs) owns it.
-export global GuestImage {
-    in property <GuestState> state: GuestState.ready;
-    // "Downloading kernel", then "Downloading root filesystem".
-    in property <string> step;
-    // "230 of 640 MB"
-    in property <string> amount;
-    in property <float> progress;
-    in property <string> error;
-    // Where the image comes from, e.g. "From release v1.0.0".
-    in property <string> source;
-    callback retry();
-}
+import { GuestImage } from "guest-download.slint";
 
 export enum UpdateState { unavailable, checking, up-to-date, downloading, ready, failed }
 
@@ -40,81 +24,6 @@ export global Updates {
     callback check();
     // Shuts the running instances down, then installs the update and relaunches.
     callback restart();
-}
-
-// A thin progress track.
-component ProgressBar {
-    in property <float> progress;
-    in property <string> label;
-
-    height: 6px;
-    accessible-role: progress-indicator;
-    accessible-label: label;
-    accessible-value: round(progress * 100) + "%";
-
-    Rectangle {
-        border-radius: 3px;
-        clip: true;
-        background: Theme.raise;
-
-        Rectangle {
-            x: 0;
-            width: parent.width * clamp(root.progress, 0, 1);
-            background: Theme.tx2;
-        }
-    }
-}
-
-// The guest image's download: its step, progress and size, or why it failed with Retry.
-// Shown in the sidebar until the image is ready, and in Preferences.
-export component GuestDownload {
-    VerticalLayout {
-        spacing: 8px;
-
-        if GuestImage.state == GuestState.downloading: HorizontalLayout {
-            spacing: 8px;
-
-            Text {
-                text: GuestImage.step;
-                color: Theme.tx;
-                font-size: Theme.font-small;
-                overflow: elide;
-                horizontal-stretch: 1;
-            }
-
-            Text {
-                text: GuestImage.amount;
-                color: Theme.tx3;
-                font-size: Theme.font-meta;
-                vertical-alignment: center;
-                horizontal-stretch: 0;
-            }
-        }
-
-        if GuestImage.state == GuestState.downloading: ProgressBar {
-            progress: GuestImage.progress;
-            label: GuestImage.step;
-        }
-
-        if GuestImage.state == GuestState.failed: Message {
-            icon: @image-url("icons/alert-triangle.svg");
-            text: GuestImage.error;
-            color: Theme.bad;
-        }
-
-        if GuestImage.state == GuestState.failed: HorizontalLayout {
-            alignment: start;
-            AppButton {
-                kind: ButtonKind.neutral;
-                compact: true;
-                text: "Retry";
-                icon: @image-url("icons/refresh.svg");
-                clicked => {
-                    GuestImage.retry();
-                }
-            }
-        }
-    }
 }
 
 // A label on the left, its value or control on the right.
@@ -306,7 +215,7 @@ export component PreferencesView {
                         }
                     }
 
-                    if GuestImage.state == GuestState.ready: Row {
+                    Row {
                         label: "Status";
                         Text {
                             text: "Ready";
@@ -315,8 +224,6 @@ export component PreferencesView {
                             vertical-alignment: center;
                         }
                     }
-
-                    if GuestImage.state != GuestState.ready: GuestDownload { }
                 }
             }
         }

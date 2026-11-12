@@ -227,7 +227,8 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 | Maintenance session | [design/maintenance-session.md](design/maintenance-session.md) | Persistent mode indication, root shell |
 | Stopped instance with history | [design/stopped-history.md](design/stopped-history.md) | Start actions, run picker, retention boundary |
 | Settings with pending changes | [design/settings-pending.md](design/settings-pending.md) | Restart-required bar, per-rule change marks |
-| Preferences | [design/preferences.md](design/preferences.md) | Update channel and status, restart to update, guest image download |
+| Preferences | [design/preferences.md](design/preferences.md) | Update channel and status, restart to update, guest image source |
+| Guest image download | [design/guest-download.md](design/guest-download.md) | Blocking dialog: why the files are needed, start download, quit |
 
 ## Shared compositions (flagged for the engineer)
 
@@ -247,10 +248,9 @@ These patterns appear on more than one screen. They are flagged here, per [AGENT
 | Configuration fields (launch, environment, folder table, network lists, resources) | Creation steps, settings; extracted to `app/ui/config-fields.slint` |
 | Domain rule row (domain, scope, change mark, remove) | Create network, settings |
 | Step indicator | All five creation steps |
-| Confirmation dialog layout (title, intro, icon list, actions) | Maintenance and delete confirmations |
+| Confirmation dialog layout (title, intro, icon list, actions) | Maintenance and delete confirmations, guest image download; the icon list item `Effect` is exported from `app/ui/delete-dialog.slint` |
 | Notice bar (icon, sentence, action) | Degraded monitoring, maintenance banner, pending changes |
 | Settings group (title, description, fields) | Settings tab, Preferences; exported from `app/ui/settings.slint` |
-| Guest image download (step, size, progress, retry) | Sidebar panel, Preferences; `GuestDownload` in `app/ui/preferences.slint` |
 
 ## Open design decisions
 

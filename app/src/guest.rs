@@ -1,9 +1,11 @@
 //! The guest kernel and the base root filesystem that instance disks are cloned from.
 //!
 //! Release builds carry their GitHub release's tag and the SHA-256 of the compressed guest
-//! assets attached to it (set by .github/workflows/release.yml). At launch, whatever is
-//! missing is downloaded into Application Support, on the same APFS volume as the instance
-//! disks, so `vm::create_disk` can clone the base. A disk's kernel modules match only the
+//! assets attached to it (set by .github/workflows/release.yml). When some of them are
+//! missing at launch (first launch, or an update that ships a new guest image), a blocking
+//! dialog asks for the download; once the user starts it, the files go into Application
+//! Support, on the same APFS volume as the instance disks, so `vm::create_disk` can clone
+//! the base. A disk's kernel modules match only the
 //! kernel it was cloned for, so each instance records its kernel, and a kernel stays as
 //! long as an instance uses it. Development builds use what `make guest` built in target/.
 
@@ -101,6 +103,27 @@ struct Download {
     to: PathBuf,
 }
 
+/// The files of the release that aren't in `dir` yet.
+fn missing(release: Release, dir: &Path) -> Vec<Download> {
+    [
+        Download {
+            step: "Downloading kernel",
+            file: "agentarium-kernel.zst",
+            sha256: release.kernel,
+            to: dir.join(kernel_name(release.kernel)),
+        },
+        Download {
+            step: "Downloading root filesystem",
+            file: "agentarium-rootfs.ext4.zst",
+            sha256: release.rootfs,
+            to: dir.join(rootfs_name(release.rootfs)),
+        },
+    ]
+    .into_iter()
+    .filter(|download| !download.to.exists())
+    .collect()
+}
+
 enum Event {
     /// Bytes received of the current file, and its size if known.
     Progress {
@@ -115,7 +138,8 @@ thread_local! {
     static ASSETS: RefCell<Weak<GuestAssets>> = const { RefCell::new(Weak::new()) };
 }
 
-/// Keeps this build's guest assets present and shows the download in `GuestImage`.
+/// Keeps this build's guest assets present: asks for the download of missing ones and
+/// shows it in `GuestImage`.
 pub struct GuestAssets {
     ui: slint::Weak<AppWindow>,
     db: Rc<Db>,
@@ -136,13 +160,37 @@ impl GuestAssets {
             None => "Built locally with make guest".into(),
         });
         let weak = Rc::downgrade(&assets);
-        g.on_retry(move || {
+        g.on_download(move || {
             if let Some(assets) = weak.upgrade() {
                 assets.start();
             }
         });
-        assets.start();
+        assets.check();
         assets
+    }
+
+    /// Asks for the download when some of this release's guest assets are missing. Instances
+    /// in the database mean an earlier version ran, so the dialog speaks of an update.
+    fn check(&self) {
+        let Some(release) = release() else {
+            return self.show(GuestState::Ready, "", "");
+        };
+        let dir = match guest_dir() {
+            Ok(dir) => dir,
+            Err(error) => return self.show(GuestState::Failed, "", &error.to_string()),
+        };
+        if missing(release, &dir).is_empty() {
+            self.show(GuestState::Ready, "", "");
+            return self.remove_unused();
+        }
+        if let Some(ui) = self.ui.upgrade() {
+            let update = self
+                .db
+                .instances()
+                .is_ok_and(|instances| !instances.is_empty());
+            ui.global::<GuestImage>().set_update(update);
+        }
+        self.show(GuestState::Missing, "", "");
     }
 
     /// Downloads whatever of this release's guest assets is missing, on a thread of its own.
@@ -158,23 +206,7 @@ impl GuestAssets {
             Ok(dir) => dir,
             Err(error) => return self.show(GuestState::Failed, "", &error.to_string()),
         };
-        let downloads: Vec<Download> = [
-            Download {
-                step: "Downloading kernel",
-                file: "agentarium-kernel.zst",
-                sha256: release.kernel,
-                to: dir.join(kernel_name(release.kernel)),
-            },
-            Download {
-                step: "Downloading root filesystem",
-                file: "agentarium-rootfs.ext4.zst",
-                sha256: release.rootfs,
-                to: dir.join(rootfs_name(release.rootfs)),
-            },
-        ]
-        .into_iter()
-        .filter(|download| !download.to.exists())
-        .collect();
+        let downloads = missing(release, &dir);
         if downloads.is_empty() {
             self.show(GuestState::Ready, "", "");
             return self.remove_unused();

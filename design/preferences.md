@@ -39,7 +39,6 @@ App-wide settings: updates of Agentarium itself and the guest image. Frame: [app
 
 - The Preferences row (48 px, `line` top border) opens this view. While the view shows, the row has the `raise` background and `tx` / 500 text, and no instance item shows as selected.
 - When an update is ready, the row shows "Update ready" in `acc` 12 px at its right end.
-- Until the guest image is ready, a panel sits above the Preferences row, with a `line` top border and 14 px vertical padding: the step ("Downloading kernel", then "Downloading root filesystem") in `tx` 13 px with the size ("230 of 640 MB") in `tx3` 12 px at the right, and the progress track below. After a failure: the reason with an alert icon in `bad`, and "Retry" (neutral, compact, refresh icon). The panel disappears once both files are verified.
 
 ## Copy
 
@@ -48,11 +47,10 @@ App-wide settings: updates of Agentarium itself and the guest image. Frame: [app
 - Status: "Checking for updates…", "Agentarium is up to date.", "Downloading version X · 42%", "Version X is ready to install.", "Couldn't check for updates: …", "Couldn't download the update: …", "Updates work only in installed builds.", "Shutting instances down to restart…"
 - Guest image description: "The Linux kernel and root filesystem that new instances start from. Existing instances keep the one they were created with."
 - Guest source: "From release vX.Y.Z" or "Built locally with make guest".
-- Creation footer while the image downloads: "Creating works once the guest image has downloaded."
 
 ## Behavior
 
 - The app checks at launch and every 4 hours. An update is downloaded right away (as a delta when possible); nothing installs until the user restarts. An update that was downloaded but not installed is applied at the next launch.
 - "Restart to update" stops every running instance gracefully, like quitting, then installs and relaunches.
 - Switching the channel saves it and checks again; an update found for the other channel is dropped. Dev builds also receive stable releases once those are newer. Switching to Stable never downgrades: the install stays on its version until a newer stable release exists.
-- New instances can't be created until the guest image is ready; "Create" and "Create and start" stay disabled on the Review step.
+- Until the guest image is ready, [guest-download.md](guest-download.md) blocks the whole app, so this view only ever shows the image as ready.

@@ -10,7 +10,8 @@ import { Activity, ActivityTab } from "activity.slint";
 import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
-import { GuestImage, GuestState, Updates, UpdateState, GuestDownload, PreferencesView } from "preferences.slint";
+import { Updates, UpdateState, PreferencesView } from "preferences.slint";
+import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 
 export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState }
 
@@ -229,24 +230,6 @@ export component AppWindow inherits Window {
 
                 Rectangle {
                     vertical-stretch: 1;
-                }
-
-                // The guest image's download, until new instances can be created.
-                if GuestImage.state != GuestState.ready: Rectangle {
-                    Rectangle {
-                        y: 0;
-                        height: 1px;
-                        background: Theme.line;
-                    }
-
-                    VerticalLayout {
-                        padding-left: 22px;
-                        padding-right: 18px;
-                        padding-top: 14px;
-                        padding-bottom: 14px;
-
-                        GuestDownload { }
-                    }
                 }
 
                 Rectangle {
@@ -552,5 +535,14 @@ export component AppWindow inherits Window {
     if Deletion.open: DeleteDialog {
         width: parent.width;
         height: parent.height;
+    }
+
+    // Blocks the whole app until this build's guest image is downloaded.
+    if GuestImage.state != GuestState.ready: GuestDownloadDialog {
+        width: parent.width;
+        height: parent.height;
+        drag-window => {
+            root.drag-window();
+        }
     }
 }

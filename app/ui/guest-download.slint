@@ -1,0 +1,198 @@
+// Guest image download, see design/guest-download.md.
+// Blocks the whole window until this build's kernel and root filesystem are present.
+
+import { Theme } from "theme.slint";
+import { AppButton, ButtonKind, ProgressBar } from "widgets.slint";
+import { Message } from "config-fields.slint";
+import { Effect } from "delete-dialog.slint";
+
+export enum GuestState { ready, missing, downloading, failed }
+
+// The guest kernel and base root filesystem that new instances start from.
+// Rust (src/guest.rs) owns it.
+export global GuestImage {
+    in property <GuestState> state: GuestState.ready;
+    // An earlier version ran already: the files came with an update.
+    in property <bool> update;
+    // "Downloading kernel", then "Downloading root filesystem".
+    in property <string> step;
+    // "230 of 640 MB"
+    in property <string> amount;
+    in property <float> progress;
+    in property <string> error;
+    // Where the image comes from, e.g. "From release v1.0.0".
+    in property <string> source;
+    // Starts the download, or starts it again after a failure.
+    callback download();
+    callback quit();
+}
+
+export component GuestDownloadDialog {
+    callback drag-window();
+
+    property <string> title: GuestImage.update ? "This update needs new system files" : "Agentarium needs two files to get started";
+
+    init => {
+        keys.focus();
+    }
+
+    Rectangle {
+        background: #000000.with-alpha(0.45);
+    }
+
+    // Keeps clicks from reaching the window below.
+    TouchArea { }
+
+    // The window stays movable by its top edge.
+    TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 28px;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.drag-window();
+            }
+        }
+    }
+
+    // The dialog can't be dismissed: the app is unusable without the files.
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 520px;
+        height: content.preferred-height;
+        background: Theme.panel;
+        border-radius: Theme.radius-window;
+        border-width: 1px;
+        border-color: Theme.line2;
+        accessible-role: groupbox;
+        accessible-label: root.title;
+
+        content := VerticalLayout {
+            padding: 24px;
+            spacing: 6px;
+
+            Text {
+                text: root.title;
+                color: Theme.tx;
+                font-size: Theme.font-dialog;
+                font-weight: Theme.weight-medium;
+                wrap: word-wrap;
+            }
+
+            Text {
+                text: GuestImage.update
+                    ? "This version of Agentarium comes with an improved virtual computer for new instances. Your existing instances and their settings stay as they are."
+                    : "Agentarium runs every agent in its own small virtual computer, kept apart from your Mac. To build these computers, it needs the two files below. They download once and stay on your Mac.";
+                color: Theme.tx2;
+                wrap: word-wrap;
+            }
+
+            VerticalLayout {
+                padding-top: 12px;
+
+                Text {
+                    text: "Needed";
+                    color: Theme.tx3;
+                    font-size: Theme.font-meta;
+                }
+
+                Effect {
+                    icon: @image-url("icons/server-2.svg");
+                    icon-color: Theme.tx2;
+                    text: "Linux kernel: the core of the operating system that starts each virtual computer.";
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+
+                Effect {
+                    icon: @image-url("icons/box.svg");
+                    icon-color: Theme.tx2;
+                    text: "Root filesystem: the base system that every new instance starts from, like a fresh install.";
+                }
+            }
+
+            if GuestImage.state == GuestState.missing: Text {
+                text: "The download is a few hundred megabytes and can take a few minutes. Agentarium can't be used until it's finished.";
+                color: Theme.tx3;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
+
+            if GuestImage.state == GuestState.downloading: VerticalLayout {
+                padding-top: 4px;
+                spacing: 8px;
+
+                HorizontalLayout {
+                    spacing: 8px;
+
+                    Text {
+                        text: GuestImage.step;
+                        color: Theme.tx;
+                        font-size: Theme.font-small;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+
+                    Text {
+                        text: GuestImage.amount;
+                        color: Theme.tx3;
+                        font-size: Theme.font-meta;
+                        vertical-alignment: center;
+                        horizontal-stretch: 0;
+                    }
+                }
+
+                ProgressBar {
+                    progress: GuestImage.progress;
+                    label: GuestImage.step;
+                }
+            }
+
+            if GuestImage.state == GuestState.failed: Message {
+                icon: @image-url("icons/alert-triangle.svg");
+                text: GuestImage.error;
+                color: Theme.bad;
+            }
+
+            HorizontalLayout {
+                padding-top: 14px;
+                spacing: 10px;
+                alignment: end;
+
+                AppButton {
+                    kind: ButtonKind.ghost;
+                    text: "Quit";
+                    clicked => {
+                        GuestImage.quit();
+                    }
+                }
+
+                AppButton {
+                    kind: ButtonKind.primary;
+                    text: GuestImage.state == GuestState.downloading ? "Downloading…"
+                        : GuestImage.state == GuestState.failed ? "Try again"
+                        : "Start download";
+                    icon: GuestImage.state == GuestState.failed ? @image-url("icons/refresh.svg") : @image-url("icons/download.svg");
+                    enabled: GuestImage.state != GuestState.downloading;
+                    clicked => {
+                        GuestImage.download();
+                    }
+                }
+            }
+        }
+    }
+}

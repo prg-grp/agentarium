@@ -68,6 +68,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         settings::SettingsEditor::new(&ui, db.clone(), instances.clone(), control.clone());
     let activity = activity::ActivityView::new(&ui, db.clone(), control.clone());
     let _guest = guest::GuestAssets::new(&ui, db.clone());
+    let c = control.clone();
+    ui.global::<GuestImage>().on_quit(move || c.quit());
     let updater = update::Updater::new(&ui, db.clone(), control.clone());
 
     // Closing the window or quitting shuts all VMs down gracefully first.
