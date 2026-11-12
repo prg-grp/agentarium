@@ -15,6 +15,9 @@ OBSERVER := $(abspath target/$(GUEST_TARGET)/release/agentarium-observer)
 GUEST_CRATES := -p guest_supervisor -p guest_observer
 # Kernel struct bindings for the eBPF programs, generated from the kernel's BTF (needs Docker).
 VMLINUX := guest_observer_ebpf/src/vmlinux.rs
+# The third-party licenses the app shows in Preferences, generated from about.hbs.
+# Needs cargo-about once: cargo install cargo-about
+LICENSES := app/src/licenses.rs
 HOST_ONLY := --exclude guest_supervisor --exclude guest_observer --exclude guest_observer_ebpf
 # The app's Application Support folder (database, instance disks); named by db::APP_ID.
 APP_DATA := $(HOME)/Library/Application Support/com.programming-group.agentarium
@@ -29,16 +32,19 @@ $(KERNEL): scripts/build-guest.sh
 $(VMLINUX): $(KERNEL) scripts/gen-vmlinux.sh
 	scripts/gen-vmlinux.sh
 
+$(LICENSES): Cargo.lock about.hbs about.toml
+	cargo about generate --output-file $@ about.hbs
+
 # Cargo and the rootfs makefile decide themselves whether the guest binaries and the image
 # are stale. Needs the target once: rustup target add aarch64-unknown-linux-musl
 rootfs: $(VMLINUX)
 	cargo build --release $(GUEST_CRATES) --target $(GUEST_TARGET)
 	$(MAKE) -C vms/rootfs SUPERVISOR=$(SUPERVISOR) OBSERVER=$(OBSERVER)
 
-run: guest
+run: guest $(LICENSES)
 	AGENT_TOOLBOX_BASE_ROOTFS=$(BASE_ROOTFS) cargo run -p $(APP)
 
-check: $(VMLINUX)
+check: $(VMLINUX) $(LICENSES)
 	cargo fmt --all --check
 	cargo check --workspace $(HOST_ONLY)
 	cargo check $(GUEST_CRATES) --target $(GUEST_TARGET)

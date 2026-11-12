@@ -12,8 +12,9 @@ import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
 import { Updates, UpdateState, PreferencesView } from "preferences.slint";
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
+import { LicensesWindow, LicenseGroup, LicensedCrate } from "licenses.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState }
+export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, LicensesWindow, LicenseGroup, LicensedCrate }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
@@ -33,6 +34,8 @@ export component AppWindow inherits Window {
     callback tab-changed(int);
     // The instance's logs folder should open in Finder.
     callback open-logs(string);
+    // The third-party licenses window should open.
+    callback open-licenses();
     callback drag-window();
 
     property <InstanceItem> current: instances[selected-index];
@@ -297,6 +300,9 @@ export component AppWindow inherits Window {
             if show-preferences: PreferencesView {
                 width: parent.width;
                 height: parent.height;
+                open-licenses => {
+                    root.open-licenses();
+                }
             }
 
             if !show-preferences && show-creation: CreateInstance {

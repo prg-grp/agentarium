@@ -1,2 +1,3 @@
 /target
 /guest_observer_ebpf/src/vmlinux.rs
+/app/src/licenses.rs

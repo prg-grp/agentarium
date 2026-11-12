@@ -1,4 +1,4 @@
-// Preferences: app updates and the guest image. See design/preferences.md.
+// Preferences: app updates, the guest image and the licenses. See design/preferences.md.
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -46,6 +46,8 @@ component Row {
 }
 
 export component PreferencesView {
+    callback open-licenses();
+
     VerticalLayout {
         HorizontalLayout {
             padding-left: 28px;
@@ -222,6 +224,34 @@ export component PreferencesView {
                             color: Theme.tx2;
                             font-size: Theme.font-small;
                             vertical-alignment: center;
+                        }
+                    }
+                }
+
+                Group {
+                    title: "About";
+                    description: "Agentarium is free software under the GNU Affero General Public License v3.0 or later. It's built on open-source crates, each under its own license.";
+
+                    Row {
+                        label: "License";
+                        Text {
+                            text: "AGPL-3.0-or-later";
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            color: Theme.tx;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    HorizontalLayout {
+                        alignment: start;
+
+                        AppButton {
+                            kind: ButtonKind.neutral;
+                            text: "Third-party licenses";
+                            clicked => {
+                                root.open-licenses();
+                            }
                         }
                     }
                 }

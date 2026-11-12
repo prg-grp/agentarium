@@ -221,6 +221,12 @@ jobs:
           name: notes
           path: dist
 
+      - uses: cargo-bins/cargo-binstall@main
+      - name: Generate third-party licenses
+        run: |
+          cargo binstall -y cargo-about@0.9.3
+          make app/src/licenses.rs
+
       - name: Build
         env:
           MACOSX_DEPLOYMENT_TARGET: "26.0"

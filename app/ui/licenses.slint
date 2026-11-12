@@ -1,0 +1,319 @@
+// Third-party licenses: license types, the crates under the selected one, and the selected
+// crate's license text. Opened from Preferences. See design/licenses.md.
+
+import { LineEdit, ListView, ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { Link } from "config-fields.slint";
+
+export struct LicenseGroup {
+    name: string,
+    count: int,
+}
+
+export struct LicensedCrate {
+    name: string,
+    version: string,
+}
+
+// Rust (src/licenses_window.rs) fills the lists and the selected crate's details.
+export component LicensesWindow inherits Window {
+    in property <[LicenseGroup]> groups;
+    in property <[LicensedCrate]> crates;
+    in property <int> selected-group;
+    in property <int> selected-crate;
+    in property <string> crate-name;
+    in property <string> crate-version;
+    in property <string> license-name;
+    in property <string> license-id;
+    in property <string> license-text;
+    in property <string> url;
+    in-out property <string> search;
+
+    callback group-selected(int);
+    callback crate-selected(int);
+    callback search-edited(string);
+    callback open-url(string);
+    callback drag-window();
+
+    title: "Third-party licenses";
+    icon: @image-url("app-icon.png");
+    background: Theme.bg;
+    default-font-size: Theme.font-body;
+    min-width: 900px;
+    min-height: 560px;
+    preferred-width: 1100px;
+    preferred-height: 720px;
+
+    // Lets the window be moved by its top edge, since the title bar is transparent on macOS.
+    TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: 28px;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                root.drag-window();
+            }
+        }
+    }
+
+    VerticalLayout {
+        HorizontalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 40px;
+            padding-bottom: 18px;
+            spacing: 16px;
+
+            Text {
+                text: "Third-party licenses";
+                font-size: Theme.font-dialog;
+                font-weight: Theme.weight-medium;
+                color: Theme.tx;
+                vertical-alignment: center;
+            }
+
+            Rectangle {
+                horizontal-stretch: 1;
+            }
+
+            LineEdit {
+                width: 260px;
+                placeholder-text: "Search crates";
+                text <=> root.search;
+                edited(text) => {
+                    root.search-edited(text);
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: Theme.line;
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            // License types
+            Rectangle {
+                width: Theme.sidebar-width;
+                background: Theme.panel;
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                ScrollView {
+                    width: parent.width - 1px;
+                    x: 0;
+                    content-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
+
+                    VerticalLayout {
+                        padding: 10px;
+                        alignment: start;
+
+                        for group[index] in root.groups: Rectangle {
+                            property <bool> selected: index == root.selected-group;
+
+                            border-radius: Theme.radius-item;
+                            background: selected ? Theme.raise : (group-touch.has-hover ? Theme.hover : transparent);
+                            accessible-role: list-item;
+                            accessible-label: group.name;
+                            accessible-item-selected: selected;
+
+                            HorizontalLayout {
+                                padding-left: 12px;
+                                padding-right: 12px;
+                                padding-top: 9px;
+                                padding-bottom: 9px;
+                                spacing: 10px;
+
+                                Text {
+                                    text: group.name;
+                                    color: selected ? Theme.tx : Theme.tx2;
+                                    font-weight: selected ? Theme.weight-medium : Theme.weight-regular;
+                                    wrap: word-wrap;
+                                    horizontal-stretch: 1;
+                                }
+
+                                Text {
+                                    text: group.count;
+                                    color: Theme.tx3;
+                                    font-size: Theme.font-meta;
+                                    horizontal-stretch: 0;
+                                }
+                            }
+
+                            group-touch := TouchArea {
+                                clicked => {
+                                    root.group-selected(index);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if root.crates.length == 0: VerticalLayout {
+                padding: 28px;
+                alignment: start;
+
+                Text {
+                    text: "No crates match “\{root.search}”.";
+                    color: Theme.tx3;
+                    font-size: Theme.font-small;
+                }
+            }
+
+            // Crates under the selected license
+            if root.crates.length > 0: Rectangle {
+                width: 300px;
+
+                Rectangle {
+                    x: parent.width - 1px;
+                    width: 1px;
+                    background: Theme.line;
+                }
+
+                ListView {
+                    width: parent.width - 1px;
+                    x: 0;
+
+                    for item[index] in root.crates: Rectangle {
+                        property <bool> selected: index == root.selected-crate;
+
+                        height: 41px;
+                        background: selected ? #1B2130 : (crate-touch.has-hover ? Theme.hover : transparent);
+                        accessible-role: list-item;
+                        accessible-label: "\{item.name} \{item.version}";
+                        accessible-item-selected: selected;
+
+                        Rectangle {
+                            x: 0;
+                            width: 2px;
+                            visible: selected;
+                            background: Theme.acc;
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 18px;
+                            padding-right: 18px;
+                            spacing: 10px;
+
+                            Text {
+                                text: item.name;
+                                color: Theme.tx;
+                                overflow: elide;
+                                vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            Text {
+                                text: item.version;
+                                color: Theme.tx3;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-meta;
+                                vertical-alignment: center;
+                                horizontal-stretch: 0;
+                            }
+                        }
+
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Theme.line;
+                        }
+
+                        crate-touch := TouchArea {
+                            clicked => {
+                                root.crate-selected(index);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // The selected crate's license
+            if root.crates.length > 0: VerticalLayout {
+                horizontal-stretch: 1;
+                padding: 24px;
+                spacing: 14px;
+
+                VerticalLayout {
+                    spacing: 4px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            text: root.crate-name;
+                            font-size: Theme.font-section;
+                            font-weight: Theme.weight-medium;
+                            color: Theme.tx;
+                            overflow: elide;
+                            horizontal-stretch: 0;
+                        }
+
+                        Text {
+                            text: root.crate-version;
+                            font-family: Theme.mono;
+                            font-size: Theme.font-mono;
+                            color: Theme.tx3;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        Link {
+                            text: "Repository";
+                            clicked => {
+                                root.open-url(root.url);
+                            }
+                        }
+                    }
+
+                    Text {
+                        text: "\{root.license-name} · \{root.license-id}";
+                        color: Theme.tx2;
+                        font-size: Theme.font-small;
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: Theme.well;
+                    border-radius: Theme.radius-control;
+                    border-width: 1px;
+                    border-color: Theme.line;
+                    clip: true;
+
+                    ScrollView {
+                        // A newly selected crate's text starts at its top.
+                        property <string> shown: root.license-text;
+                        changed shown => {
+                            self.content-y = 0;
+                        }
+                        content-width: self.visible-width;
+                        horizontal-scrollbar-policy: always-off;
+
+                        VerticalLayout {
+                            padding: 16px;
+                            alignment: start;
+
+                            Text {
+                                text: root.license-text;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                color: Theme.tx2;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
