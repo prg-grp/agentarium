@@ -74,9 +74,10 @@ commits make the changelog, `docs:`, `chore:`, `refactor:` and `ci:` don't.
   changelog. Whenever it creates or updates that PR, the workflow publishes a **dev** build:
   prerelease `dev-<run number>`, version `<next version>-dev.<run number>`.
 - Merging the release PR creates the `vX.Y.Z` release; the workflow adds the **stable** build to it.
-- Each build is packaged, signed and notarized by [Velopack](https://velopack.io) (`.pkg`
-  installer, portable zip, full and delta update packages) and gets the guest kernel and base
-  rootfs, built on an arm64 Linux runner, attached.
+- Each build is packaged, signed and notarized by [Velopack](https://velopack.io) (portable zip,
+  full and delta update packages, and for stable releases a `.pkg` installer) and gets the guest
+  kernel and base rootfs, built on an arm64 Linux runner, attached. Dev builds install from the
+  portable zip, or from a stable installer by switching the channel in Preferences.
 - Installed apps update themselves from these releases; the channel (stable or dev builds) is
   chosen in Preferences.
 

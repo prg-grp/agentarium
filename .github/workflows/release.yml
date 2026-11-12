@@ -286,8 +286,14 @@ jobs:
       - name: Pack, sign and notarize
         run: |
           set -euo pipefail
-          license=()
-          if [ -f LICENSE ]; then license=(--instLicense LICENSE); fi
+          # Dev builds skip the .pkg installer and its second notarization: updates only need
+          # the packages, and the portable zip installs a dev build directly.
+          extra=()
+          if [ "$MODE" = "dev" ]; then
+            extra=(--noInst)
+          elif [ -f LICENSE ]; then
+            extra=(--instLicense LICENSE)
+          fi
           vpk pack \
             --packId Agentarium --packVersion "$VERSION" --packTitle Agentarium \
             --channel "$CHANNEL" --packDir dist/pack --mainExe Agentarium \
@@ -295,7 +301,7 @@ jobs:
             --signEntitlements app/agent-toolbox.entitlements \
             --signAppIdentity "$APP_IDENTITY" --signInstallIdentity "$INSTALLER_IDENTITY" \
             --notaryProfile agentarium --keychain "$KEYCHAIN" \
-            ${license[@]+"${license[@]}"} -o dist/releases
+            ${extra[@]+"${extra[@]}"} -o dist/releases
 
       # Stable releases exist already (release-please created them); dev releases are created
       # here, after packing succeeded, with the notes of what is new in this build.
