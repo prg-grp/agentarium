@@ -20,6 +20,8 @@ ARCHITECTURE.md file describes the overall architecture of the application and i
 - vms: contains related resources for the microVMs such as custom kernels and root file systems
 - app: contains the main application for agent toolbox
 
+Committing in this repository adheres to [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/). Commits must adhere to it because otherwise, release-please will not pick the changes up and create a new version. Release management is done via [release-please](https://github.com/googleapis/release-please).
+
 ## Implementation
 If useful or necessary, use external crates where possible to deliver functionality and features to the app. Rather than reinventing the wheel for each and every functionality. If in doubt, ask the user if a particular crate shall be used or not.
 
