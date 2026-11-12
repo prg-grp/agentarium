@@ -11,21 +11,30 @@ use crate::db::{NetworkAction, NetworkRule, PortForward, RuleTarget};
 pub enum Preset {
     ClaudeCode,
     Codex,
-    GeminiCli,
+    /// Google's successor of Gemini CLI.
+    Antigravity,
+    Copilot,
     OpenCode,
     OpenClaw,
+    Hermes,
+    /// OpenHands' web UI for coding agents.
+    AgentCanvas,
     /// The user's own provisioning script and command.
     Custom,
 }
 
 impl Preset {
-    /// In the order the creation screen lists them.
-    pub const ALL: [Preset; 6] = [
+    /// In the order the creation screen lists them: terminal agents, then the ones with a
+    /// web interface.
+    pub const ALL: [Preset; 9] = [
         Preset::ClaudeCode,
         Preset::Codex,
-        Preset::GeminiCli,
+        Preset::Antigravity,
+        Preset::Copilot,
         Preset::OpenCode,
         Preset::OpenClaw,
+        Preset::Hermes,
+        Preset::AgentCanvas,
         Preset::Custom,
     ];
 
@@ -33,9 +42,12 @@ impl Preset {
         match self {
             Preset::ClaudeCode => "Claude Code",
             Preset::Codex => "Codex",
-            Preset::GeminiCli => "Gemini CLI",
+            Preset::Antigravity => "Antigravity CLI",
+            Preset::Copilot => "GitHub Copilot CLI",
             Preset::OpenCode => "OpenCode",
             Preset::OpenClaw => "OpenClaw",
+            Preset::Hermes => "Hermes Agent",
+            Preset::AgentCanvas => "Agent Canvas",
             Preset::Custom => "Custom agent",
         }
     }
@@ -44,9 +56,16 @@ impl Preset {
         match self {
             Preset::ClaudeCode => "Anthropic's coding agent",
             Preset::Codex => "OpenAI's coding agent",
-            Preset::GeminiCli => "Google's coding agent",
+            Preset::Antigravity => "Google's coding agent; replaces Gemini CLI",
+            Preset::Copilot => "GitHub's coding agent; needs a Copilot plan",
             Preset::OpenCode => "Open-source agent; add your model provider's domain",
             Preset::OpenClaw => "Assistant gateway with a web UI; add your model provider's domain",
+            Preset::Hermes => {
+                "Self-improving assistant with a web dashboard; add your model provider's domain"
+            }
+            Preset::AgentCanvas => {
+                "OpenHands' coding agents in a web UI; add your model provider's domain"
+            }
             Preset::Custom => "Bring your own provisioning script and command",
         }
     }
@@ -57,9 +76,12 @@ impl Preset {
         match self {
             Preset::ClaudeCode => "claude",
             Preset::Codex => "codex",
-            Preset::GeminiCli => "gemini",
+            Preset::Antigravity => "agy",
+            Preset::Copilot => "copilot",
             Preset::OpenCode => "opencode",
             Preset::OpenClaw => "openclaw",
+            Preset::Hermes => "hermes",
+            Preset::AgentCanvas => "agent-canvas",
             Preset::Custom => "",
         }
     }
@@ -70,6 +92,8 @@ impl Preset {
             // The gateway in the foreground, so the supervisor keeps it running. It
             // listens on the guest's loopback and serves the Control UI on the same port.
             Preset::OpenClaw => &["gateway", "run", "--port", "18789"],
+            // The dashboard on the guest's loopback, where it needs no login.
+            Preset::Hermes => &["dashboard", "--no-open", "--port", "9119"],
             _ => &[],
         };
         arguments.iter().map(|&argument| argument.into()).collect()
@@ -79,6 +103,9 @@ impl Preset {
     pub fn port_forwards(self) -> Vec<PortForward> {
         let guest_ports: &[u16] = match self {
             Preset::OpenClaw => &[18789],
+            Preset::Hermes => &[9119],
+            // Agent Canvas serves its UI and API on one port.
+            Preset::AgentCanvas => &[8000],
             _ => &[],
         };
         guest_ports
@@ -96,9 +123,12 @@ impl Preset {
         match self {
             Preset::ClaudeCode => include_str!("../../vms/provision/claude-code.sh"),
             Preset::Codex => include_str!("../../vms/provision/codex.sh"),
-            Preset::GeminiCli => include_str!("../../vms/provision/gemini-cli.sh"),
+            Preset::Antigravity => include_str!("../../vms/provision/antigravity.sh"),
+            Preset::Copilot => include_str!("../../vms/provision/copilot.sh"),
             Preset::OpenCode => include_str!("../../vms/provision/opencode.sh"),
             Preset::OpenClaw => include_str!("../../vms/provision/openclaw.sh"),
+            Preset::Hermes => include_str!("../../vms/provision/hermes.sh"),
+            Preset::AgentCanvas => include_str!("../../vms/provision/agent-canvas.sh"),
             Preset::Custom => include_str!("../../vms/provision/custom.sh"),
         }
     }
@@ -121,15 +151,24 @@ impl Preset {
                 ("auth.openai.com", false),
                 ("chatgpt.com", false),
             ],
-            Preset::GeminiCli => &[
+            Preset::Antigravity => &[
+                ("antigravity.google", false),
                 ("generativelanguage.googleapis.com", false),
                 ("cloudcode-pa.googleapis.com", false),
                 ("oauth2.googleapis.com", false),
                 ("accounts.google.com", false),
                 ("www.googleapis.com", false),
             ],
+            // The device sign-in and Copilot's API hosts (api., individual., business., …).
+            Preset::Copilot => &[
+                ("github.com", false),
+                ("api.github.com", false),
+                ("githubcopilot.com", true),
+            ],
             Preset::OpenCode => &[("opencode.ai", true), ("models.dev", false)],
-            Preset::OpenClaw | Preset::Custom => &[],
+            // uvx resolves the agent server on PyPI at every start.
+            Preset::AgentCanvas => &[("pypi.org", false), ("files.pythonhosted.org", false)],
+            Preset::OpenClaw | Preset::Hermes | Preset::Custom => &[],
         };
         domains
             .iter()

@@ -26,12 +26,15 @@ An instance is a Linux virtual machine on this Mac with its own disk. The agent 
 (1) Harness   (2) Agent   (3) Shared folders   (4) Network   (5) Review
 ───────────────────────────────────────────────────────────────────────
 Name and harness    Name     [billing-service        ]
-The harness is the  Harness  (•) Claude Code    Anthropic's coding agent
-agent that runs…             ( ) Codex          OpenAI's coding agent
-                             ( ) Gemini CLI     Google's coding agent
-                             ( ) OpenCode       Open-source agent; add your model provider's domain
-                             ( ) OpenClaw       Assistant gateway with a web UI; add your model provider's domain
-                             ( ) Custom agent   Bring your own provisioning script and command
+The harness is the  Harness  (•) Claude Code         Anthropic's coding agent
+agent that runs…             ( ) Codex               OpenAI's coding agent
+                             ( ) Antigravity CLI     Google's coding agent; replaces Gemini CLI
+                             ( ) GitHub Copilot CLI  GitHub's coding agent; needs a Copilot plan
+                             ( ) OpenCode            Open-source agent; add your model provider's domain
+                             ( ) OpenClaw            Assistant gateway with a web UI; add your model provider's domain
+                             ( ) Hermes Agent        Self-improving assistant with a web dashboard; add your model provider's domain
+                             ( ) Agent Canvas        OpenHands' coding agents in a web UI; add your model provider's domain
+                             ( ) Custom agent        Bring your own provisioning script and command
 ───────────────────────────────────────────────────────────────────────
 Provisioning script Show script
 Defined by the
@@ -43,10 +46,12 @@ Cancel                                              [Continue to agent]
 ## Presets
 
 A preset is compiled into the app and defines:
-- the launch command and its default arguments (OpenClaw: `gateway run --port 18789`; the others have none);
+- the launch command and its default arguments (OpenClaw: `gateway run --port 18789`; Hermes Agent: `dashboard --no-open --port 9119`; the others have none);
 - the provisioning script (`vms/provision/<preset>.sh`);
 - the initial network rules: the domains the agent needs, allowed;
-- the forwarded ports (OpenClaw: 18789, where its gateway serves the Control UI, on a random Mac port). The OpenClaw script turns off the gateway's token, so the Control UI opens without signing in.
+- the forwarded ports, each on a random Mac port: OpenClaw 18789 (the Control UI), Hermes Agent 9119 (the dashboard), Agent Canvas 8000. The OpenClaw script turns off the gateway's token; Hermes and Agent Canvas need no login on the VM's loopback anyway.
+
+No preset needs environment variables: the terminal agents sign in in the terminal, the web harnesses take model keys in their web interface.
 
 A preset only exists while the instance is drafted. Creating the instance copies these values into its first revision; the chosen preset isn't stored, and later app versions don't change existing instances.
 

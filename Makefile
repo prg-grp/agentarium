@@ -55,8 +55,12 @@ check: $(VMLINUX) $(LICENSES)
 	bash -n vms/provision/claude-code.sh
 	bash -n vms/provision/custom.sh
 	bash -n vms/provision/codex.sh
-	bash -n vms/provision/gemini-cli.sh
+	bash -n vms/provision/antigravity.sh
+	bash -n vms/provision/copilot.sh
 	bash -n vms/provision/opencode.sh
+	bash -n vms/provision/openclaw.sh
+	bash -n vms/provision/hermes.sh
+	bash -n vms/provision/agent-canvas.sh
 	sh -n scripts/codesign-run.sh
 
 clean-guest:
