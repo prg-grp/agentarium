@@ -40,7 +40,7 @@ Resources            │ api.anthropic.com      Exact name                      
 - Selected section: `raise` background, `tx`. Sections with saved but inactive changes show "<n> changes" in `acc` 12 px. In Network, the default action and the Mac and local network setting each count as one change.
 - The Network description follows the Mac and local network setting: "Applies to agent boots. Your Mac and local network stay unreachable, whatever the rules say." or "Applies to agent boots. Your Mac and local network follow the rules, and maintenance boots can reach them too."
 - Agent and launch also holds the instance name. Renaming applies on save; the name isn't part of a revision.
-- Resources: the disk stepper starts at the disk's current size, since disks can grow but not shrink. A larger disk counts as one change and applies on the next boot, like processors and memory.
+- Resources: description "The virtual machine's processors, memory and disk. The instance takes memory and disk space from your Mac only as it uses them." The disk stepper starts at the disk's current size, since disks can grow but not shrink. A larger disk counts as one change and applies on the next boot, like processors and memory.
 - There is no preset in Settings: the preset only fills in a new instance's first revision (see [create-harness.md](create-harness.md#presets)). Every setting, including the command and the network rules, is edited directly.
 
 ## Change marks inside sections

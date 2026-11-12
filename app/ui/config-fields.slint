@@ -4,7 +4,7 @@
 
 import { LineEdit, SpinBox } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { EnvRow, MountRow, RuleRow } from "types.slint";
+import { EnvRow, MountRow, LayoutRow, RuleRow } from "types.slint";
 import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 
 export component Link {
@@ -377,6 +377,13 @@ export component LaunchFields {
                 color: Theme.bad;
                 text: root.working-directory-error;
             }
+
+            Text {
+                text: "~/workspace is on the instance's own disk. Shared folders go below it by default.";
+                color: Theme.tx3;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
+            }
         }
     }
 }
@@ -457,6 +464,7 @@ export component EnvironmentFields {
 // The shared folders table; "Add folder" is the owner's.
 export component FolderTable {
     in property <[MountRow]> rows;
+    in property <[LayoutRow]> layout;
     callback choose-folder(index: int);
     callback edit-guest-path(index: int, path: string);
     callback set-writable(index: int, writable: bool);
@@ -464,9 +472,10 @@ export component FolderTable {
 
     VerticalLayout {
         if root.rows.length == 0: Text {
-            text: "No folders are shared yet. The agent starts with an empty ~/workspace.";
+            text: "No folders are shared. That's fine if you don't need the results on your Mac right away: the agent's work stays on the instance's disk, and you can share a folder later.";
             color: Theme.tx3;
             font-size: Theme.font-small;
+            wrap: word-wrap;
         }
 
         if root.rows.length > 0: HorizontalLayout {
@@ -587,6 +596,51 @@ export component FolderTable {
                     color: Theme.bad;
                     text: row.guest-error;
                 }
+            }
+        }
+
+        // What the instance sees: ~/workspace on its disk and each valid folder at its path.
+        VerticalLayout {
+            padding-top: 20px;
+            spacing: 6px;
+
+            Text {
+                text: "Inside the instance";
+                color: Theme.tx3;
+                font-size: Theme.font-meta;
+            }
+
+            for line in root.layout: HorizontalLayout {
+                spacing: 16px;
+
+                // Nested lines are indented; their sources stay aligned.
+                HorizontalLayout {
+                    width: 280px;
+                    padding-left: min(line.depth * 16px, 200px);
+
+                    Text {
+                        text: line.path;
+                        color: Theme.tx;
+                        font-family: Theme.mono;
+                        font-size: Theme.font-mono;
+                        wrap: char-wrap;
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: line.shared ? "← " + line.source : line.source;
+                    color: line.shared ? Theme.tx2 : Theme.tx3;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+            }
+
+            Text {
+                text: "A shared folder hides anything the instance already has at that path while it is shared.";
+                color: Theme.tx3;
+                font-size: Theme.font-small;
+                wrap: word-wrap;
             }
         }
     }

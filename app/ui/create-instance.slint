@@ -3,7 +3,7 @@
 
 import { TextEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { PresetRow, EnvRow, MountRow, RuleRow, CreateIssue } from "types.slint";
+import { PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Link, Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -32,6 +32,7 @@ export global Creation {
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
     in property <[MountRow]> mounts;
+    in property <[LayoutRow]> layout;
     in property <bool> network-deny: true;
     in property <bool> network-allow-local;
     in property <[RuleRow]> allowed;
@@ -253,11 +254,21 @@ export component CreateInstance {
             padding-bottom: 20px;
             spacing: 16px;
 
-            Text {
-                text: "New instance";
-                font-size: Theme.font-title;
-                font-weight: Theme.weight-medium;
-                color: Theme.tx;
+            VerticalLayout {
+                spacing: 4px;
+
+                Text {
+                    text: "New instance";
+                    font-size: Theme.font-title;
+                    font-weight: Theme.weight-medium;
+                    color: Theme.tx;
+                }
+
+                Text {
+                    text: "An instance is a Linux virtual machine on this Mac with its own disk. The agent runs inside it and sees only the folders and domains you allow.";
+                    color: Theme.tx2;
+                    wrap: word-wrap;
+                }
             }
 
             HorizontalLayout {
@@ -517,7 +528,7 @@ export component CreateInstance {
                             }
 
                             Text {
-                                text: "The agent sees these folders live. Nothing else on your Mac is shared.";
+                                text: "Optional. The agent works in ~/workspace on the instance's own disk. Each folder you share appears at the path you set, and the agent works on your Mac's files there directly. Nothing else on your Mac is shared.";
                                 color: Theme.tx2;
                                 wrap: word-wrap;
                             }
@@ -537,6 +548,7 @@ export component CreateInstance {
 
                     FolderTable {
                         rows: Creation.mounts;
+                        layout: Creation.layout;
                         choose-folder(index) => {
                             Creation.choose-folder(index);
                         }
@@ -726,7 +738,7 @@ export component CreateInstance {
 
                         if Creation.mounts.length == 0: KeyValue {
                             key: "Folders";
-                            value: "None";
+                            value: "None. The agent works on the instance's own disk.";
                         }
 
                         for row in Creation.mounts: HorizontalLayout {
@@ -796,7 +808,7 @@ export component CreateInstance {
 
                     Section {
                         title: "Resources";
-                        description: "The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them.";
+                        description: "The virtual machine's processors, memory and disk. The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them.";
 
                         ResourceFields {
                             cpus <=> Creation.cpus;

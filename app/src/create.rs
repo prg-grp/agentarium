@@ -70,6 +70,7 @@ impl Creator {
         g.set_arguments(ModelRc::from(lists.arguments.clone()));
         g.set_environment(ModelRc::from(lists.environment.clone()));
         g.set_mounts(ModelRc::from(lists.mounts.clone()));
+        g.set_layout(ModelRc::from(lists.layout.clone()));
         g.set_allowed(ModelRc::from(lists.allowed.clone()));
         g.set_denied(ModelRc::from(lists.denied.clone()));
         g.set_issues(ModelRc::from(this.issues.clone()));

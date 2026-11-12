@@ -100,6 +100,15 @@ export struct MountRow {
     guest-error: string,
 }
 
+// One line of what the instance sees: ~/workspace on its disk, or a shared folder.
+// A nested folder's path is relative to the line it's nested in.
+export struct LayoutRow {
+    path: string,
+    depth: int,
+    source: string,
+    shared: bool,
+}
+
 export struct RuleRow {
     target: string,
     scope: string,

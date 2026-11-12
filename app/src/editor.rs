@@ -15,7 +15,7 @@ use crate::db::{
     self, Config, EnvVar, Mount, NetworkAction, NetworkRule, RuleTarget, mask32, mask128,
     max_prefix, parse_network,
 };
-use crate::{EnvRow, InstanceItem, InstanceState, MountRow, RuleRow};
+use crate::{EnvRow, InstanceItem, InstanceState, LayoutRow, MountRow, RuleRow};
 
 /// The agent user's ~/workspace inside the instance; shared folders go below it by default.
 const WORKSPACE: &str = "/home/ubuntu/workspace";
@@ -26,6 +26,8 @@ pub struct Lists {
     pub arguments: Rc<VecModel<SharedString>>,
     pub environment: Rc<VecModel<EnvRow>>,
     pub mounts: Rc<VecModel<MountRow>>,
+    /// The instance's view of the shared folders, below the folder table.
+    pub layout: Rc<VecModel<LayoutRow>>,
     pub allowed: Rc<VecModel<RuleRow>>,
     pub denied: Rc<VecModel<RuleRow>>,
 }
@@ -71,6 +73,7 @@ impl Lists {
                 })
                 .collect(),
         );
+        sync(&self.layout, layout_rows(&c.mounts));
         sync(
             &self.allowed,
             rule_rows(&c.network_rules, NetworkAction::Allow),
@@ -352,6 +355,54 @@ fn default_guest_path(mounts: &[Mount], folder: &Path) -> String {
         })
         .find(|path| !mounts.iter().any(|mount| &mount.guest_path == path))
         .unwrap_or(base)
+}
+
+/// What the instance sees: ~/workspace on its own disk and each valid shared folder at its
+/// path. Sorted, a folder follows the one it's nested in and is shown relative to it.
+fn layout_rows(mounts: &[Mount]) -> Vec<LayoutRow> {
+    let mut entries: Vec<(PathBuf, Option<&Mount>)> = mounts
+        .iter()
+        .zip(guest_path_errors(mounts))
+        .filter(|(mount, error)| mount.enabled && error.is_empty())
+        .map(|(mount, _)| (PathBuf::from(&mount.guest_path), Some(mount)))
+        .collect();
+    // A folder shared at ~/workspace itself takes the disk's place.
+    if !entries.iter().any(|(path, _)| path == Path::new(WORKSPACE)) {
+        entries.push((WORKSPACE.into(), None));
+    }
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut rows: Vec<LayoutRow> = Vec::with_capacity(entries.len());
+    for (i, (path, mount)) in entries.iter().enumerate() {
+        let parent = (0..i).rev().find(|&j| path.starts_with(&entries[j].0));
+        let (shown, depth) = match (parent, path.strip_prefix("/home/ubuntu")) {
+            (Some(j), _) => (
+                path.strip_prefix(&entries[j].0).unwrap_or(path).to_owned(),
+                rows[j].depth + 1,
+            ),
+            (None, Ok(rest)) => (Path::new("~").join(rest), 0),
+            (None, Err(_)) => (path.clone(), 0),
+        };
+        let source = match mount {
+            Some(mount) => format!(
+                "{} on your Mac, {}",
+                display_path(&mount.host_path),
+                if mount.writable {
+                    "read and write"
+                } else {
+                    "read only"
+                }
+            ),
+            None => "Instance disk, kept across restarts".into(),
+        };
+        rows.push(LayoutRow {
+            path: shown.display().to_string().into(),
+            depth,
+            source: source.into(),
+            shared: mount.is_some(),
+        });
+    }
+    rows
 }
 
 pub fn pick_folder() -> Option<PathBuf> {

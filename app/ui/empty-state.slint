@@ -32,10 +32,43 @@ export component EmptyState {
                 }
 
                 Text {
-                    text: "Create an instance to run an AI agent with controlled file and network access.";
+                    text: "Create an instance to run an AI agent in its own virtual machine.";
                     wrap: word-wrap;
                     font-size: Theme.font-dialog;
                     color: Theme.tx;
+                }
+
+                VerticalLayout {
+                    padding-top: 16px;
+                    spacing: 8px;
+
+                    for line in [
+                        { icon: @image-url("icons/server-2.svg"), text: "Each instance is a Linux virtual machine on this Mac, with its own disk." },
+                        { icon: @image-url("icons/folder.svg"), text: "The agent sees only the folders you share with it." },
+                        { icon: @image-url("icons/arrows-cross.svg"), text: "It reaches only the domains you allow." },
+                    ]: HorizontalLayout {
+                        spacing: 10px;
+
+                        VerticalLayout {
+                            alignment: start;
+                            padding-top: 1px;
+                            Image {
+                                source: line.icon;
+                                colorize: Theme.tx3;
+                                width: 16px;
+                                height: 16px;
+                                accessible-role: none;
+                            }
+                        }
+
+                        Text {
+                            text: line.text;
+                            wrap: word-wrap;
+                            font-size: Theme.font-small;
+                            color: Theme.tx2;
+                            horizontal-stretch: 1;
+                        }
+                    }
                 }
 
                 Rectangle {

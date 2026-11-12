@@ -3,7 +3,7 @@
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { InstanceItem, InstanceState, EnvRow, MountRow, RuleRow } from "types.slint";
+import { InstanceItem, InstanceState, EnvRow, MountRow, LayoutRow, RuleRow } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -23,6 +23,7 @@ export global Settings {
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
     in property <[MountRow]> mounts;
+    in property <[LayoutRow]> layout;
     in property <bool> network-deny: true;
     in property <bool> network-allow-local;
     in property <[RuleRow]> allowed;
@@ -371,10 +372,11 @@ export component SettingsTab {
 
                     s1 := Group {
                         title: "Shared folders";
-                        description: "The agent sees these folders live. Nothing else on your Mac is shared.";
+                        description: "Optional. The agent works in ~/workspace on the instance's own disk. Each folder you share appears at the path you set, and the agent works on your Mac's files there directly. Nothing else on your Mac is shared.";
 
                         FolderTable {
                             rows: Settings.mounts;
+                            layout: Settings.layout;
                             choose-folder(index) => {
                                 Settings.choose-folder(index);
                             }
@@ -448,7 +450,7 @@ export component SettingsTab {
 
                     s4 := Group {
                         title: "Resources";
-                        description: "The instance takes memory and disk space from your Mac only as it uses them.";
+                        description: "The virtual machine's processors, memory and disk. The instance takes memory and disk space from your Mac only as it uses them.";
 
                         ResourceFields {
                             cpus <=> Settings.cpus;

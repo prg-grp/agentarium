@@ -38,10 +38,10 @@ Cancel                       [< Back]  [Create]  [▶ Create and start]
 ## Elements
 
 - Each section: title in the 220 px left column, key/value read-back (150 px key column in `tx3`, values in `tx` or monospace), "Edit" link in `acc` on the right that jumps to that step.
-- Writable shares repeat the `warn` direct-write sentence in short form.
+- Writable shares repeat the `warn` direct-write sentence in short form. Without folders: "Folders: None. The agent works on the instance's own disk."
 - Harness shows the preset's name, and for provisioning "Script from the <preset> preset", "Template, not filled in yet" (custom agent, unchanged template), or "Custom script".
 - Environment shows variable names only; values are not repeated.
-- **Resources** are only editable here (the "advanced" section from the brief): steppers for processors, memory and disk, plus a `tx3` line with what the Mac has available and that the disk can grow later, but not shrink. Section description: "The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them."
+- **Resources** are only editable here (the "advanced" section from the brief): steppers for processors, memory and disk, plus a `tx3` line with what the Mac has available and that the disk can grow later, but not shrink. Section description: "The virtual machine's processors, memory and disk. The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them."
   - Defaults: 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.
   - Limits: processors up to the Mac's count; memory up to the Mac's memory minus 2 GB; disk from 8 to 1024 GB, not capped by the Mac's free space, since it only takes what the guest writes.
   - Disk: 16 GB by default; the base system takes about 2. Coding agents mostly work in shared folders, so the disk holds the agent, caches and builds. Instance disks are sparse copy-on-write clones of the base image and take space on the Mac only as the guest writes.

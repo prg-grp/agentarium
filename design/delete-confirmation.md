@@ -11,8 +11,8 @@ The dialog shown from the header's "Delete" action. Uses the same dialog layout 
 │ can't be undone.                                             │
 │ Removed                                                      │
 │ ──────────────────────────────────────────────────────────── │
-│ 🗄 Virtual machine disk, 18.4 GB, including software          │
-│    installed in maintenance                                  │
+│ 🗄 Virtual machine disk, 18.4 GB, including ~/workspace and   │
+│    software installed in maintenance                         │
 │ ⚙  Configuration and its 7 revisions                         │
 │ ⟲  Activity history from 23 runs                             │
 │ Stays on your Mac                                            │

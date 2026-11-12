@@ -6,7 +6,7 @@ First step of instance creation. It names the instance and picks a preset: a kno
 
 - Creation opens in the main area, not in a separate window or sheet. The sidebar keeps the instance list.
 - As soon as the user enters a name, a draft item appears at the top of the sidebar: a pencil icon in `acc`, the name, and "Not created yet". The user can switch to other instances and come back; entered values persist until Cancel or Create. They are not saved across app restarts.
-- Header: "New instance" (22 / 28, 500) with a step indicator below it.
+- Header: "New instance" (22 / 28, 500), then a `tx2` line: "An instance is a Linux virtual machine on this Mac with its own disk. The agent runs inside it and sees only the folders and domains you allow." The step indicator sits below it.
 - Step indicator: Harness, Agent, Shared folders, Network, Review. Each step has a 22 px circle:
   - The current step is filled `acc`, with its number in dark text.
   - Visited steps show a check in `ok` with an `ok` border.
@@ -22,6 +22,7 @@ Related steps: [create-agent.md](create-agent.md), [create-shared-folders.md](cr
 
 ```
 New instance
+An instance is a Linux virtual machine on this Mac with its own disk. The agent runs inside it…
 (1) Harness   (2) Agent   (3) Shared folders   (4) Network   (5) Review
 ───────────────────────────────────────────────────────────────────────
 Name and harness    Name     [billing-service        ]

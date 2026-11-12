@@ -1,7 +1,7 @@
 // Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
 import { Theme } from "theme.slint";
-import { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem } from "types.slint";
+import { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
 import { TerminalSession, TerminalView } from "terminal.slint";
@@ -13,7 +13,7 @@ import { Settings, SettingsTab } from "settings.slint";
 import { Updates, UpdateState, PreferencesView } from "preferences.slint";
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 
-export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState }
+export { Tone, InstanceState, InstanceAction, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;

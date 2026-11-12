@@ -138,8 +138,8 @@ export component DeleteDialog {
                     icon: @image-url("icons/server-2.svg");
                     icon-color: Theme.bad;
                     text: Deletion.disk-size != ""
-                        ? "Virtual machine disk, \{Deletion.disk-size}, including software installed in maintenance"
-                        : "Virtual machine disk, including software installed in maintenance";
+                        ? "Virtual machine disk, \{Deletion.disk-size}, including ~/workspace and software installed in maintenance"
+                        : "Virtual machine disk, including ~/workspace and software installed in maintenance";
                 }
 
                 Rectangle {
