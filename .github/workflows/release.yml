@@ -1,6 +1,8 @@
 # Release pipeline. Every push to main runs release-please first:
-# - merging its release PR creates the vX.Y.Z release → stable build into that release;
-# - creating or updating its release PR → dev build into a new dev-<run> prerelease.
+# - merging its release PR creates the vX.Y.Z tag and a draft release → stable build into
+#   that draft, which Velopack publishes once everything is uploaded;
+# - creating or updating its release PR → dev build into a new dev-<run> prerelease, which
+#   Velopack creates itself. A failed dev build has its release and tag removed again.
 # Both channels are packaged, signed, notarized and uploaded by Velopack; the guest kernel
 # and base rootfs are attached to every release for the app to download.
 # Everything runs in this one workflow, so github.run_number is the dev build number and no
@@ -77,6 +79,11 @@ jobs:
             git fetch origin "$branch"
             next=$(git show FETCH_HEAD:.release-please-manifest.json | jq -r '."."')
             version="$next-dev.$RUN_NUMBER"
+            # A re-run of a finished build must not fail later and have its release cleaned up.
+            if git ls-remote --exit-code --tags origin "refs/tags/dev-$RUN_NUMBER" >/dev/null; then
+              echo "dev-$RUN_NUMBER already exists; refusing to rebuild it" >&2
+              exit 1
+            fi
             # Deltas build on the previous dev release; the notes list what is new since the
             # previous dev or stable release, whichever is nearer.
             prev=$(git describe --tags --abbrev=0 --match 'dev-*' HEAD 2>/dev/null || true)
@@ -303,21 +310,35 @@ jobs:
             --notaryProfile agentarium --keychain "$KEYCHAIN" \
             ${extra[@]+"${extra[@]}"} -o dist/releases
 
-      # Stable releases exist already (release-please created them); dev releases are created
-      # here, after packing succeeded, with the notes of what is new in this build.
-      - name: Create dev release
-        if: env.MODE == 'dev'
-        run: gh release create "$TAG" --prerelease --target "$GITHUB_SHA" --title "$VERSION" --notes-file dist/notes.md
-
+      # Velopack creates the dev release (titled with the version, notes from the package) and
+      # merges into the stable draft release-please created; both are published afterwards.
       - name: Upload
         run: |
           set -euo pipefail
           pre=()
           if [ "$MODE" = "dev" ]; then pre=(--pre); fi
           vpk upload github --repoUrl "$REPO_URL" --token "$GH_TOKEN" --channel "$CHANNEL" \
-            --tag "$TAG" --merge --publish ${pre[@]+"${pre[@]}"} -o dist/releases
+            --tag "$TAG" --releaseName "$VERSION" --targetCommitish "$GITHUB_SHA" \
+            --merge --publish ${pre[@]+"${pre[@]}"} -o dist/releases
           gh release upload "$TAG" dist/guest/agentarium-kernel.zst dist/guest/agentarium-rootfs.ext4.zst dist/guest/guest.json --clobber
 
       - name: Remove keychain
         if: always()
         run: security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+
+  # Removes the release (draft or published) and tag of a failed dev build, so a re-run starts
+  # clean. Failed stable builds are left for manual cleanup.
+  cleanup:
+    needs: [plan, app]
+    if: always() && needs.plan.outputs.mode == 'dev' && (needs.app.result == 'failure' || needs.app.result == 'cancelled')
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --cleanup-tag --yes
+          fi
