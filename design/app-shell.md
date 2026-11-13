@@ -33,6 +33,9 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 - Instance items: 18 px icon column, name (14 / 400; 500 when selected), summary line below (12 / 16).
   - Selected item: `raise` background, 8 px radius, 2 px inset bar on the left in `acc` (in `warn` when the selected instance is in maintenance).
   - Icon and summary color follow state: running `ok` + "Running"; maintenance `warn` + "Maintenance, internet open"; startup failure `bad` + "Startup failed"; agent exited `tx2` + "Agent exited"; stopped `tx3` + "Stopped 2 days ago"; draft `acc` pencil + "Not created yet".
+- The instance list scrolls when it's taller than the sidebar; the "Instances" label and the Preferences row stay in place.
+- Order: the user's. New instances go to the top. Each item shows a grip (`grip-vertical`, 14 px, `tx3`) at its right end on hover; dragging by it reorders the list, like the arguments in [create-agent.md](create-agent.md). The dragged item gets an `acc` 15 % background and a 1 px `acc` border; a 2 px `acc` line across the list marks where it lands, between items. Near the list's top or bottom edge, the drag scrolls the list. The order is stored and the selection stays on the same instance. The draft item has no grip, and nothing can be dropped above it.
+- Instances set to "Start with Agentarium" start in agent mode when the app opens, once the guest image is ready.
 - Bottom: "Preferences" with an adjustments icon, separated by a `line` top border. No account menu, because the manager has no application account. It opens [preferences.md](preferences.md) and shows "Update ready" when an update waits for a restart.
 - Until the guest image is downloaded, [guest-download.md](guest-download.md) covers the whole window.
 - With no instances, the list area shows "No instances yet" in `tx3` (see [empty-state.md](empty-state.md)).

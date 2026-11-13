@@ -4,7 +4,7 @@
 import { TextEdit, ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, CreateIssue } from "types.slint";
-import { AppButton, ButtonKind } from "widgets.slint";
+import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 import { Link, Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
 // The draft being created. Rust (src/create.rs) owns it and checks it after every edit.
@@ -21,6 +21,8 @@ export global Creation {
     in-out property <int> cpus;
     in-out property <int> memory-gb;
     in-out property <int> disk-gb;
+    // Started in agent mode when the app opens.
+    in-out property <bool> autostart;
 
     in property <[PresetRow]> presets;
     // The selected preset, as an index into presets. Only the custom agent's command can be
@@ -98,6 +100,7 @@ export global Creation {
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
     callback set-disk(gb: int);
+    callback set-autostart(on: bool);
 }
 
 // Two-column section: title and description on the left, fields on the right.
@@ -878,6 +881,35 @@ export component CreateInstance {
                                 : "Fix the problems listed above to start the instance right away. Until then, you can create it without starting.";
                             color: Theme.tx2;
                             wrap: word-wrap;
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Start with Agentarium";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                SegmentedControl {
+                                    options: ["On", "Off"];
+                                    selected: Creation.autostart ? 0 : 1;
+                                    changed(index) => {
+                                        Creation.autostart = index == 0;
+                                        Creation.set-autostart(index == 0);
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "When on, the instance starts in agent mode each time Agentarium opens.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
                         }
                     }
                 }

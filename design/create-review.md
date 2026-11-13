@@ -43,10 +43,10 @@ Cancel                       [< Back]  [Create]  [▶ Create and start]
 - Harness shows the preset's name, and for provisioning "Script from the <preset> preset", "Edited script from the <preset> preset", "Custom agent template" (custom agent, unchanged template), "Custom script", or "None" (empty script).
 - Environment shows variable names only; values are not repeated.
 - **Resources** are only editable here (the "advanced" section from the brief): steppers for processors, memory and disk, plus a `tx3` line with what the Mac has available and that the disk can grow later, but not shrink. Section description: "The virtual machine's processors, memory and disk. The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them."
-  - Defaults: 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.
+  - Defaults: those set under New instances in [preferences.md](preferences.md); without them, 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.
   - Limits: processors up to the Mac's count; memory up to the Mac's memory minus 2 GB; disk from 8 to 1024 GB, not capped by the Mac's free space, since it only takes what the guest writes.
-  - Disk: 16 GB by default; the base system takes about 2. Coding agents mostly work in shared folders, so the disk holds the agent, caches and builds. Instance disks are sparse copy-on-write clones of the base image and take space on the Mac only as the guest writes.
-- **Start:** a sentence explaining the two create buttons: "Create only sets the instance up; start it later from its header. You can change its settings before the first start."
+  - Disk: 16 GB by default (unless set in Preferences); the base system takes about 2. Coding agents mostly work in shared folders, so the disk holds the agent, caches and builds. Instance disks are sparse copy-on-write clones of the base image and take space on the Mac only as the guest writes.
+- **Start:** a sentence explaining the two create buttons: "Create only sets the instance up; start it later from its header. You can change its settings before the first start." Below it, "Start with Agentarium" (segmented "On" / "Off", default Off) with "When on, the instance starts in agent mode each time Agentarium opens." in `tx3`.
 - Footer: two create buttons. "Create" (neutral) creates the instance without starting it. "Create and start" (primary, play icon) also starts it right away, which runs its provisioning script first.
 
 ## States

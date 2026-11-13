@@ -5,7 +5,7 @@
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { InstanceItem, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, SaveKind } from "types.slint";
-import { AppButton, ButtonKind } from "widgets.slint";
+import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
 // The shown instance's edited configuration. Rust (src/settings.rs) owns it and checks it
@@ -20,6 +20,8 @@ export global Settings {
     in-out property <int> cpus;
     in-out property <int> memory-gb;
     in-out property <int> disk-gb;
+    // Started in agent mode when the app opens.
+    in-out property <bool> autostart;
 
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
@@ -80,6 +82,7 @@ export global Settings {
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
     callback set-disk(gb: int);
+    callback set-autostart(on: bool);
     callback discard();
     // Saves the edits and applies them, restarting the agent or rebooting as save-kind says.
     callback save();
@@ -253,6 +256,35 @@ export component SettingsTab {
                                 icon: @image-url("icons/alert-circle.svg");
                                 color: Theme.bad;
                                 text: Settings.name-error;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Start with Agentarium";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            HorizontalLayout {
+                                alignment: start;
+                                SegmentedControl {
+                                    options: ["On", "Off"];
+                                    selected: Settings.autostart ? 0 : 1;
+                                    changed(index) => {
+                                        Settings.autostart = index == 0;
+                                        Settings.set-autostart(index == 0);
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "When on, the instance starts in agent mode each time Agentarium opens.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
                             }
                         }
 

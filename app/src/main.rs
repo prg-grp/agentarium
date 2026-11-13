@@ -71,7 +71,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let activity = activity::ActivityView::new(&ui, db.clone(), control.clone());
     let snapshots =
         snapshots::SnapshotsView::new(&ui, db.clone(), control.clone(), settings.clone());
-    let _guest = guest::GuestAssets::new(&ui, db.clone());
+    // Instances need this release's guest image, so those set to start with the app start
+    // once it is there: right away, or after the download.
+    let c = control.clone();
+    let d = db.clone();
+    let _guest = guest::GuestAssets::new(&ui, db.clone(), move || {
+        Timer::single_shot(Duration::ZERO, move || match d.instances() {
+            Ok(instances) => instances
+                .iter()
+                .filter(|instance| instance.autostart)
+                .for_each(|instance| c.start(&instance.id, BootMode::Agent)),
+            Err(error) => eprintln!("Couldn't read the instances to start: {error}"),
+        });
+    });
     let c = control.clone();
     ui.global::<GuestImage>().on_quit(move || c.quit());
     let updater = update::Updater::new(&ui, db.clone(), control.clone());
@@ -95,7 +107,41 @@ fn main() -> Result<(), Box<dyn Error>> {
         });
     }
 
-    // New instances are drafted on the creation screen; once created, they get a sorted
+    // The sidebar's rows are dragged into the order the user wants; the database keeps it.
+    // The selection stays on the same instance.
+    let i = instances.clone();
+    let d = db.clone();
+    let ui_handle = ui.as_weak();
+    ui.on_move_instance(move |from, to| {
+        let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to)) else {
+            return;
+        };
+        let Some(ui) = ui_handle.upgrade() else {
+            return;
+        };
+        if from >= i.row_count() || to >= i.row_count() {
+            return;
+        }
+        let selected = usize::try_from(ui.get_selected_index())
+            .ok()
+            .and_then(|row| i.row_data(row))
+            .map(|item| item.id);
+        let item = i.remove(from);
+        i.insert(to, item);
+        if let Some(row) = selected.and_then(|id| i.iter().position(|item| item.id == id)) {
+            ui.set_selected_index(row as i32);
+        }
+        let ids: Vec<String> = i
+            .iter()
+            .filter(|item| item.state != InstanceState::Draft)
+            .map(|item| item.id.into())
+            .collect();
+        if let Err(error) = d.reorder_instances(&ids) {
+            eprintln!("Couldn't save the order of the instances: {error}");
+        }
+    });
+
+    // New instances are drafted on the creation screen; once created, they get the top
     // sidebar row and, unless the user opted out, start and provision right away.
     let c = control.clone();
     let ui_handle = ui.as_weak();
@@ -104,16 +150,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             return;
         };
         let id = instance.id.clone();
-        let name = instance.name.to_lowercase();
-        let row = (0..instances.row_count())
-            .find(|&row| {
-                instances
-                    .row_data(row)
-                    .is_some_and(|item| item.name.to_lowercase() > name)
-            })
-            .unwrap_or(instances.row_count());
-        instances.insert(row, to_item(instance));
-        ui.set_selected_index(row as i32);
+        instances.insert(0, to_item(instance));
+        ui.set_selected_index(0);
         ui.set_current_tab(0);
         c.select(&id);
         if start {

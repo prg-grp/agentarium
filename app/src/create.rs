@@ -18,7 +18,7 @@ use crate::editor::{
     working_directory_error,
 };
 use crate::preset::Preset;
-use crate::{AppWindow, CreateIssue, Creation, InstanceItem, InstanceState, PresetRow};
+use crate::{AppWindow, CreateIssue, Creation, InstanceItem, InstanceState, PresetRow, VmDefaults};
 use crate::{guest, vm};
 
 // Steps, as numbered in the step indicator (from 0).
@@ -26,6 +26,34 @@ const HARNESS: i32 = 0;
 const AGENT: i32 = 1;
 const FOLDERS: i32 = 2;
 const REVIEW: i32 = 4;
+
+/// The preferences holding the processors, memory (GB) and disk (GB) new instances start with.
+const DEFAULT_CPUS_KEY: &str = "default_cpus";
+const DEFAULT_MEMORY_KEY: &str = "default_memory_gb";
+const DEFAULT_DISK_KEY: &str = "default_disk_gb";
+
+/// The processors, memory (GB) and disk (GB) new instances start with: those set in
+/// Preferences, otherwise `Config::default()`'s, with at most half of the Mac so it stays
+/// usable. Always within what the Mac and the resource fields allow.
+fn vm_defaults(db: &Db, host: &Host) -> (u32, u32, u32) {
+    let stored = |key| {
+        db.preference(key)
+            .inspect_err(|error| eprintln!("Couldn't read the {key} preference: {error}"))
+            .ok()
+            .flatten()
+            .and_then(|value| value.parse::<u32>().ok())
+    };
+    let config = Config::default();
+    let cpus = stored(DEFAULT_CPUS_KEY).unwrap_or(config.cpus.min((host.cpus / 2).max(1)));
+    let memory_gb = stored(DEFAULT_MEMORY_KEY)
+        .unwrap_or((config.memory_mib / 1024).min((host.memory_gb / 2).max(1)));
+    let disk_gb = stored(DEFAULT_DISK_KEY).unwrap_or(config.disk_gb);
+    (
+        cpus.clamp(1, host.cpus),
+        memory_gb.clamp(1, host.max_memory_gb()),
+        disk_gb.clamp(db::DISK_MIN_GB, 1024),
+    )
+}
 
 struct Draft {
     name: String,
@@ -36,6 +64,8 @@ struct Draft {
     /// Each preset's script with the user's edits, in the order of `Preset::ALL`, kept
     /// while another preset is selected. The selected one's is in `config`.
     scripts: [String; Preset::ALL.len()],
+    /// Started in agent mode when the app opens.
+    autostart: bool,
 }
 
 pub struct Creator {
@@ -97,6 +127,8 @@ impl Creator {
 
         let c = this.clone();
         g.on_set_name(move |name| c.edit(|d| d.name = name.into()));
+        let c = this.clone();
+        g.on_set_autostart(move |on| c.edit(|d| d.autostart = on));
         let c = this.clone();
         g.on_set_preset(move |index| c.set_preset(index));
         let c = this.clone();
@@ -207,7 +239,32 @@ impl Creator {
             c.edit(|d| d.config.disk_gb = (gb.max(0) as u32).max(db::DISK_MIN_GB))
         });
 
+        // The defaults in Preferences; a draft in progress keeps its values.
+        let host = Host::read();
+        let (cpus, memory_gb, disk_gb) = vm_defaults(&this.db, &host);
+        let g = ui.global::<VmDefaults>();
+        g.set_cpus(cpus as i32);
+        g.set_memory_gb(memory_gb as i32);
+        g.set_disk_gb(disk_gb as i32);
+        g.set_max_cpus(host.cpus as i32);
+        g.set_max_memory_gb(host.max_memory_gb() as i32);
+        g.set_min_disk_gb(db::DISK_MIN_GB as i32);
+        g.set_host_line(host.line().into());
+        let c = this.clone();
+        g.on_set_cpus(move |cpus| c.save_default(DEFAULT_CPUS_KEY, cpus));
+        let c = this.clone();
+        g.on_set_memory(move |gb| c.save_default(DEFAULT_MEMORY_KEY, gb));
+        let c = this.clone();
+        g.on_set_disk(move |gb| c.save_default(DEFAULT_DISK_KEY, gb));
+
         this
+    }
+
+    /// Stores a resource default from Preferences; the next draft starts with it.
+    fn save_default(&self, key: &str, value: i32) {
+        if let Err(error) = self.db.set_preference(key, &value.max(1).to_string()) {
+            eprintln!("Couldn't save the {key} preference: {error}");
+        }
     }
 
     /// Shows the creation screen: a new draft, or the one in progress.
@@ -218,7 +275,11 @@ impl Creator {
         if self.draft.borrow().is_none() {
             let host = Host::read();
             let preset = Preset::ClaudeCode;
-            let mut config = Config {
+            let (cpus, memory_gb, disk_gb) = vm_defaults(&self.db, &host);
+            let config = Config {
+                cpus,
+                memory_mib: memory_gb * 1024,
+                disk_gb,
                 command: preset.command().into(),
                 arguments: preset.arguments(),
                 provision_script: preset.provision_script().into(),
@@ -226,9 +287,6 @@ impl Creator {
                 port_forwards: preset.port_forwards(),
                 ..Config::default()
             };
-            // At most half of the Mac, so the Mac stays usable.
-            config.cpus = config.cpus.min((host.cpus / 2).max(1));
-            config.memory_mib = config.memory_mib.min((host.memory_gb / 2).max(1) * 1024);
             // A random name the user can keep or replace. A taken one is re-rolled a few
             // times; if all are taken, the name validation reports it.
             let mut name = String::new();
@@ -244,6 +302,7 @@ impl Creator {
                 config,
                 custom_command: String::new(),
                 scripts: Preset::ALL.map(|preset| preset.provision_script().into()),
+                autostart: false,
             });
 
             let g = ui.global::<Creation>();
@@ -290,7 +349,7 @@ impl Creator {
             return;
         };
         let g = ui.global::<Creation>();
-        let (name, config, issues) = {
+        let (name, autostart, config, issues) = {
             let draft = self.draft.borrow();
             let Some(d) = draft.as_ref() else {
                 return;
@@ -300,7 +359,12 @@ impl Creator {
             config
                 .environment
                 .retain(|var| !var.name.is_empty() || !var.value.is_empty());
-            (d.name.trim().to_owned(), config, self.issues(d))
+            (
+                d.name.trim().to_owned(),
+                d.autostart,
+                config,
+                self.issues(d),
+            )
         };
         if issues.iter().any(|issue| issue.blocks_create) {
             return self.refresh();
@@ -308,7 +372,7 @@ impl Creator {
         let start = start && issues.is_empty();
 
         let id = uuid::Uuid::now_v7().to_string();
-        match self.create_instance(&id, &name, &config) {
+        match self.create_instance(&id, &name, autostart, &config) {
             Ok(instance) => {
                 if let Some(row) = self.draft_row() {
                     self.instances.remove(row);
@@ -324,7 +388,13 @@ impl Creator {
     }
 
     /// Clones the instance's disk and stores the instance; on failure nothing stays behind.
-    fn create_instance(&self, id: &str, name: &str, config: &Config) -> db::Result<db::Instance> {
+    fn create_instance(
+        &self,
+        id: &str,
+        name: &str,
+        autostart: bool,
+        config: &Config,
+    ) -> db::Result<db::Instance> {
         let dir = db::instance_dir(id)?;
         let disk = dir.join("root.ext4");
         let created = guest::base_rootfs()
@@ -333,7 +403,7 @@ impl Creator {
             .and_then(|()| {
                 let (kernel, base) = (guest::current_kernel(), guest::current_base());
                 self.db
-                    .create_instance(id, name, &disk, kernel, base, config)
+                    .create_instance(id, name, &disk, kernel, base, autostart, config)
             });
         if created.is_err() {
             let _ = std::fs::remove_dir_all(&dir);
@@ -418,6 +488,7 @@ impl Creator {
         let g = ui.global::<Creation>();
         let c = &d.config;
         g.set_name(d.name.as_str().into());
+        g.set_autostart(d.autostart);
         g.set_script(c.provision_script.as_str().into());
         g.set_command(c.command.as_str().into());
         g.set_working_directory(c.working_directory.as_str().into());

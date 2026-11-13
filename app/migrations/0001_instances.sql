@@ -7,6 +7,8 @@ CREATE TABLE instances (
     kernel     TEXT NOT NULL,                       -- the guest kernel the disk's modules match (guest.rs)
     base       TEXT NOT NULL,                       -- the base rootfs the disk was cloned from (guest.rs); written once, read by nothing yet
     provisioned_at INTEGER,                         -- NULL until a provisioning run succeeded
+    position   INTEGER NOT NULL DEFAULT 0,          -- the sidebar's order, ascending; new instances go first
+    autostart  INTEGER NOT NULL DEFAULT 0 CHECK (autostart IN (0, 1)), -- started in agent mode when the app opens
     created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
 ) STRICT;
 

@@ -1,5 +1,6 @@
 // Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
+import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem, SnapshotItem } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
@@ -11,11 +12,11 @@ import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
 import { Snapshots, SnapshotsTab } from "snapshots.slint";
-import { Updates, UpdateState, PreferencesView } from "preferences.slint";
+import { Updates, UpdateState, VmDefaults, PreferencesView } from "preferences.slint";
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 import { LicensesWindow, LicenseGroup, LicensedCrate } from "licenses.slint";
 
-export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, Snapshots, SnapshotItem, LicensesWindow, LicenseGroup, LicensedCrate }
+export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, VmDefaults, Snapshots, SnapshotItem, LicensesWindow, LicenseGroup, LicensedCrate }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
@@ -42,6 +43,8 @@ export component AppWindow inherits Window {
     callback open-url(string);
     callback open-licenses();
     callback drag-window();
+    // A sidebar row was dragged from one index to another; `to` is its index after the move.
+    callback move-instance(from: int, to: int);
 
     property <InstanceItem> current: instances[selected-index];
     property <string> current-id: current.id;
@@ -53,6 +56,25 @@ export component AppWindow inherits Window {
     }
     property <bool> in-maintenance: current.state == InstanceState.maintenance;
     property <bool> show-creation: creating && (selected-index < 0 || current.state == InstanceState.draft);
+
+    // While a sidebar row is dragged by its grip: its index (-1 otherwise), the pointer's y in
+    // window coordinates, the row under the pointer, and the slot (0 to the count) it would go to.
+    property <int> drag-from: -1;
+    property <length> pointer-y;
+    property <int> drop-row: -1;
+    property <int> drop-slot: -1;
+    property <bool> pointer-inside: root.pointer-y >= list.absolute-position.y && root.pointer-y < list.absolute-position.y + list.height;
+    // Dropping now would change the order.
+    property <bool> drop-moves: root.drag-from >= 0 && root.pointer-inside && root.drop-slot >= 0 && root.drop-slot != root.drag-from && root.drop-slot != root.drag-from + 1;
+
+    function end-drag(drop: bool) {
+        if drop && root.drop-moves {
+            root.move-instance(root.drag-from, root.drop-slot > root.drag-from ? root.drop-slot - 1 : root.drop-slot);
+        }
+        root.drag-from = -1;
+        root.drop-row = -1;
+        root.drop-slot = -1;
+    }
 
     pure function state-icon(state: InstanceState) -> image {
         if state == InstanceState.maintenance {
@@ -163,81 +185,174 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                for item[index] in instances: HorizontalLayout {
-                    padding-left: 10px;
-                    padding-right: 10px;
-                    padding-top: 2px;
-                    padding-bottom: 2px;
-                    vertical-stretch: 0;
+                list := ScrollView {
+                    vertical-stretch: 1;
+                    content-width: self.visible-width;
+                    horizontal-scrollbar-policy: always-off;
 
-                    Rectangle {
-                        property <bool> selected: index == root.selected-index && !root.show-preferences;
+                    // Near the list's top or bottom edge, a drag scrolls the list.
+                    property <length> edge: 24px;
+                    property <bool> near-top: root.pointer-y < self.absolute-position.y + self.edge;
+                    property <bool> near-bottom: root.pointer-y > self.absolute-position.y + self.height - self.edge;
 
-                        border-radius: Theme.radius-item;
-                        clip: true;
-                        background: selected ? Theme.raise : (item-touch.has-hover ? Theme.hover : transparent);
-                        accessible-role: list-item;
-                        accessible-label: item.name;
-                        accessible-description: item.summary;
-                        accessible-item-selected: selected;
-
-                        Rectangle {
-                            x: 0;
-                            width: 2px;
-                            visible: selected;
-                            background: item.state == InstanceState.maintenance ? Theme.warn : Theme.acc;
+                    Timer {
+                        interval: 16ms;
+                        running: root.drag-from >= 0 && (list.near-top || list.near-bottom);
+                        triggered => {
+                            list.content-y = clamp(list.content-y + (list.near-top ? 6px : -6px), min(0px, list.visible-height - list.content-height), 0px);
                         }
+                    }
 
-                        HorizontalLayout {
-                            padding-left: 12px;
-                            padding-right: 12px;
-                            padding-top: 10px;
-                            padding-bottom: 10px;
-                            spacing: 10px;
+                    VerticalLayout {
+                        alignment: start;
+                        // Room for the drop marker above the first row and below the last.
+                        padding-top: 2px;
+                        padding-bottom: 2px;
 
-                            VerticalLayout {
-                                alignment: start;
-                                padding-top: 2px;
-                                Image {
-                                    source: root.state-icon(item.state);
-                                    colorize: root.state-color(item.state);
+                        for item[index] in instances: HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            padding-top: 2px;
+                            padding-bottom: 2px;
+                            vertical-stretch: 0;
+
+                            Rectangle {
+                                property <bool> selected: index == root.selected-index && !root.show-preferences;
+                                // The draft has no stored order: it can't be dragged, nor anything above it.
+                                property <bool> draft: item.state == InstanceState.draft;
+                                property <bool> dragged: root.drag-from == index;
+                                property <bool> hovered: item-touch.has-hover || grip.has-hover;
+                                // Widened by half the gap, so the gaps between rows count too.
+                                property <bool> under-pointer: root.drag-from >= 0 && !self.draft && root.pointer-y >= self.absolute-position.y - 2px && root.pointer-y < self.absolute-position.y + self.height + 2px;
+                                property <bool> lower-half: root.pointer-y >= self.absolute-position.y + self.height / 2;
+
+                                function aim() {
+                                    if self.under-pointer {
+                                        root.drop-row = index;
+                                        root.drop-slot = self.lower-half ? index + 1 : index;
+                                    }
+                                }
+                                changed under-pointer => {
+                                    self.aim();
+                                }
+                                changed lower-half => {
+                                    self.aim();
+                                }
+
+                                accessible-role: list-item;
+                                accessible-label: item.name;
+                                accessible-description: item.summary;
+                                accessible-item-selected: selected;
+
+                                // Clipped, so the selection bar follows the rounded corners; the drop
+                                // marker sits outside it.
+                                Rectangle {
+                                    border-radius: Theme.radius-item;
+                                    clip: true;
+                                    background: dragged ? Theme.acc.transparentize(85%) : selected ? Theme.raise : (hovered && root.drag-from < 0 ? Theme.hover : transparent);
+                                    border-width: dragged ? 1px : 0px;
+                                    border-color: Theme.acc;
+
+                                    Rectangle {
+                                        x: 0;
+                                        width: 2px;
+                                        visible: selected && !dragged;
+                                        background: item.state == InstanceState.maintenance ? Theme.warn : Theme.acc;
+                                    }
+                                }
+
+                                HorizontalLayout {
+                                    padding-left: 12px;
+                                    // Room for the grip.
+                                    padding-right: 26px;
+                                    padding-top: 10px;
+                                    padding-bottom: 10px;
+                                    spacing: 10px;
+
+                                    VerticalLayout {
+                                        alignment: start;
+                                        padding-top: 2px;
+                                        Image {
+                                            source: root.state-icon(item.state);
+                                            colorize: root.state-color(item.state);
+                                            width: 16px;
+                                            height: 16px;
+                                            accessible-role: none;
+                                        }
+                                    }
+
+                                    VerticalLayout {
+                                        spacing: 3px;
+                                        Text {
+                                            text: item.name;
+                                            color: Theme.tx;
+                                            font-weight: selected ? Theme.weight-medium : Theme.weight-regular;
+                                            overflow: elide;
+                                        }
+
+                                        Text {
+                                            text: item.summary;
+                                            font-size: Theme.font-meta;
+                                            color: item.state == InstanceState.running ? Theme.tx2 : root.state-color(item.state);
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+
+                                item-touch := TouchArea {
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.show-preferences = false;
+                                        root.selected-index = index;
+                                        root.current-tab = 0;
+                                    }
+                                }
+
+                                // Only the grip starts a drag, so the row stays clickable. It keeps the
+                                // mouse until release, and with it the cursor.
+                                grip := TouchArea {
+                                    x: parent.width - self.width - 6px;
                                     width: 16px;
-                                    height: 16px;
-                                    accessible-role: none;
-                                }
-                            }
+                                    enabled: !draft;
+                                    mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+                                    moved => {
+                                        if self.pressed {
+                                            root.drag-from = index;
+                                            root.pointer-y = self.absolute-position.y + self.mouse-y;
+                                        }
+                                    }
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.up {
+                                            root.end-drag(true);
+                                        } else if event.kind == PointerEventKind.cancel {
+                                            root.end-drag(false);
+                                        }
+                                    }
 
-                            VerticalLayout {
-                                spacing: 3px;
-                                Text {
-                                    text: item.name;
-                                    color: Theme.tx;
-                                    font-weight: selected ? Theme.weight-medium : Theme.weight-regular;
-                                    overflow: elide;
+                                    Image {
+                                        x: 1px;
+                                        y: (parent.height - self.height) / 2;
+                                        width: 14px;
+                                        height: 14px;
+                                        visible: !draft && (hovered || dragged);
+                                        source: @image-url("icons/grip-vertical.svg");
+                                        colorize: Theme.tx3;
+                                        accessible-role: none;
+                                    }
                                 }
 
-                                Text {
-                                    text: item.summary;
-                                    font-size: Theme.font-meta;
-                                    color: item.state == InstanceState.running ? Theme.tx2 : root.state-color(item.state);
-                                    overflow: elide;
+                                // Where the dragged row would land: above or below this row.
+                                if root.drop-moves && root.drop-row == index && (root.drop-slot == index || root.drop-slot == index + 1): Rectangle {
+                                    x: 0;
+                                    y: root.drop-slot == index ? -3px : parent.height + 1px;
+                                    width: parent.width;
+                                    height: 2px;
+                                    border-radius: 1px;
+                                    background: Theme.acc;
                                 }
-                            }
-                        }
-
-                        item-touch := TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.show-preferences = false;
-                                root.selected-index = index;
-                                root.current-tab = 0;
                             }
                         }
                     }
-                }
-
-                Rectangle {
-                    vertical-stretch: 1;
                 }
 
                 Rectangle {

@@ -87,6 +87,8 @@ pub struct Instance {
     /// Whether a provisioning run succeeded on the disk; until then, starting the
     /// instance provisions it first.
     pub provisioned: bool,
+    /// Started in agent mode when the app opens.
+    pub autostart: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug, Serialize, Deserialize)]
@@ -340,7 +342,7 @@ impl Db {
     pub fn instances(&self) -> Result<Vec<Instance>> {
         let mut statement = self
             .conn
-            .prepare(&format!("{INSTANCE_QUERY} ORDER BY i.name"))?;
+            .prepare(&format!("{INSTANCE_QUERY} ORDER BY i.position, i.name"))?;
         let instances = statement
             .query_map([], instance_from_row)?
             .collect::<rusqlite::Result<_>>()?;
@@ -360,6 +362,8 @@ impl Db {
     /// `base` names the base rootfs the disk was cloned from. Nothing reads it yet: it is
     /// there so a later app can tell disks of older bases apart if what the guest binaries
     /// expect of the disk (their mount point, the supervisor's unit) ever changes.
+    /// The instance goes first in the sidebar's order.
+    #[allow(clippy::too_many_arguments)]
     pub fn create_instance(
         &self,
         id: &str,
@@ -367,12 +371,22 @@ impl Db {
         disk_path: &Path,
         kernel: &str,
         base: &str,
+        autostart: bool,
         config: &Config,
     ) -> Result<Instance> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO instances (id, name, disk_path, kernel, base) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, name, disk_path.to_string_lossy(), kernel, base],
+            "INSERT INTO instances (id, name, disk_path, kernel, base, autostart, position)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6,
+                 (SELECT coalesce(min(position), 1) - 1 FROM instances))",
+            params![
+                id,
+                name,
+                disk_path.to_string_lossy(),
+                kernel,
+                base,
+                autostart
+            ],
         )?;
         put_revision(&tx, &self.cipher, id, 1, config)?;
         tx.commit()?;
@@ -383,6 +397,7 @@ impl Db {
             kernel: kernel.into(),
             command: config.command.clone(),
             provisioned: false,
+            autostart,
         })
     }
 
@@ -405,6 +420,27 @@ impl Db {
     pub fn rename_instance(&self, id: &str, name: &str) -> Result<()> {
         self.conn
             .execute("UPDATE instances SET name = ?2 WHERE id = ?1", [id, name])?;
+        Ok(())
+    }
+
+    pub fn set_autostart(&self, id: &str, autostart: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE instances SET autostart = ?2 WHERE id = ?1",
+            params![id, autostart],
+        )?;
+        Ok(())
+    }
+
+    /// Stores the sidebar's order: `ids` first to last.
+    pub fn reorder_instances(&self, ids: &[String]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        for (position, id) in ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE instances SET position = ?2 WHERE id = ?1",
+                params![id, position as i64],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -581,7 +617,7 @@ impl Db {
 const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
     (SELECT r.command FROM instance_revisions r WHERE r.instance_id = i.id
      ORDER BY r.revision DESC LIMIT 1),
-    i.provisioned_at IS NOT NULL, i.kernel
+    i.provisioned_at IS NOT NULL, i.kernel, i.autostart
     FROM instances i";
 
 /// Whether a snapshot links the revision of `instance_revisions` in the current row.
@@ -636,6 +672,7 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
         command: row.get(3)?,
         provisioned: row.get(4)?,
         kernel: row.get(5)?,
+        autostart: row.get(6)?,
     })
 }
 

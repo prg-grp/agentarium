@@ -212,14 +212,18 @@ pub struct GuestAssets {
     ui: slint::Weak<AppWindow>,
     db: Rc<Db>,
     downloading: Cell<bool>,
+    /// Runs the first time the guest assets are ready.
+    ready: RefCell<Option<Box<dyn FnOnce()>>>,
 }
 
 impl GuestAssets {
-    pub fn new(ui: &AppWindow, db: Rc<Db>) -> Rc<GuestAssets> {
+    /// `ready` runs once the guest assets are there: right away, or after the download.
+    pub fn new(ui: &AppWindow, db: Rc<Db>, ready: impl FnOnce() + 'static) -> Rc<GuestAssets> {
         let assets = Rc::new(GuestAssets {
             ui: ui.as_weak(),
             db,
             downloading: Cell::new(false),
+            ready: RefCell::new(Some(Box::new(ready))),
         });
         ASSETS.set(Rc::downgrade(&assets));
         let g = ui.global::<GuestImage>();
@@ -345,6 +349,11 @@ impl GuestAssets {
     }
 
     fn show(&self, state: GuestState, step: &str, error: &str) {
+        if state == GuestState::Ready
+            && let Some(ready) = self.ready.borrow_mut().take()
+        {
+            ready();
+        }
         let Some(ui) = self.ui.upgrade() else {
             return;
         };

@@ -3,7 +3,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
 import { AppButton, ButtonKind, SegmentedControl, ProgressBar } from "widgets.slint";
-import { Message } from "config-fields.slint";
+import { Message, ResourceFields } from "config-fields.slint";
 import { Group } from "settings.slint";
 import { GuestImage } from "guest-download.slint";
 import { Snapshots } from "snapshots.slint";
@@ -25,6 +25,20 @@ export global Updates {
     callback check();
     // Shuts the running instances down, then installs the update and relaunches.
     callback restart();
+}
+
+// The processors, memory and disk new instances start with. Rust (src/create.rs) owns it.
+export global VmDefaults {
+    in-out property <int> cpus;
+    in-out property <int> memory-gb;
+    in-out property <int> disk-gb;
+    in property <int> max-cpus: 1;
+    in property <int> max-memory-gb: 1;
+    in property <int> min-disk-gb: 1;
+    in property <string> host-line;
+    callback set-cpus(cpus: int);
+    callback set-memory(gb: int);
+    callback set-disk(gb: int);
 }
 
 // A label on the left, its value or control on the right.
@@ -200,6 +214,30 @@ export component PreferencesView {
                             color: Theme.tx2;
                             font-size: Theme.font-small;
                             wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Group {
+                    title: "New instances";
+                    description: "The processors, memory and disk new instances start with. You can change them while creating an instance and later in its settings.";
+
+                    ResourceFields {
+                        cpus <=> VmDefaults.cpus;
+                        memory-gb <=> VmDefaults.memory-gb;
+                        disk-gb <=> VmDefaults.disk-gb;
+                        max-cpus: VmDefaults.max-cpus;
+                        max-memory-gb: VmDefaults.max-memory-gb;
+                        min-disk-gb: VmDefaults.min-disk-gb;
+                        host-line: VmDefaults.host-line;
+                        set-cpus(cpus) => {
+                            VmDefaults.set-cpus(cpus);
+                        }
+                        set-memory(gb) => {
+                            VmDefaults.set-memory(gb);
+                        }
+                        set-disk(gb) => {
+                            VmDefaults.set-disk(gb);
                         }
                     }
                 }

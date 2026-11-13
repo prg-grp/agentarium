@@ -1,7 +1,7 @@
 //! The Settings tab: the shown instance's configuration. See design/settings-pending.md.
 //!
 //! Edits stay here until the user saves: Save writes them into the pending revision (a new
-//! one if the latest was booted) and renames the instance; while the instance runs, it also
+//! one if the latest was booted), renames the instance and stores its autostart flag; while the instance runs, it also
 //! applies them to the running VM where it can (`VmControl::apply`), restarting the agent or
 //! rebooting when the edits need that (`SaveKind`). The footer then says what happened. The
 //! UI's `Settings` global shows the edits; every edit goes through a callback.
@@ -24,11 +24,14 @@ use crate::{AppWindow, InstanceItem, SaveKind, Settings};
 struct Shown {
     id: String,
     saved_name: String,
+    saved_autostart: bool,
     /// The latest revision's configuration.
     saved: Config,
     /// The disk's current size in GiB, at least `DISK_MIN_GB`: disks only grow.
     min_disk_gb: u32,
     name: String,
+    /// Started in agent mode when the app opens; not part of a revision.
+    autostart: bool,
     config: Config,
     /// Why the last save failed; cleared by the next edit.
     save_error: String,
@@ -74,6 +77,8 @@ impl SettingsEditor {
 
         let s = this.clone();
         g.on_set_name(move |name| s.edit(|e| e.name = name.into()));
+        let s = this.clone();
+        g.on_set_autostart(move |on| s.edit(|e| e.autostart = on));
         let s = this.clone();
         g.on_set_command(move |command| s.edit(|e| e.config.command = command.into()));
         let s = this.clone();
@@ -173,6 +178,7 @@ impl SettingsEditor {
         g.on_discard(move || {
             s.edit(|e| {
                 e.name = e.saved_name.clone();
+                e.autostart = e.saved_autostart;
                 e.config = e.saved.clone();
             });
             s.show_fields();
@@ -197,11 +203,13 @@ impl SettingsEditor {
                 Ok(Shown {
                     id: id.into(),
                     saved_name: instance.name.clone(),
+                    saved_autostart: instance.autostart,
                     min_disk_gb: (std::fs::metadata(&instance.disk_path)?
                         .len()
                         .div_ceil(1 << 30) as u32)
                         .max(db::DISK_MIN_GB),
                     name: instance.name,
+                    autostart: instance.autostart,
                     config: saved.clone(),
                     saved,
                     save_error: String::new(),
@@ -244,6 +252,7 @@ impl SettingsEditor {
         let g = ui.global::<Settings>();
         let c = &e.config;
         g.set_name(e.name.as_str().into());
+        g.set_autostart(e.autostart);
         g.set_command(c.command.as_str().into());
         g.set_script(c.provision_script.as_str().into());
         g.set_working_directory(c.working_directory.as_str().into());
@@ -272,7 +281,9 @@ impl SettingsEditor {
         g.set_network_allow_local(c.network_allow_local);
         self.lists.show(c);
 
-        let dirty = e.name.trim() != e.saved_name || cleaned(c) != e.saved;
+        let dirty = e.name.trim() != e.saved_name
+            || e.autostart != e.saved_autostart
+            || cleaned(c) != e.saved;
         let check = check(e, name_error);
         let kind = save_kind(c, self.control.live(&e.id));
         g.set_dirty(dirty);
@@ -301,7 +312,7 @@ impl SettingsEditor {
     /// Saves the edits and applies them to the running instance, then restarts its agent
     /// or reboots it in agent mode if the edits need that (`save_kind`).
     fn save(&self) {
-        let (id, name, config, rename, write, kind) = {
+        let (id, name, autostart, config, rename, write, kind) = {
             let shown = self.shown.borrow();
             let Some(e) = shown.as_ref() else {
                 return;
@@ -317,15 +328,19 @@ impl SettingsEditor {
             let config = cleaned(&e.config);
             let rename = name != e.saved_name;
             let write = config != e.saved;
-            (e.id.clone(), name, config, rename, write, kind)
+            let autostart = (e.autostart != e.saved_autostart).then_some(e.autostart);
+            (e.id.clone(), name, autostart, config, rename, write, kind)
         };
-        if !rename && !write {
+        if !rename && !write && autostart.is_none() {
             return;
         }
 
         let saved = (|| -> db::Result<Option<i64>> {
             if rename {
                 self.db.rename_instance(&id, &name)?;
+            }
+            if let Some(autostart) = autostart {
+                self.db.set_autostart(&id, autostart)?;
             }
             if write {
                 return Ok(Some(self.db.save_config(&id, &config)?));
@@ -366,11 +381,8 @@ impl SettingsEditor {
         }
     }
 
-    /// Updates the instance's sidebar row after a save and keeps it in name order.
+    /// Updates the instance's sidebar row after a save.
     pub fn update_row(&self, id: &str, name: &str, command: &str) {
-        let Some(ui) = self.ui.upgrade() else {
-            return;
-        };
         let Some((row, mut item)) = (0..self.instances.row_count())
             .filter_map(|row| Some((row, self.instances.row_data(row)?)))
             .find(|(_, item)| item.id == id)
@@ -379,30 +391,7 @@ impl SettingsEditor {
         };
         item.name = name.into();
         item.agent = command.into();
-
-        let selected = usize::try_from(ui.get_selected_index())
-            .ok()
-            .and_then(|row| self.instances.row_data(row))
-            .map(|item| item.id);
-        self.instances.remove(row);
-        let lower = name.to_lowercase();
-        let row = (0..self.instances.row_count())
-            .find(|&row| {
-                self.instances
-                    .row_data(row)
-                    .is_some_and(|item| item.name.to_lowercase() > lower)
-            })
-            .unwrap_or(self.instances.row_count());
-        self.instances.insert(row, item);
-        if let Some(selected) = selected
-            && let Some(row) = (0..self.instances.row_count()).find(|&row| {
-                self.instances
-                    .row_data(row)
-                    .is_some_and(|item| item.id == selected)
-            })
-        {
-            ui.set_selected_index(row as i32);
-        }
+        self.instances.set_row_data(row, item);
     }
 }
 
