@@ -201,3 +201,12 @@ export struct RunItem {
     detail: string,
     live: bool,
 }
+
+// A snapshot in the Snapshots tab (src/snapshots.rs), newest first.
+export struct SnapshotItem {
+    name: string,
+    // When it was taken, local: "Nov 13, 2026, 14:03".
+    created: string,
+    // The configuration revision restoring it brings back.
+    revision: int,
+}

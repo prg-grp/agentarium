@@ -1,7 +1,7 @@
 // Main window: sidebar, instance header, tabs. See design/app-shell.md.
 
 import { Theme } from "theme.slint";
-import { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem } from "types.slint";
+import { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem, SnapshotItem } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
 import { TerminalSession, TerminalView } from "terminal.slint";
@@ -10,11 +10,12 @@ import { Activity, ActivityTab } from "activity.slint";
 import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
+import { Snapshots, SnapshotsTab } from "snapshots.slint";
 import { Updates, UpdateState, PreferencesView } from "preferences.slint";
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 import { LicensesWindow, LicenseGroup, LicensedCrate } from "licenses.slint";
 
-export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, LicensesWindow, LicenseGroup, LicensedCrate }
+export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, Snapshots, SnapshotItem, LicensesWindow, LicenseGroup, LicensedCrate }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;
@@ -450,7 +451,7 @@ export component AppWindow inherits Window {
                         spacing: 28px;
                         alignment: start;
 
-                        for tab-name[tab-index] in ["Agent", "Terminal", "Activity", "Status", "Logs", "Settings"]: Rectangle {
+                        for tab-name[tab-index] in ["Agent", "Terminal", "Activity", "Status", "Logs", "Snapshots", "Settings"]: Rectangle {
                             property <bool> active: tab-index == root.current-tab;
 
                             accessible-role: tab;
@@ -528,7 +529,12 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if current-tab == 5: SettingsTab {
+                if current-tab == 5: SnapshotsTab {
+                    vertical-stretch: 1;
+                    item: current;
+                }
+
+                if current-tab == 6: SettingsTab {
                     vertical-stretch: 1;
                     item: current;
                 }

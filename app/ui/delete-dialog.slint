@@ -14,6 +14,7 @@ export global Deletion {
     // "" when the disk's size couldn't be read.
     in property <string> disk-size;
     in property <int> revisions;
+    in property <int> snapshots;
     // Host paths of the instance's shared folders.
     in property <[string]> folders;
     // Set while the instance shuts down and is deleted.
@@ -151,6 +152,17 @@ export component DeleteDialog {
                     icon: @image-url("icons/adjustments-horizontal.svg");
                     icon-color: Theme.bad;
                     text: Deletion.revisions == 1 ? "Configuration and its revision" : "Configuration and its \{Deletion.revisions} revisions";
+                }
+
+                if Deletion.snapshots > 0: Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+
+                if Deletion.snapshots > 0: Effect {
+                    icon: @image-url("icons/device-floppy.svg");
+                    icon-color: Theme.bad;
+                    text: Deletion.snapshots == 1 ? "1 snapshot" : "\{Deletion.snapshots} snapshots";
                 }
             }
 

@@ -1,4 +1,4 @@
-// Preferences: app updates, the guest image and the licenses. See design/preferences.md.
+// Preferences: app updates, snapshots, the guest image and the licenses. See design/preferences.md.
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -6,6 +6,7 @@ import { AppButton, ButtonKind, SegmentedControl, ProgressBar } from "widgets.sl
 import { Message } from "config-fields.slint";
 import { Group } from "settings.slint";
 import { GuestImage } from "guest-download.slint";
+import { Snapshots } from "snapshots.slint";
 
 export enum UpdateState { unavailable, checking, up-to-date, downloading, ready, failed }
 
@@ -199,6 +200,39 @@ export component PreferencesView {
                             color: Theme.tx2;
                             font-size: Theme.font-small;
                             wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Group {
+                    title: "Snapshots";
+                    description: "A snapshot keeps an instance's disk and configuration, so you can return to it from the instance's Snapshots tab.";
+
+                    Row {
+                        label: "After provisioning";
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                alignment: start;
+                                SegmentedControl {
+                                    options: ["On", "Off"];
+                                    selected: Snapshots.auto-snapshot ? 0 : 1;
+                                    changed(index) => {
+                                        Snapshots.set-auto-snapshot(index == 0);
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: Snapshots.auto-snapshot
+                                    ? "New instances get a snapshot named \"Freshly provisioned\" once provisioning succeeds, so you can reset them later."
+                                    : "No snapshot is taken automatically.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
                         }
                     }
                 }

@@ -348,9 +348,10 @@ impl Vm {
     }
 }
 
-/// Creates an instance's root disk at `disk` as an APFS clone of the base rootfs
-/// (`guest::base_rootfs`): instant, and it shares the base's blocks until the guest writes.
-/// There is no copy fallback, as a copy would write out the whole sparse image.
+/// Creates a disk at `disk` as an APFS clone of `base`: an instance's root disk from the base
+/// rootfs (`guest::base_rootfs`), or a snapshot of a stopped instance's disk and back.
+/// Instant, and it shares the source's blocks until either is written to. There is no copy
+/// fallback, as a copy would write out the whole sparse image.
 pub fn create_disk(base: &Path, disk: &Path) -> Result<(), String> {
     if let Some(dir) = disk.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;

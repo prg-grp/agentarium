@@ -19,6 +19,7 @@ mod observer;
 mod policy;
 mod preset;
 mod settings;
+mod snapshots;
 mod terminal;
 mod update;
 mod vm;
@@ -68,6 +69,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let settings =
         settings::SettingsEditor::new(&ui, db.clone(), instances.clone(), control.clone());
     let activity = activity::ActivityView::new(&ui, db.clone(), control.clone());
+    let snapshots =
+        snapshots::SnapshotsView::new(&ui, db.clone(), control.clone(), settings.clone());
     let _guest = guest::GuestAssets::new(&ui, db.clone());
     let c = control.clone();
     ui.global::<GuestImage>().on_quit(move || c.quit());
@@ -120,15 +123,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     ui.on_create_instance(move || creator.open());
 
     // The Agent tab shows the selected instance's session, the Terminal tab a shell beside
-    // it, the Logs tab its boot log; the Activity tab its runs' activity, the Settings tab
-    // its configuration.
+    // it, the Logs tab its boot log; the Activity tab its runs' activity, the Snapshots tab
+    // its snapshots, the Settings tab its configuration.
     let c = control.clone();
     let s = settings.clone();
     let a = activity.clone();
+    let sn = snapshots.clone();
     ui.on_instance_selected(move |id| {
         c.select(&id);
         s.open(&id);
         a.open(&id);
+        sn.open(&id);
     });
     let c = control.clone();
     let a = activity.clone();
@@ -171,6 +176,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         control.select(&item.id);
         settings.open(&item.id);
         activity.open(&item.id);
+        snapshots.open(&item.id);
     }
 
     let c = control.clone();

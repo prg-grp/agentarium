@@ -227,7 +227,8 @@ Terminal recording is an unresolved product choice. Do not imply that terminal o
 | Maintenance session | [design/maintenance-session.md](design/maintenance-session.md) | Persistent mode indication, root shell |
 | Stopped instance with history | [design/stopped-history.md](design/stopped-history.md) | Start actions, run picker, retention boundary |
 | Settings with pending changes | [design/settings-pending.md](design/settings-pending.md) | Restart-required bar, per-rule change marks |
-| Preferences | [design/preferences.md](design/preferences.md) | Update channel and status, restart to update, guest image source |
+| Snapshots tab | [design/snapshots.md](design/snapshots.md) | Create, restore and delete snapshots, inline confirmation |
+| Preferences | [design/preferences.md](design/preferences.md) | Update channel and status, snapshot after provisioning, restart to update, guest image source |
 | Guest image download | [design/guest-download.md](design/guest-download.md) | Blocking dialog: why the files are needed, start download, quit |
 
 ## Shared compositions (flagged for the engineer)

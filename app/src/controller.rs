@@ -61,10 +61,12 @@ use crate::guest;
 use crate::netlog;
 use crate::observer::{self, Observed, Summary};
 use crate::policy::Policy;
+use crate::snapshots;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
 use crate::{
-    AppWindow, Deletion, ForwardItem, InstanceItem, InstanceState, StatusReading, Tone, Usage,
+    AppWindow, Deletion, ForwardItem, InstanceItem, InstanceState, Snapshots, StatusReading, Tone,
+    Usage,
 };
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
@@ -1258,6 +1260,11 @@ impl VmControl {
         g.set_running(self.running.borrow().contains_key(id));
         g.set_disk_size(disk_size.into());
         g.set_revisions(self.db.revision_count(id).unwrap_or(0) as i32);
+        g.set_snapshots(
+            self.db
+                .snapshots(id)
+                .map_or(0, |snapshots| snapshots.len() as i32),
+        );
         g.set_folders(ModelRc::new(VecModel::from(folders)));
         g.set_busy(false);
         g.set_error("".into());
@@ -1548,6 +1555,20 @@ impl VmControl {
             Some(0) => match self.db.mark_provisioned(id) {
                 Ok(()) => {
                     self.update_item(id, |item| item.provisioned = true);
+                    // The VM is stopped, so its disk can be cloned; a failed snapshot
+                    // doesn't keep the agent from starting.
+                    if snapshots::auto_snapshot(&self.db) {
+                        match snapshots::take(&self.db, id, "Freshly provisioned") {
+                            Ok(()) => {
+                                if let Some(ui) = self.ui.upgrade() {
+                                    ui.global::<Snapshots>().invoke_refresh();
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("Couldn't take the snapshot after provisioning: {error}")
+                            }
+                        }
+                    }
                     self.start(id, BootMode::Agent);
                 }
                 Err(error) => failed(&format!("couldn't record the provisioning: {error}")),

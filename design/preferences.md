@@ -1,6 +1,6 @@
 # Preferences
 
-App-wide settings: updates of Agentarium itself, the guest image, and its licenses. Frame: [app-shell.md](app-shell.md) sidebar; the main area shows this view instead of an instance, with no instance header or tab bar.
+App-wide settings: updates of Agentarium itself, snapshots after provisioning, the guest image, and its licenses. Frame: [app-shell.md](app-shell.md) sidebar; the main area shows this view instead of an instance, with no instance header or tab bar.
 
 ## Layout
 
@@ -18,6 +18,11 @@ App-wide settings: updates of Agentarium itself, the guest image, and its licens
 │                  │ [⟳ Restart to update]  Running instances shut down first.            │
 │                  │ What's new in 1.2.0                                                  │
 │                  │ ### Features …                                                       │
+│                  ├──────────────────────────────────────────────────────────────────────┤
+│                  │ Snapshots                                                            │
+│                  │ A snapshot keeps an instance's disk and configuration, so you can …  │
+│                  │ After provisioning  [ On | Off ]                                     │
+│                  │             New instances get a snapshot named "Freshly provisioned" │
 │                  ├──────────────────────────────────────────────────────────────────────┤
 │                  │ Guest image                                                          │
 │                  │ The Linux kernel and root filesystem that new instances start from.  │
@@ -51,6 +56,8 @@ App-wide settings: updates of Agentarium itself, the guest image, and its licens
 - Updates description: "Agentarium checks for new versions every few hours and downloads them in the background."
 - Channel lines: "Releases only." / "Every change to Agentarium as soon as it's built, and every release. Dev builds can have rough edges."
 - Status: "Checking for updates…", "Agentarium is up to date.", "Downloading version X · 42%", "Version X is ready to install.", "Couldn't check for updates: …", "Couldn't download the update: …", "Updates work only in installed builds.", "Shutting instances down to restart…"
+- Snapshots description: "A snapshot keeps an instance's disk and configuration, so you can return to it from the instance's Snapshots tab."
+- Snapshot lines: "New instances get a snapshot named "Freshly provisioned" once provisioning succeeds, so you can reset them later." / "No snapshot is taken automatically."
 - Guest image description: "The Linux kernel and root filesystem that new instances start from. Existing instances keep the one they were created with."
 - About description: "Agentarium is free software under the GNU Affero General Public License v3.0 or later. It's built on open-source crates, each under its own license."
 - Guest source: "From release vX.Y.Z" or "Built locally with make guest".
@@ -59,5 +66,6 @@ App-wide settings: updates of Agentarium itself, the guest image, and its licens
 
 - The app checks at launch and every 4 hours. An update is downloaded right away (as a delta when possible); nothing installs until the user restarts. An update that was downloaded but not installed is applied at the next launch.
 - "Restart to update" stops every running instance gracefully, like quitting, then installs and relaunches.
+- "After provisioning" (segmented "On" / "Off", default On) decides whether a "Freshly provisioned" snapshot is taken once an instance's provisioning succeeds ([snapshots.md](snapshots.md)). Switching saves it at once; it applies to provisioning runs from then on.
 - Switching the channel saves it and checks again; an update found for the other channel is dropped. Dev builds also receive stable releases once those are newer. Switching to Stable never downgrades: the install stays on its version until a newer stable release exists.
 - Until the guest image is ready, [guest-download.md](guest-download.md) blocks the whole app, so this view only ever shows the image as ready.

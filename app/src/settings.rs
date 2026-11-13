@@ -371,7 +371,7 @@ impl SettingsEditor {
     }
 
     /// Updates the instance's sidebar row after a save and keeps it in name order.
-    fn update_row(&self, id: &str, name: &str, command: &str) {
+    pub fn update_row(&self, id: &str, name: &str, command: &str) {
         let Some(ui) = self.ui.upgrade() else {
             return;
         };

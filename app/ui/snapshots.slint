@@ -1,0 +1,240 @@
+// Snapshots tab: snapshots of the instance's disk with their configuration revisions.
+// See design/snapshots.md.
+
+import { ScrollView } from "std-widgets.slint";
+import { Theme } from "theme.slint";
+import { InstanceItem, InstanceState, SnapshotItem } from "types.slint";
+import { AppButton, ButtonKind } from "widgets.slint";
+import { Field, Message } from "config-fields.slint";
+import { Group } from "settings.slint";
+
+// The shown instance's snapshots, and the preference to take one after provisioning.
+// Rust (src/snapshots.rs) owns it.
+export global Snapshots {
+    in property <[SnapshotItem]> items;
+    // The name the create field starts with, e.g. "Snapshot 3".
+    in property <string> suggested-name;
+    // Why the last create, restore or delete failed; "" when nothing did.
+    in property <string> error;
+    // Preferences: take a "Freshly provisioned" snapshot once provisioning succeeded.
+    in property <bool> auto-snapshot: true;
+
+    callback create(name: string);
+    callback restore(index: int);
+    callback delete(index: int);
+    // Lists the shown instance's snapshots again.
+    callback refresh();
+    callback set-auto-snapshot(on: bool);
+}
+
+export component SnapshotsTab {
+    in property <InstanceItem> item;
+
+    // Creating and restoring need the VM stopped, and a provisioned disk.
+    property <bool> can-change: item.state == InstanceState.stopped && item.transition == "" && item.provisioned;
+    // The row asking for confirmation, and whether it asks to delete (or to restore).
+    property <int> confirm-index: -1;
+    property <bool> confirm-delete;
+
+    property <string> id: item.id;
+    property <string> suggested: Snapshots.suggested-name;
+    property <[SnapshotItem]> items: Snapshots.items;
+    init => {
+        name-field.text = suggested;
+    }
+    changed id => {
+        name-field.text = suggested;
+        confirm-index = -1;
+    }
+    changed suggested => {
+        name-field.text = suggested;
+    }
+    changed items => {
+        confirm-index = -1;
+    }
+
+    ScrollView {
+        content-width: self.visible-width;
+        horizontal-scrollbar-policy: always-off;
+
+        VerticalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-bottom: 28px;
+            alignment: start;
+
+            Group {
+                first: true;
+                title: "Snapshots";
+                description: "A snapshot keeps the instance's disk and its configuration. Restoring one replaces both; shared folders on your Mac aren't part of it.";
+
+                HorizontalLayout {
+                    spacing: 10px;
+                    alignment: start;
+
+                    name-field := Field {
+                        width: 320px;
+                        label: "Snapshot name";
+                        placeholder: "Snapshot name";
+                        read-only: !root.can-change;
+                        accepted(text) => {
+                            if root.can-change {
+                                Snapshots.create(text);
+                            }
+                        }
+                    }
+
+                    AppButton {
+                        kind: ButtonKind.neutral;
+                        text: "Create snapshot";
+                        icon: @image-url("icons/plus.svg");
+                        enabled: root.can-change && name-field.text != "";
+                        clicked => {
+                            Snapshots.create(name-field.text);
+                        }
+                    }
+                }
+
+                if !root.item.provisioned: Text {
+                    text: "Snapshots are available once the instance is provisioned.";
+                    color: Theme.tx3;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+
+                if root.item.provisioned && !root.can-change: Text {
+                    text: "Stop the instance to create or restore snapshots.";
+                    color: Theme.tx3;
+                    font-size: Theme.font-small;
+                    wrap: word-wrap;
+                }
+
+                if Snapshots.error != "": Message {
+                    icon: @image-url("icons/alert-triangle.svg");
+                    text: Snapshots.error;
+                    color: Theme.bad;
+                }
+            }
+
+            Rectangle {
+                height: 1px;
+                background: Theme.line;
+            }
+
+            if Snapshots.items.length == 0: HorizontalLayout {
+                padding-top: 18px;
+
+                Text {
+                    text: "No snapshots yet.";
+                    color: Theme.tx3;
+                    font-size: Theme.font-small;
+                }
+            }
+
+            for snapshot[index] in Snapshots.items: VerticalLayout {
+                property <bool> confirming: index == root.confirm-index;
+
+                HorizontalLayout {
+                    padding-top: 12px;
+                    padding-bottom: 12px;
+                    spacing: 10px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 3px;
+                        horizontal-stretch: 1;
+
+                        Text {
+                            text: snapshot.name;
+                            color: Theme.tx;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: "\{snapshot.created} · revision \{snapshot.revision}";
+                            color: Theme.tx3;
+                            font-size: Theme.font-meta;
+                            overflow: elide;
+                        }
+                    }
+
+                    // Fixed-height buttons, centered against the two lines of text.
+                    VerticalLayout {
+                        alignment: center;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            if confirming: Text {
+                                text: root.confirm-delete ? "Delete this snapshot? This can't be undone." : "Replace the current disk and settings with this snapshot?";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                                vertical-alignment: center;
+                            }
+
+                            if confirming: AppButton {
+                                kind: ButtonKind.ghost;
+                                compact: true;
+                                text: "Cancel";
+                                clicked => {
+                                    root.confirm-index = -1;
+                                }
+                            }
+
+                            if confirming && root.confirm-delete: AppButton {
+                                kind: ButtonKind.danger-confirm;
+                                compact: true;
+                                text: "Delete";
+                                icon: @image-url("icons/trash.svg");
+                                clicked => {
+                                    root.confirm-index = -1;
+                                    Snapshots.delete(index);
+                                }
+                            }
+
+                            if confirming && !root.confirm-delete: AppButton {
+                                kind: ButtonKind.neutral;
+                                compact: true;
+                                text: "Restore";
+                                icon: @image-url("icons/refresh.svg");
+                                enabled: root.can-change;
+                                clicked => {
+                                    root.confirm-index = -1;
+                                    Snapshots.restore(index);
+                                }
+                            }
+
+                            if !confirming: AppButton {
+                                kind: ButtonKind.ghost;
+                                compact: true;
+                                text: "Restore";
+                                icon: @image-url("icons/refresh.svg");
+                                enabled: root.can-change;
+                                clicked => {
+                                    root.confirm-delete = false;
+                                    root.confirm-index = index;
+                                }
+                            }
+
+                            if !confirming: AppButton {
+                                kind: ButtonKind.danger;
+                                compact: true;
+                                text: "Delete";
+                                icon: @image-url("icons/trash.svg");
+                                clicked => {
+                                    root.confirm-delete = true;
+                                    root.confirm-index = index;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    height: 1px;
+                    background: Theme.line;
+                }
+            }
+        }
+    }
+}

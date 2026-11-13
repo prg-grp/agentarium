@@ -10,7 +10,7 @@ The window frame shared by every instance screen: sidebar, instance header, and 
 │                  │ Claude Code                                                          │
 │ Instances    [+] │                                                                      │
 │ ▌● api-refactor  ├──────────────────────────────────────────────────────────────────────┤
-│    Running       │ Agent  Terminal  Activity  Status  Logs  Settings 2 pending [Live a.]│
+│    Running       │ Agent  Terminal  Activity  Status  Logs  Snapshots  Settings [Live a.]│
 │  ⚒ scraper-lab   ├──────────────────────────────────────────────────────────────────────┤
 │    Maintenance,  │                                                                      │
 │    internet open │                      tab content                                     │
@@ -54,12 +54,13 @@ The header carries no status readings; the Virtual machine, Agent and Monitoring
 ## Tab bar
 
 - 44 px tall, 28 px gaps, 1 px `line` bottom border.
-- Tabs: Agent, Terminal, Activity, Status, Logs, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
+- Tabs: Agent, Terminal, Activity, Status, Logs, Snapshots, Settings. Active tab: `tx`, 500, 2 px underline in `acc` (in `warn` during maintenance). Inactive: `tx2`.
 - Settings shows "2 pending" in `acc` 12 px when saved changes wait for the next boot.
 - Agent shows the agent session; see [terminal-running.md](terminal-running.md).
 - Terminal shows a login shell as `ubuntu` beside the agent, in the same terminal view, for looking around without ending the agent's session. It exists in agent mode only. The shell opens the first time the tab is shown during an agent boot and keeps running across tab switches until it exits or the VM stops. Header: "Shell as ubuntu" (`tx2`, 500); once the shell has ended, a "New shell" button (ghost, compact, plus icon) at the right end starts a fresh one. Exit bar texts: "The shell ended." after an exit; "The shell opens when the agent runs." before the boot is ready; in maintenance and provisioning boots, "The terminal is available while the agent runs. In maintenance mode, the Agent tab is a root shell." While the instance starts, stops or restarts, the view is covered as the Agent tab is. What the user does in this shell is not shown in Activity.
 - Logs shows the instance's boot log in the same terminal view, read-only: kernel, systemd and supervisor output from boot to shutdown. Header: "Boot log" (`tx2`, 500), "Serial console, not the agent session" (`tx3`), and an "Open logs" button (ghost, compact, folder icon) that opens the instance's logs folder in Finder. No cursor; typing and pasting do nothing, while selecting, copying, scrolling, the scrollbar, the scroll shortcuts and "Jump to latest" work as in the Agent tab. The tab keeps the output until the next start; each boot's output is also kept for good as `<start>.log` in the logs folder, named by the boot's start as a unix timestamp.
 - Status shows the readings and the live resource use; see [status-tab.md](status-tab.md).
+- Snapshots lists the instance's snapshots and creates, restores and deletes them; see [snapshots.md](snapshots.md).
 - On the Agent tab only, a "Live activity" toggle sits at the right end (ghost, compact, sidebar-right icon). Pressed state: `raise` background and `tx` text. It shows or hides the live activity rail; the terminal takes the full width when hidden. Remember the choice per instance.
 
 ## Removed on purpose

@@ -10,8 +10,8 @@ CREATE TABLE instances (
     created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
 ) STRICT;
 
--- A revision is pending, and still editable, while booted_at is NULL.
--- The first boot that uses it freezes it.
+-- A revision is pending, and still editable, while booted_at is NULL and no snapshot links
+-- it. The first boot that uses it, or the first snapshot taken with it, freezes it.
 CREATE TABLE instance_revisions (
     instance_id       TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
     revision          INTEGER NOT NULL,             -- 1, 2, … per instance
@@ -32,6 +32,19 @@ CREATE TABLE instance_revisions (
     provision_script  TEXT NOT NULL,                -- bash, run as root in provision mode
     PRIMARY KEY (instance_id, revision)
 ) STRICT;
+
+-- Disk snapshots of a stopped instance. Each links the revision that was the latest when it
+-- was taken; restoring one brings back the disk and that configuration.
+CREATE TABLE snapshots (
+    id          TEXT PRIMARY KEY,                   -- UUIDv7
+    instance_id TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
+    revision    INTEGER NOT NULL,
+    name        TEXT NOT NULL,
+    disk_path   TEXT NOT NULL,                      -- APFS clone of the instance's disk, in its snapshots folder
+    created_at  INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER)),
+    FOREIGN KEY (instance_id, revision) REFERENCES instance_revisions(instance_id, revision) ON DELETE CASCADE
+) STRICT;
+CREATE INDEX snapshots_by_instance ON snapshots (instance_id);
 
 -- Every boot of an instance. ended_at stays NULL while it runs, and if the app quit
 -- before it noticed the end.
@@ -192,7 +205,8 @@ CREATE TABLE network_flows (
 ) STRICT;
 CREATE INDEX network_flows_by_boot ON network_flows (boot_id, id);
 
--- App-wide preferences, such as the update channel (update.rs).
+-- App-wide preferences, such as the update channel (update.rs) and whether a snapshot is
+-- taken after provisioning (snapshots.rs).
 CREATE TABLE preferences (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL

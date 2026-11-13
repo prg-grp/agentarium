@@ -7,7 +7,8 @@
 //!
 //! Each saved configuration is a revision. The latest revision stays editable
 //! while it is pending (never booted); the first boot that uses it freezes it,
-//! so the configuration of every run stays on record.
+//! so the configuration of every run stays on record. A snapshot freezes the revision it
+//! links as well, so restoring it brings back exactly that configuration.
 //!
 //! Environment variables are stored encrypted (AES-256-GCM). The key is created on the
 //! first start and kept in the user's login keychain; every Mac has its own.
@@ -61,6 +62,16 @@ pub struct AgentRun {
     pub started: String,
     /// `None` while it runs, or when the app quit before it noticed the end.
     pub ended: Option<String>,
+}
+
+/// A snapshot of an instance's disk, with the revision restoring it brings back.
+pub struct Snapshot {
+    pub id: String,
+    pub name: String,
+    pub revision: i64,
+    /// When it was taken, local, e.g. "Nov 13, 2026, 14:03".
+    pub created: String,
+    pub disk_path: PathBuf,
 }
 
 pub struct Instance {
@@ -383,6 +394,14 @@ impl Db {
         )?)
     }
 
+    pub fn revision(&self, instance_id: &str, number: i64) -> Result<Revision> {
+        Ok(self.conn.query_row(
+            &format!("{REVISION_QUERY} AND revision = ?2"),
+            params![instance_id, number],
+            |row| revision_from_row(row, &self.cipher),
+        )?)
+    }
+
     pub fn rename_instance(&self, id: &str, name: &str) -> Result<()> {
         self.conn
             .execute("UPDATE instances SET name = ?2 WHERE id = ?1", [id, name])?;
@@ -393,17 +412,15 @@ impl Db {
     /// one, otherwise into a new revision. Returns the revision number.
     pub fn save_config(&self, instance_id: &str, config: &Config) -> Result<i64> {
         let tx = self.conn.unchecked_transaction()?;
-        let (latest, booted_at): (i64, Option<i64>) = tx.query_row(
-            "SELECT revision, booted_at FROM instance_revisions WHERE instance_id = ?1
-             ORDER BY revision DESC LIMIT 1",
+        let (latest, frozen): (i64, bool) = tx.query_row(
+            &format!(
+                "SELECT revision, booted_at IS NOT NULL OR {SNAPSHOTTED} FROM instance_revisions
+                 WHERE instance_id = ?1 ORDER BY revision DESC LIMIT 1"
+            ),
             [instance_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let number = if booted_at.is_none() {
-            latest
-        } else {
-            latest + 1
-        };
+        let number = if frozen { latest + 1 } else { latest };
         put_revision(&tx, &self.cipher, instance_id, number, config)?;
         tx.commit()?;
         Ok(number)
@@ -491,6 +508,55 @@ impl Db {
         Ok(())
     }
 
+    /// The instance's snapshots, newest first.
+    pub fn snapshots(&self, instance_id: &str) -> Result<Vec<Snapshot>> {
+        let mut statement = self.conn.prepare(
+            "SELECT id, name, revision,
+                 -- SQLite's strftime has no month names.
+                 substr('JanFebMarAprMayJunJulAugSepOctNovDec',
+                     strftime('%m', created_at / 1000, 'unixepoch', 'localtime') * 3 - 2, 3)
+                 || strftime(' %d, %Y, %H:%M', created_at / 1000, 'unixepoch', 'localtime'),
+                 disk_path
+             FROM snapshots WHERE instance_id = ?1 ORDER BY created_at DESC, id DESC",
+        )?;
+        let snapshots = statement
+            .query_map([instance_id], |row| {
+                Ok(Snapshot {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    revision: row.get(2)?,
+                    created: row.get(3)?,
+                    disk_path: PathBuf::from(row.get::<_, String>(4)?),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(snapshots)
+    }
+
+    /// Records a snapshot whose disk is at `disk_path`; this freezes `revision`.
+    pub fn add_snapshot(
+        &self,
+        id: &str,
+        instance_id: &str,
+        name: &str,
+        revision: i64,
+        disk_path: &Path,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO snapshots (id, instance_id, name, revision, disk_path)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, instance_id, name, revision, disk_path.to_string_lossy()],
+        )?;
+        Ok(())
+    }
+
+    /// Deletes the snapshot's record; its disk is the caller's.
+    pub fn delete_snapshot(&self, id: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM snapshots WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
     pub fn preference(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn
@@ -517,6 +583,11 @@ const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
      ORDER BY r.revision DESC LIMIT 1),
     i.provisioned_at IS NOT NULL, i.kernel
     FROM instances i";
+
+/// Whether a snapshot links the revision of `instance_revisions` in the current row.
+const SNAPSHOTTED: &str = "EXISTS (SELECT 1 FROM snapshots s
+    WHERE s.instance_id = instance_revisions.instance_id
+    AND s.revision = instance_revisions.revision)";
 
 const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, disk_gb, command, arguments,
     working_directory, environment, mounts, network_default, network_rules, network_allow_local,
@@ -568,7 +639,8 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
     })
 }
 
-/// Inserts a revision, or updates it if it exists and is still pending.
+/// Inserts a revision, or updates it if it exists and is still pending: never booted, and
+/// no snapshot links it.
 fn put_revision(
     conn: &Connection,
     cipher: &Aes256Gcm,
@@ -585,7 +657,8 @@ fn put_revision(
         .map_err(|_| "Couldn't encrypt the environment variables.")?;
     environment.extend(ciphertext);
     conn.execute(
-        "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
+        &format!(
+            "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
              command, arguments, working_directory, environment, mounts, network_default,
              network_rules, network_allow_local, provision_script, port_forwards)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
@@ -598,7 +671,8 @@ fn put_revision(
              network_allow_local = excluded.network_allow_local,
              provision_script = excluded.provision_script,
              port_forwards = excluded.port_forwards
-         WHERE booted_at IS NULL",
+         WHERE booted_at IS NULL AND NOT {SNAPSHOTTED}"
+        ),
         params![
             instance_id,
             number,
