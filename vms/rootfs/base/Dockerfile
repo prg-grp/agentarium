@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # scripts/build-guest.sh; change both together.
 RUN apt-get update && \
     apt-get -o Dpkg::Options::=--force-confold -o Dpkg::Options::=--force-confdef install -y \
-    systemd systemd-sysv systemd-timesyncd dbus udev sudo ubuntu-standard \
+    systemd systemd-sysv dbus udev sudo ubuntu-standard \
     linux-modules-6.8.0-147-generic kmod \
     coreutils curl wget ca-certificates git \
     build-essential pkg-config python3 python3-pip tcpdump g++ cmake make libpcap-dev \
@@ -18,7 +18,8 @@ RUN systemctl set-default multi-user.target && \
     systemctl mask systemd-networkd-wait-online.service \
     systemd-resolved.service \
     e2scrub_reap.service \
-    systemd-firstboot.service
+    systemd-firstboot.service \
+    systemd-timesyncd.service
 
 # The base image is just bigger than its contents; the app extends each instance's disk to
 # its configured size. systemd-growfs-root grows the mounted root to fill the disk early on
@@ -55,8 +56,10 @@ RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf
 RUN printf 'virtiofs\n' > /etc/modules-load.d/virtiofs.conf
 
 # Virtualization.framework gives Linux guests no usable hardware clock. The clock is set
-# early at boot from the Mac's time on the kernel command line; timesyncd keeps it right
-# afterwards, e.g. when the VM was paused while the Mac slept.
+# early at boot from the Mac's time on the kernel command line; afterwards the supervisor
+# keeps it on the Mac's time from the app's SetTime (every minute, and when the Mac woke
+# from sleep). The guest has no NTP: timesyncd isn't installed, and masked above in case a
+# dependency brings it back.
 COPY --chmod=755 clock-from-host /usr/local/sbin/clock-from-host
 COPY clock-from-host.service /etc/systemd/system/clock-from-host.service
 RUN systemctl enable clock-from-host.service

@@ -25,6 +25,9 @@
 // In agent mode the supervisor also reports Status every STATUS_INTERVAL (see
 // src/lib.rs) and at once when the agent starts or exits. The app keeps only the latest
 // report; nothing is stored. What the agent does goes over the data plane instead.
+//
+// The guest has no hardware clock and no NTP. Its clock is set at boot from the kernel
+// command line, then kept on the Mac's time by the app's SetTime.
 syntax = "proto3";
 
 package agent_toolbox.command_plane.v1;
@@ -35,6 +38,7 @@ message HostMessage {
     Start start = 1;
     Stop stop = 2;
     Resize resize = 3;
+    SetTime set_time = 4;
   }
 }
 
@@ -126,6 +130,14 @@ message Resize {
   uint32 rows = 2;
   // For the current shell instead of the session console; ignored while none runs.
   bool shell = 3;
+}
+
+// The Mac's time. Sent after Start, every SET_TIME_INTERVAL (see src/lib.rs), and when the
+// Mac's clock jumped (e.g. it woke from sleep). The supervisor steps the guest's clock if it
+// is off by more than a little. Accepted in every mode, before Start too.
+message SetTime {
+  // Microseconds since the Unix epoch.
+  uint64 unix_usec = 1;
 }
 
 message ProvisionFinished {

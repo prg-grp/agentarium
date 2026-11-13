@@ -36,12 +36,12 @@ use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use command_plane::{
     AgentExit, CollectorState, EnvVar, FORWARD_PORT, GuestMessage, HostMessage, Launch, Mode,
-    Mount, PORT, PROTOCOL_VERSION, Resize, SHELL_PORT, Shell, Start, Status, Stop, guest_message,
-    host_message,
+    Mount, PORT, PROTOCOL_VERSION, Resize, SET_TIME_INTERVAL, SHELL_PORT, SetTime, Shell, Start,
+    Status, Stop, guest_message, host_message,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -86,6 +86,11 @@ const OBSERVER_RETRY: Duration = Duration::from_secs(1);
 /// The shortest interval CPU use is computed over. Reports sent when the agent starts or
 /// exits can follow the previous one closely; they don't move the baseline.
 const CPU_WINDOW: Duration = Duration::from_secs(1);
+
+/// How far the Mac's clock may move beyond its monotonic clock between two iterations before
+/// the guest gets the time again at once. The monotonic clock stands still while the Mac
+/// sleeps, so this catches waking up, as well as the clock being set.
+const CLOCK_JUMP: Duration = Duration::from_secs(2);
 
 /// CPU use between two Status reports, as a share of all vCPUs (0 to 1).
 #[derive(Clone, Copy)]
@@ -296,6 +301,10 @@ fn run(
     let mut observer_stalled = false;
     // The forwarded ports' listeners, from the first Start until the stop.
     let mut forwards: Option<Forwards> = None;
+    // When the guest gets the Mac's time next, and the last iteration's monotonic and wall
+    // time, to notice the Mac slept or its clock was set.
+    let mut next_set_time: Option<Instant> = None;
+    let mut clock = (Instant::now(), SystemTime::now());
     // The shared folders as (guest path, Mac path), for the observer's file paths.
     let mounts: Vec<(String, PathBuf)> = start
         .mounts
@@ -365,6 +374,7 @@ fn run(
                         }
                         match sent {
                             Ok(()) => {
+                                next_set_time = Some(Instant::now());
                                 if agent_mode {
                                     last_status = Some(Instant::now());
                                     last_health = Some(Instant::now());
@@ -569,6 +579,27 @@ fn run(
             vm.connect(data_plane::PORT, move |result| {
                 let _ = connected.send(Command::ObserverConnected(result));
             });
+        }
+        let wall = SystemTime::now();
+        if wall
+            .duration_since(clock.1)
+            .map_or(true, |moved| moved > now - clock.0 + CLOCK_JUMP)
+        {
+            next_set_time = Some(now);
+        }
+        clock = (now, wall);
+        if deadline.is_none()
+            && let Some(channel) = channel.as_mut()
+            && next_set_time.is_some_and(|at| now >= at)
+        {
+            next_set_time = Some(now + SET_TIME_INTERVAL);
+            let unix_usec = wall
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_micros() as u64;
+            if let Err(error) = channel.send(host_message::Kind::SetTime(SetTime { unix_usec })) {
+                eprintln!("Couldn't send SetTime to the guest supervisor: {error}");
+            }
         }
         if !status_lost && last_status.is_some_and(|at| now >= at + STATUS_TIMEOUT) {
             status_lost = true;

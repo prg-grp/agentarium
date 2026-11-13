@@ -40,6 +40,10 @@ pub const GUEST_BIN_TAG: &str = "agentarium-guest";
 /// How often the supervisor reports `Status` in agent mode.
 pub const STATUS_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How often the app sends `SetTime` while connected, besides after Start and whenever the
+/// Mac's clock jumped.
+pub const SET_TIME_INTERVAL: Duration = Duration::from_secs(60);
+
 /// The largest encoded message either side sends or accepts.
 pub const MAX_MESSAGE: usize = 1 << 20;
 

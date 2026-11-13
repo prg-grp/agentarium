@@ -21,7 +21,7 @@ all: $(OUT)/base.ext4
 # noinit_itable, so they stay unwritten. Virtualization.framework attaches the image as a
 # virtio-blk disk (/dev/vda).
 # /.dockerenv is dropped: with it, systemd thinks it runs in a Docker container and skips
-# kernel command line conditions, timesyncd and its clock floor.
+# kernel command line conditions.
 $(OUT)/base.ext4: $(shell find base -type f) Makefile
 	mkdir -p $(OUT)
 	docker build --platform linux/arm64 -t agent-toolbox/base base

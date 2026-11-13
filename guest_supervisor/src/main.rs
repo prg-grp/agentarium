@@ -44,7 +44,8 @@ use command_plane::vsock::{accept, listen};
 use command_plane::{
     AgentExit, AgentUsage, CollectorState, EnvVar, FORWARD_PORT, Forward, GuestMessage, Hello,
     HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, SHELL_PORT,
-    STATUS_INTERVAL, Shell, Start, StartFailed, Status, guest_message, host_message, read_message,
+    STATUS_INTERVAL, SetTime, Shell, Start, StartFailed, Status, guest_message, host_message,
+    read_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -63,6 +64,9 @@ const SHARES_DIR: &str = "/run/agentarium/shares";
 const OBSERVER: &str = "/opt/agentarium/agentarium-observer";
 /// How long the agent's start waits for the observer to attach its programs.
 const OBSERVER_READY: Duration = Duration::from_secs(10);
+/// How far the guest's clock may be off the app's SetTime before it is stepped. Covers the
+/// message's way over vsock and slow drift, so the clock isn't stepped back and forth.
+const CLOCK_TOLERANCE: Duration = Duration::from_millis(100);
 
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
@@ -414,6 +418,7 @@ fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>
                     warn!(%error, "couldn't resize the session console");
                 }
             }
+            Some(host_message::Kind::SetTime(set)) => set_clock(set),
             None => warn!("ignoring a message this supervisor doesn't know"),
         }
     }
@@ -1050,6 +1055,25 @@ impl Account {
             home,
             groups,
         })
+    }
+}
+
+/// Steps the guest's clock to the app's time if it is off by more than `CLOCK_TOLERANCE`.
+fn set_clock(set: SetTime) {
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    unsafe { libc::clock_gettime(libc::CLOCK_REALTIME, &mut now) };
+    let guest_usec = now.tv_sec as i64 * 1_000_000 + now.tv_nsec as i64 / 1_000;
+    let offset_ms = (set.unix_usec as i64 - guest_usec) / 1_000;
+    if offset_ms.unsigned_abs() < CLOCK_TOLERANCE.as_millis() as u64 {
+        return debug!(offset_ms, "the clock matches the app's time");
+    }
+    let time = libc::timespec {
+        tv_sec: (set.unix_usec / 1_000_000) as _,
+        tv_nsec: (set.unix_usec % 1_000_000 * 1_000) as _,
+    };
+    match unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &time) } {
+        0 => info!(offset_ms, "set the clock to the app's time"),
+        _ => warn!(error = %io::Error::last_os_error(), offset_ms, "couldn't set the clock"),
     }
 }
 
