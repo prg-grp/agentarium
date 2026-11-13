@@ -20,6 +20,10 @@ pub const PORT: u32 = 700;
 /// with a `Forward`. Below 1024 for the same reason as `PORT`.
 pub const FORWARD_PORT: u32 = 702;
 
+/// The vsock port the supervisor accepts shells on in agent mode, each connection starting
+/// with a `Shell`. Below 1024 for the same reason as `PORT`.
+pub const SHELL_PORT: u32 = 703;
+
 /// Sent in `Hello`; the app refuses a supervisor that speaks another version.
 pub const PROTOCOL_VERSION: u32 = 1;
 

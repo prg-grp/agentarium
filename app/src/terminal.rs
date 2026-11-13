@@ -242,6 +242,11 @@ impl Terminal {
         }
     }
 
+    /// Whether a console is attached and hasn't ended.
+    pub fn attached(&self) -> bool {
+        self.exit_message.borrow().is_none()
+    }
+
     /// Makes this terminal the one drawn in the UI, with its output and exit bar.
     pub fn show(&self) {
         self.set_shown(true);
@@ -622,7 +627,8 @@ impl Drop for Terminal {
     }
 }
 
-/// Host end of one of the VM's serial consoles: two pipes, read and write.
+/// Host end of one of the VM's consoles: two pipes (a serial console), or a shell's
+/// connection twice, read and write.
 pub struct Console {
     reader: ConsoleReader,
     writer: File,
@@ -645,6 +651,7 @@ impl Console {
             reader: ConsoleReader {
                 pipe: File::from(reader),
                 copy: None,
+                ended: None,
             },
             writer: File::from(writer),
             resized: None,
@@ -663,17 +670,34 @@ impl Console {
         self.reader.copy = Some(file);
         self
     }
+
+    /// Calls `ended` once the guest closes its end, which also ends the terminal's I/O
+    /// thread. The serial consoles stay open while the VM runs; a shell's closes when the
+    /// shell exits.
+    pub fn with_end(mut self, ended: impl FnOnce() + Send + 'static) -> Console {
+        self.reader.ended = Some(Box::new(ended));
+        self
+    }
 }
 
-/// Reads a console's pipe, and copies what it reads to a file if one is set.
+/// Reads a console, and copies what it reads to a file if one is set.
 pub struct ConsoleReader {
     pipe: File,
     copy: Option<File>,
+    ended: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl Read for ConsoleReader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let read = self.pipe.read(buf)?;
+        // An error ends the terminal's I/O thread; an empty read would only be polled again.
+        if read == 0
+            && !buf.is_empty()
+            && let Some(ended) = self.ended.take()
+        {
+            ended();
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
         // A failing copy (a full disk, say) is given up, so the terminal keeps running.
         if let Some(copy) = self.copy.as_mut()
             && let Err(error) = copy.write_all(&buf[..read])

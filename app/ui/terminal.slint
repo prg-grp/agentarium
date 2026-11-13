@@ -46,6 +46,10 @@ export component TerminalView {
     // Shows the read-only boot log instead of the session. Rust ignores its input, except
     // for selecting and copying.
     in property <bool> log;
+    // Shows the shell beside the agent (Terminal tab) instead of the session.
+    in property <bool> shell;
+    // The instance runs in agent mode, so "New shell" can open one once the shell ended.
+    in property <bool> can-start-shell;
     // Label of the start, stop or restart in progress; "" when none. The session is covered
     // and takes no input meanwhile. The boot log stays visible, since it shows the progress.
     in property <string> transition;
@@ -58,6 +62,8 @@ export component TerminalView {
     callback open-url(string);
     // The boot log's "Open logs" button was clicked.
     callback open-logs();
+    // The shell's "New shell" button was clicked.
+    callback new-shell();
 
     init => {
         focus.focus();
@@ -76,17 +82,25 @@ export component TerminalView {
             HorizontalLayout {
                 padding-left: 22px;
                 // The ghost button's own padding brings its label back to the 22px edge.
-                padding-right: root.log ? 12px : 22px;
+                padding-right: root.log || root.shell ? 12px : 22px;
                 spacing: 4px;
 
-                if !root.log: Text {
+                if root.shell: Text {
+                    text: "Shell as ubuntu";
+                    color: Theme.tx2;
+                    font-weight: Theme.weight-medium;
+                    font-size: Theme.font-meta;
+                    vertical-alignment: center;
+                }
+
+                if !root.log && !root.shell: Text {
                     text: "Agent session in";
                     color: Theme.tx3;
                     font-size: Theme.font-meta;
                     vertical-alignment: center;
                 }
 
-                if !root.log: Text {
+                if !root.log && !root.shell: Text {
                     text: TerminalSession.cwd-label;
                     color: Theme.tx2;
                     font-family: Theme.mono;
@@ -117,6 +131,19 @@ export component TerminalView {
                     width: 4px;
                 }
 
+                if root.shell && TerminalSession.exited && root.can-start-shell: VerticalLayout {
+                    alignment: center;
+                    AppButton {
+                        text: "New shell";
+                        icon: @image-url("icons/plus.svg");
+                        kind: ButtonKind.ghost;
+                        compact: true;
+                        clicked => {
+                            root.new-shell();
+                        }
+                    }
+                }
+
                 if root.log: VerticalLayout {
                     alignment: center;
                     AppButton {
@@ -132,7 +159,7 @@ export component TerminalView {
 
                 // Forwarded ports: a click opens the port in the browser. A port the Mac
                 // couldn't open says why and does nothing.
-                if !root.log: HorizontalLayout {
+                if !root.log && !root.shell: HorizontalLayout {
                     spacing: 6px;
                     alignment: end;
 
@@ -197,11 +224,11 @@ export component TerminalView {
                     }
                 }
 
-                if !root.log && root.forwards.length > 0: Rectangle {
+                if !root.log && !root.shell && root.forwards.length > 0: Rectangle {
                     width: 12px;
                 }
 
-                if !root.log: Text {
+                if !root.log && !root.shell: Text {
                     text: "Boot log";
                     color: link-touch.has-hover ? Theme.tx2 : Theme.tx3;
                     font-size: Theme.font-meta;

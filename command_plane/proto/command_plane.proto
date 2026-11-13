@@ -11,6 +11,12 @@
 // Forwarded ports use connections of their own to vsock port FORWARD_PORT (see
 // src/lib.rs): the app sends one Forward, then both sides relay the connection's bytes.
 //
+// In agent mode the app may also open a shell (the app's Terminal tab): a login shell as
+// the unprivileged user beside the agent, in a cgroup of its own that isn't observed. Each
+// shell is a connection of its own to vsock port SHELL_PORT (see src/lib.rs): the app sends
+// one Shell, then both sides carry the terminal's raw bytes. The supervisor closes the
+// connection when the shell exits; the shell is hung up when the app closes it.
+//
 // In agent mode the supervisor also reports Status every STATUS_INTERVAL (see
 // src/lib.rs) and at once when the agent starts or exits. The app keeps only the latest
 // report; nothing is stored. What the agent does goes over the data plane instead.
@@ -98,6 +104,13 @@ message Mount {
   bool read_only = 3;
 }
 
+// The first and only message on a shell connection: start a shell with this terminal size.
+// Agent mode only; nothing listens on SHELL_PORT in other modes.
+message Shell {
+  uint32 columns = 1;
+  uint32 rows = 2;
+}
+
 // Shuts the guest down cleanly.
 message Stop {}
 
@@ -106,6 +119,8 @@ message Stop {}
 message Resize {
   uint32 columns = 1;
   uint32 rows = 2;
+  // For the current shell instead of the session console; ignored while none runs.
+  bool shell = 3;
 }
 
 message ProvisionFinished {

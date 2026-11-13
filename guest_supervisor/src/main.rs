@@ -2,7 +2,7 @@
 //!
 //! systemd starts it at boot. It listens on the command plane's vsock port, says Hello
 //! to the app, and waits for Start, which decides what this boot runs on the session
-//! console (`hvc1`, the app's Terminal tab): the agent's command as `ubuntu` (agent mode),
+//! console (`hvc1`, the app's Agent tab): the agent's command as `ubuntu` (agent mode),
 //! a root shell (maintenance mode), or the provisioning script (provision mode). Until
 //! then, nothing logs in or runs there. Stop shuts the guest down; Resize passes on the
 //! size of the app's terminal view.
@@ -13,6 +13,10 @@
 //! starts the observer (agentarium-observer) for that cgroup and keeps it running; the
 //! observer streams what the agent does to the app over the data plane. Maintenance and
 //! provision boots aren't observed: nothing starts the observer there.
+//!
+//! In agent mode it also accepts shells from the app (the app's Terminal tab) on their own
+//! vsock port: login shells as `ubuntu` beside the agent, each on a pseudo-terminal, in a
+//! cgroup of their own that the observer doesn't watch.
 //!
 //! In agent and maintenance mode it also accepts forwarded ports from the app on their
 //! own vsock port and connects each to the guest port it names, on the guest's loopback.
@@ -26,7 +30,7 @@ use std::ffi::{CStr, CString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, TcpStream};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -39,8 +43,8 @@ use std::time::Duration;
 use command_plane::vsock::{accept, listen};
 use command_plane::{
     AgentExit, AgentUsage, CollectorState, EnvVar, FORWARD_PORT, Forward, GuestMessage, Hello,
-    HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG,
-    STATUS_INTERVAL, Start, StartFailed, Status, guest_message, host_message, read_message,
+    HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, SHELL_PORT,
+    STATUS_INTERVAL, Shell, Start, StartFailed, Status, guest_message, host_message, read_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -62,6 +66,9 @@ const OBSERVER_READY: Duration = Duration::from_secs(10);
 /// The app's current connection. Provision mode reports its result on it.
 type Channel = Arc<Mutex<Option<File>>>;
 
+/// The latest shell's pseudo-terminal (its master), while it runs.
+type Pty = Arc<Mutex<Option<File>>>;
+
 /// The agent's state during an agent-mode boot, as Status reports it.
 #[derive(Default)]
 struct AgentState {
@@ -73,16 +80,16 @@ struct AgentState {
     collector: CollectorState,
 }
 
-/// The agent's cgroup (v2), beside the supervisor's own in the service's cgroup, which
-/// systemd delegates to it (`Delegate=` in agentarium-supervisor.service).
-struct AgentCgroup {
+/// A cgroup (v2) of the agent's or the shells', beside the supervisor's own in the service's
+/// cgroup, which systemd delegates to it (`Delegate=` in agentarium-supervisor.service).
+struct Cgroup {
     dir: PathBuf,
     /// Its `cgroup.procs`; a new session writes to it before exec, which moves it in.
     procs: File,
 }
 
-impl AgentCgroup {
-    fn create() -> io::Result<AgentCgroup> {
+impl Cgroup {
+    fn create(name: &str) -> io::Result<Cgroup> {
         let own = fs::read_to_string("/proc/self/cgroup")?;
         let path = own
             .lines()
@@ -96,12 +103,12 @@ impl AgentCgroup {
             .parent()
             .ok_or_else(|| io::Error::other("the supervisor runs in the root cgroup"))?;
         fs::write(base.join("cgroup.subtree_control"), "+cpu +memory")?;
-        let dir = base.join("agent");
+        let dir = base.join(name);
         fs::create_dir_all(&dir)?;
         let procs = OpenOptions::new()
             .write(true)
             .open(dir.join("cgroup.procs"))?;
-        Ok(AgentCgroup { dir, procs })
+        Ok(Cgroup { dir, procs })
     }
 }
 
@@ -141,11 +148,12 @@ fn main() {
     info!(port = PORT, attempt, "listening for the app on vsock");
 
     let channel = Channel::default();
+    let pty = Pty::default();
     let mut started = false;
     loop {
         match accept(&listener) {
             Ok((connection, cid, port)) => info_span!("connection", cid, port)
-                .in_scope(|| serve(connection, &channel, &mut started, &tty)),
+                .in_scope(|| serve(connection, &channel, &mut started, &tty, &pty)),
             Err(error) => {
                 warn!(%error, "couldn't accept a connection");
                 thread::sleep(Duration::from_secs(1));
@@ -214,9 +222,136 @@ fn relay(connection: File, target: TcpStream) {
     let _ = inbound.join();
 }
 
+/// Accepts the app's shells in agent mode. Each connection names its terminal size in a
+/// Shell and gets a login shell as `ubuntu` on a pseudo-terminal of its own, in the shell
+/// cgroup, which isn't observed. The connection closes when the shell exits; the shell is
+/// hung up when the app closes the connection. `current` holds the latest shell's
+/// pseudo-terminal, for Resize.
+fn shell(environment: Vec<EnvVar>, directory: String, current: Pty) {
+    let listener = match listen(SHELL_PORT) {
+        Ok(listener) => listener,
+        Err(error) => return error!(port = SHELL_PORT, %error, "couldn't listen for shells"),
+    };
+    let cgroup = Cgroup::create("shell")
+        .inspect_err(|error| warn!(%error, "couldn't set up the shells' cgroup"))
+        .ok()
+        .map(|cgroup| Arc::new(cgroup.procs));
+    info!(port = SHELL_PORT, "listening for shells");
+    loop {
+        let connection = match accept(&listener) {
+            Ok((connection, ..)) => connection,
+            Err(error) => {
+                warn!(%error, "couldn't accept a shell connection");
+                thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        let (environment, directory, current, cgroup) = (
+            environment.clone(),
+            directory.clone(),
+            current.clone(),
+            cgroup.clone(),
+        );
+        thread::spawn(move || {
+            let mut connection = connection;
+            let size = match read_message::<Shell>(&mut connection) {
+                Ok(size) => winsize(size.columns, size.rows),
+                Err(error) => return debug!(%error, "a shell connection sent no size"),
+            };
+            let started = (|| {
+                let (mut master, mut slave) = (-1, -1);
+                let opened = unsafe {
+                    libc::openpty(
+                        &mut master,
+                        &mut slave,
+                        std::ptr::null_mut(),
+                        std::ptr::null(),
+                        &size,
+                    )
+                };
+                if opened < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let (master, slave) =
+                    unsafe { (File::from_raw_fd(master), File::from_raw_fd(slave)) };
+                // Nothing the shell starts may keep the master open, or closing it here
+                // wouldn't hang the shell up.
+                for fd in [&master, &slave] {
+                    unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) };
+                }
+                let mut command = command(
+                    "ubuntu",
+                    "/bin/bash",
+                    &["--login".into()],
+                    &directory,
+                    &environment,
+                    true,
+                    cgroup.as_deref(),
+                )?;
+                command
+                    .stdin(slave.try_clone()?)
+                    .stdout(slave.try_clone()?)
+                    .stderr(slave);
+                let child = command.spawn()?;
+                Ok((master, child))
+            })();
+            let (master, mut child) = match started {
+                Ok(started) => started,
+                Err(error) => return warn!(%error, "couldn't start a shell"),
+            };
+            // Signals the shell even after it was reaped, unlike its pid.
+            let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, child.id(), 0) } as RawFd;
+            let pidfd = (pidfd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(pidfd) });
+            let (Ok(mut from_app), Ok(ending), Ok(mut to_shell), Ok(mut from_shell), Ok(resized)) = (
+                connection.try_clone(),
+                connection.try_clone(),
+                master.try_clone(),
+                master.try_clone(),
+                master.try_clone(),
+            ) else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            };
+            *current.lock().unwrap() = Some(resized);
+            thread::spawn(move || {
+                let _ = io::copy(&mut from_app, &mut to_shell);
+                // The app closed the connection: hang the shell up, as closing a terminal
+                // window would.
+                if let Some(pidfd) = pidfd {
+                    unsafe {
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            pidfd.as_raw_fd(),
+                            libc::SIGHUP,
+                            std::ptr::null::<libc::siginfo_t>(),
+                            0,
+                        )
+                    };
+                }
+            });
+            let mut to_app = connection;
+            thread::spawn(move || {
+                // Ends with EIO once nothing has the shell's terminal open any more.
+                let _ = io::copy(&mut from_shell, &mut to_app);
+            });
+            drop(master);
+            info!(pid = child.id(), "started a shell");
+            match child.wait() {
+                Ok(status) => info!(status = %ended(status), "a shell ended"),
+                Err(error) => warn!(%error, "couldn't wait for a shell"),
+            }
+            current.lock().unwrap().take();
+            // Tells the app that the shell ended, even while something the shell left running
+            // keeps its terminal open; that is hung up once it writes and nothing reads.
+            unsafe { libc::shutdown(ending.as_raw_fd(), libc::SHUT_RDWR) };
+        });
+    }
+}
+
 /// Says Hello on a new connection from the app, then follows its messages until it closes.
 /// The session keeps running when the connection closes.
-fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>) {
+fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>, pty: &Pty) {
     info!("the app connected");
     let mut reader = match connection.try_clone() {
         Ok(reader) => reader,
@@ -245,8 +380,8 @@ fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>
             Some(host_message::Kind::Start(start)) if !*started => {
                 info!(mode = ?start.mode(), "received Start");
                 *started = true;
-                let (channel, tty) = (channel.clone(), tty.clone());
-                thread::spawn(move || run(start, &channel, &tty));
+                let (channel, tty, pty) = (channel.clone(), tty.clone(), pty.clone());
+                thread::spawn(move || run(start, &channel, &tty, pty));
             }
             Some(host_message::Kind::Start(start)) => {
                 warn!(mode = ?start.mode(), "ignoring Start: this boot has already started");
@@ -254,6 +389,19 @@ fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>
             Some(host_message::Kind::Stop(_)) => {
                 info!("received Stop, powering off");
                 power_off();
+            }
+            Some(host_message::Kind::Resize(resize)) if resize.shell => {
+                debug!(
+                    columns = resize.columns,
+                    rows = resize.rows,
+                    "received Resize for the shell"
+                );
+                let size = winsize(resize.columns, resize.rows);
+                if let Some(pty) = pty.lock().unwrap().as_ref()
+                    && unsafe { libc::ioctl(pty.as_raw_fd(), libc::TIOCSWINSZ, &size) } < 0
+                {
+                    warn!(error = %io::Error::last_os_error(), "couldn't resize the shell");
+                }
             }
             Some(host_message::Kind::Resize(resize)) => {
                 debug!(
@@ -288,7 +436,7 @@ fn send(channel: &Channel, kind: guest_message::Kind) -> bool {
 
 /// Runs the boot mode the app chose. Agent and maintenance sessions start again
 /// whenever they exit; there is no fallback to a shell.
-fn run(start: Start, channel: &Channel, tty: &Tty) {
+fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
     let mode = start.mode();
     let _span = info_span!("mode", ?mode).entered();
     // Nothing starts without all of its shared folders.
@@ -320,7 +468,12 @@ fn run(start: Start, channel: &Channel, tty: &Tty) {
                 return tty.notify("The app sent no command to start.");
             };
             info!("starting agent mode");
-            let cgroup = AgentCgroup::create()
+            {
+                let (environment, directory) =
+                    (start.environment.clone(), launch.working_directory.clone());
+                thread::spawn(move || shell(environment, directory, pty));
+            }
+            let cgroup = Cgroup::create("agent")
                 .inspect_err(|error| {
                     warn!(%error, "couldn't set up the agent's cgroup; its resource use isn't reported");
                 })
@@ -634,8 +787,7 @@ fn provision(tty: &Tty, script: &str) -> i32 {
 
 /// Runs `program` as `user` on the session console and waits for it. An interactive
 /// session reads the console and gets it as its controlling terminal; otherwise stdin is
-/// empty. An empty `directory` means the user's home folder. With `cgroup` (a
-/// `cgroup.procs` file), the session runs in that cgroup.
+/// empty. The rest is as in `command`.
 #[allow(clippy::too_many_arguments)]
 fn session(
     tty: &Tty,
@@ -647,9 +799,42 @@ fn session(
     interactive: bool,
     cgroup: Option<&File>,
 ) -> io::Result<ExitStatus> {
+    let mut command = command(
+        user,
+        program,
+        arguments,
+        directory,
+        environment,
+        interactive,
+        cgroup,
+    )?;
+    let console = tty.prepare()?;
+    command
+        .stdout(console.try_clone()?)
+        .stderr(console.try_clone()?);
+    if interactive {
+        command.stdin(console);
+    } else {
+        command.stdin(Stdio::null());
+    }
+    command.status()
+}
+
+/// Prepares `program` to run as `user` in a session of its own, with the session
+/// environment, in `directory` (empty: the user's home folder). An interactive one gets its
+/// stdin as its controlling terminal. With `cgroup` (a `cgroup.procs` file), it runs in that
+/// cgroup. The caller sets stdio and runs it.
+fn command(
+    user: &str,
+    program: &str,
+    arguments: &[String],
+    directory: &str,
+    environment: &[EnvVar],
+    interactive: bool,
+    cgroup: Option<&File>,
+) -> io::Result<Command> {
     let account = Account::find(user)
         .inspect_err(|error| error!(user, %error, "couldn't look up the user"))?;
-    let console = tty.prepare()?;
     let home = account.home.as_str();
     let directory = if directory.is_empty() {
         home
@@ -682,14 +867,7 @@ fn session(
         .env("TERM", "xterm-256color")
         .env("LANG", "C.UTF-8")
         .envs(environment.iter().map(|var| (&var.name, &var.value)))
-        .current_dir(directory)
-        .stdout(console.try_clone()?)
-        .stderr(console.try_clone()?);
-    if interactive {
-        command.stdin(console);
-    } else {
-        command.stdin(Stdio::null());
-    }
+        .current_dir(directory);
     let Account {
         uid, gid, groups, ..
     } = account;
@@ -720,7 +898,7 @@ fn session(
             check(libc::setuid(uid))
         });
     }
-    command.status()
+    Ok(command)
 }
 
 /// The session console. It is opened anew for each session: when a session leader exits,
@@ -780,12 +958,7 @@ impl Tty {
     /// Keeps the size for later sessions and applies it to the current one; the kernel
     /// tells the session's programs (SIGWINCH).
     fn resize(&self, columns: u32, rows: u32) -> io::Result<()> {
-        let size = libc::winsize {
-            ws_row: rows.try_into().unwrap_or(u16::MAX),
-            ws_col: columns.try_into().unwrap_or(u16::MAX),
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
+        let size = winsize(columns, rows);
         let mut kept = self.size.lock().unwrap();
         *kept = Some(size);
         let file = Tty::open()?;
@@ -804,6 +977,16 @@ impl Tty {
             }
             Err(error) => warn!(%error, "couldn't write to the session console"),
         }
+    }
+}
+
+/// A terminal size from the app's (columns, rows).
+fn winsize(columns: u32, rows: u32) -> libc::winsize {
+    libc::winsize {
+        ws_row: rows.try_into().unwrap_or(u16::MAX),
+        ws_col: columns.try_into().unwrap_or(u16::MAX),
+        ws_xpixel: 0,
+        ws_ypixel: 0,
     }
 }
 

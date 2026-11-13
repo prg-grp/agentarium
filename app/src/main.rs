@@ -124,8 +124,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     ui.on_create_instance(move || creator.open());
 
-    // The Terminal tab shows the selected instance's session, the Logs tab its boot log;
-    // the Activity tab its runs' activity, the Settings tab its configuration.
+    // The Agent tab shows the selected instance's session, the Terminal tab a shell beside
+    // it, the Logs tab its boot log; the Activity tab its runs' activity, the Settings tab
+    // its configuration.
     let c = control.clone();
     let s = settings.clone();
     let a = activity.clone();
@@ -137,9 +138,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let c = control.clone();
     let a = activity.clone();
     ui.on_tab_changed(move |tab| {
-        c.set_view(if tab == 1 { View::Log } else { View::Session });
-        a.set_visible(tab == 3);
+        c.set_view(match tab {
+            1 => View::Shell,
+            4 => View::Log,
+            _ => View::Session,
+        });
+        a.set_visible(tab == 2);
     });
+    let c = control.clone();
+    ui.on_new_shell(move |id| c.open_shell(&id));
     // `open` shows the folder in Finder; it returns right after asking Finder.
     ui.on_open_logs(|id| {
         let opened = db::logs_dir(&id).and_then(|dir| {

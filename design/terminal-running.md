@@ -1,6 +1,6 @@
 # Running instance: terminal
 
-The main working screen: a running instance in agent mode with the Terminal tab open. Frame: [app-shell.md](app-shell.md). This was the agreed "overview" mockup.
+The main working screen: a running instance in agent mode with the Agent tab open. Frame: [app-shell.md](app-shell.md). This was the agreed "overview" mockup.
 
 ## Layout
 
@@ -8,7 +8,7 @@ The main working screen: a running instance in agent mode with the Terminal tab 
 api-refactor                                                    [Restart in maintenance] [Stop] │ Delete
 Claude Code
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Terminal   Logs   Status   Activity   Settings 2 pending                                   [Live activity]
+Agent   Terminal   Activity   Status   Logs   Settings 2 pending                            [Live activity]
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Agent session in /work/api                         Boot log │ Live activity                 Pause
 ─────────────────────────────────────────────────────────── │ ───────────────────────────────────

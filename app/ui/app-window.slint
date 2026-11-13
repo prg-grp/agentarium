@@ -30,10 +30,12 @@ export component AppWindow inherits Window {
     callback instance-action(string, InstanceAction);
     // The selected instance changed; its terminal is shown.
     callback instance-selected(string);
-    // The tab changed; the Terminal and Logs tabs show different terminals.
+    // The tab changed; the Agent, Terminal and Logs tabs show different terminals.
     callback tab-changed(int);
     // The instance's logs folder should open in Finder.
     callback open-logs(string);
+    // The Terminal tab's "New shell" was clicked: open a shell in the instance.
+    callback new-shell(string);
     // The third-party licenses window should open.
     // A forwarded port's chip in the terminal's header was clicked.
     callback open-url(string);
@@ -448,7 +450,7 @@ export component AppWindow inherits Window {
                         spacing: 28px;
                         alignment: start;
 
-                        for tab-name[tab-index] in ["Terminal", "Logs", "Status", "Activity", "Settings"]: Rectangle {
+                        for tab-name[tab-index] in ["Agent", "Terminal", "Activity", "Status", "Logs", "Settings"]: Rectangle {
                             property <bool> active: tab-index == root.current-tab;
 
                             accessible-role: tab;
@@ -465,7 +467,7 @@ export component AppWindow inherits Window {
                                     vertical-alignment: center;
                                 }
 
-                                if tab-index == 4 && current.pending-changes > 0: Text {
+                                if tab-index == 5 && current.pending-changes > 0: Text {
                                     text: "\{current.pending-changes} pending";
                                     font-size: Theme.font-meta;
                                     color: Theme.acc;
@@ -499,12 +501,32 @@ export component AppWindow inherits Window {
                         root.open-url(url);
                     }
                     open-log => {
-                        root.current-tab = 1;
+                        root.current-tab = 4;
                     }
                 }
 
-                // The boot log: the same view, read-only.
+                // A login shell beside the agent, while it runs.
                 if current-tab == 1 && current.has-terminal: TerminalView {
+                    vertical-stretch: 1;
+                    shell: true;
+                    transition: current.transition;
+                    can-start-shell: (current.state == InstanceState.running || current.state == InstanceState.agent-exited) && current.transition == "";
+                    new-shell => {
+                        root.new-shell(current.id);
+                    }
+                }
+
+                if current-tab == 2: ActivityTab {
+                    vertical-stretch: 1;
+                }
+
+                if current-tab == 3: StatusTab {
+                    vertical-stretch: 1;
+                    item: current;
+                }
+
+                // The boot log: the same view, read-only.
+                if current-tab == 4 && current.has-terminal: TerminalView {
                     vertical-stretch: 1;
                     log: true;
                     open-logs => {
@@ -512,16 +534,7 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if current-tab == 2: StatusTab {
-                    vertical-stretch: 1;
-                    item: current;
-                }
-
-                if current-tab == 3: ActivityTab {
-                    vertical-stretch: 1;
-                }
-
-                if current-tab == 4: SettingsTab {
+                if current-tab == 5: SettingsTab {
                     vertical-stretch: 1;
                     item: current;
                     restart-now => {
@@ -529,12 +542,12 @@ export component AppWindow inherits Window {
                     }
                 }
 
-                if current-tab < 2 && !current.has-terminal: Rectangle {
+                if (current-tab <= 1 || current-tab == 4) && !current.has-terminal: Rectangle {
                     vertical-stretch: 1;
 
                     Text {
-                        text: current-tab == 0 ? "Terminal comes in a later step."
-                            : "Logs come in a later step.";
+                        text: current-tab == 4 ? "Logs come in a later step."
+                            : "Terminal comes in a later step.";
                         color: Theme.tx3;
                         font-size: Theme.font-small;
                     }

@@ -3,7 +3,8 @@
 //! Each boot gets its own controller thread, which creates the VM, starts it, watches its
 //! state and stops it; the VM itself operates on its own dispatch queue (see `vm.rs`).
 //! Controllers report to `VmControl` on the UI thread, which owns the database and keeps
-//! the sidebar rows and each instance's two terminals (session and boot log) in sync.
+//! the sidebar rows and each instance's three terminals (session, shell and boot log) in
+//! sync.
 //!
 //! The controller also holds the command plane to the guest supervisor: it connects once
 //! the VM runs, answers the supervisor's Hello with Start (the boot mode), and sends the
@@ -19,13 +20,17 @@
 //! In agent and maintenance mode it opens the instance's forwarded ports on the Mac once
 //! the session is ready (see forward.rs), and connects each accepted connection to the
 //! supervisor's forward port.
+//!
+//! In agent mode it opens a shell in the guest when the UI asks for one (the Terminal tab):
+//! a connection of its own to the supervisor's shell port, used as the shell terminal's
+//! console.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::net::TcpStream;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
@@ -35,7 +40,8 @@ use std::time::{Duration, Instant};
 
 use command_plane::{
     AgentExit, CollectorState, EnvVar, FORWARD_PORT, GuestMessage, HostMessage, Launch, Mode,
-    Mount, PORT, PROTOCOL_VERSION, Resize, Start, Status, Stop, guest_message, host_message,
+    Mount, PORT, PROTOCOL_VERSION, Resize, SHELL_PORT, Shell, Start, Status, Stop, guest_message,
+    host_message,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -55,6 +61,8 @@ use crate::{
 };
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
+const SHELL_MESSAGE: &str = "The shell opens when the agent runs.";
+const SHELL_UNAVAILABLE_MESSAGE: &str = "The terminal is available while the agent runs. In maintenance mode, the Agent tab is a root shell.";
 
 /// How long the guest gets to shut down before it is stopped hard.
 const STOP_TIMEOUT: Duration = Duration::from_secs(20);
@@ -100,11 +108,21 @@ enum Command {
     Guest(GuestMessage),
     /// The supervisor's connection closed.
     Disconnected,
-    /// The session terminal changed size.
+    /// The session terminal changed size, or the shell terminal (`shell`).
     Resize {
         columns: u32,
         rows: u32,
+        shell: bool,
     },
+    /// Agent mode: opens a shell in the guest, this size.
+    OpenShell {
+        columns: u32,
+        rows: u32,
+    },
+    /// A connection attempt to the supervisor's shell port finished.
+    ShellConnected(Result<File, String>),
+    /// The shell's connection closed: the shell ended.
+    ShellEnded,
     /// A connection attempt to the observer finished.
     ObserverConnected(Result<File, String>),
     /// From the data plane's thread.
@@ -139,6 +157,10 @@ enum Event {
     Observer(Summary),
     /// No Health arrived from the observer for `STATUS_TIMEOUT`.
     ObserverStalled,
+    /// The host end of a new shell, or why it couldn't be opened.
+    Shell(Result<Console, String>),
+    /// The shell ended.
+    ShellEnded,
     /// The controller ended: the VM stopped, or failed with the error.
     Ended(Result<(), String>),
 }
@@ -226,6 +248,7 @@ fn run(
         let _ = resized.send(Command::Resize {
             columns: columns.into(),
             rows: rows.into(),
+            shell: false,
         });
     });
     report(Event::Created { session, log });
@@ -255,8 +278,9 @@ fn run(
     let mut hello_deadline: Option<Instant> = None;
     // Why the VM is being stopped, if the boot failed while it ran.
     let mut failure: Option<String> = None;
-    // The session terminal's latest size, sent again on every new connection.
+    // The session and shell terminals' latest sizes, sent again on every new connection.
     let mut size: Option<Resize> = None;
+    let mut shell_size: Option<Resize> = None;
     // Agent mode only: when the last Status arrived (or Start was sent), whether it's
     // overdue, and the report CPU use is computed against.
     let agent_mode = start.mode() == Mode::Agent;
@@ -335,8 +359,10 @@ fn run(
                         && let Some(channel) = channel.as_mut()
                     {
                         let mut sent = channel.send(host_message::Kind::Start(start.clone()));
-                        if let (Ok(()), Some(size)) = (&sent, size) {
-                            sent = channel.send(host_message::Kind::Resize(size));
+                        for size in [size, shell_size].into_iter().flatten() {
+                            if sent.is_ok() {
+                                sent = channel.send(host_message::Kind::Resize(size));
+                            }
                         }
                         match sent {
                             Ok(()) => {
@@ -412,9 +438,21 @@ fn run(
                 Some(guest_message::Kind::Status(_)) => {}
                 None => eprintln!("Ignoring a message from the guest supervisor."),
             },
-            Ok(Command::Resize { columns, rows }) => {
-                let resize = Resize { columns, rows };
-                size = Some(resize);
+            Ok(Command::Resize {
+                columns,
+                rows,
+                shell,
+            }) => {
+                let resize = Resize {
+                    columns,
+                    rows,
+                    shell,
+                };
+                if shell {
+                    shell_size = Some(resize);
+                } else {
+                    size = Some(resize);
+                }
                 if let Some(channel) = channel.as_mut()
                     && let Err(error) = channel.send(host_message::Kind::Resize(resize))
                 {
@@ -467,6 +505,44 @@ fn run(
                     });
                 }
             }
+            Ok(Command::OpenShell { columns, rows }) if agent_mode && deadline.is_none() => {
+                shell_size = Some(Resize {
+                    columns,
+                    rows,
+                    shell: true,
+                });
+                let connected = commands.clone();
+                vm.connect(SHELL_PORT, move |result| {
+                    let _ = connected.send(Command::ShellConnected(result));
+                });
+            }
+            Ok(Command::ShellConnected(connected)) => {
+                let Resize { columns, rows, .. } = shell_size.unwrap_or_default();
+                let opened = connected.and_then(|mut socket| {
+                    // Sent before the console makes the socket non-blocking.
+                    command_plane::write_message(&mut socket, &Shell { columns, rows })
+                        .and_then(|()| {
+                            let reader = socket.try_clone()?;
+                            Console::new(OwnedFd::from(reader), OwnedFd::from(socket))
+                        })
+                        .map_err(|error| error.to_string())
+                });
+                let (resized, ended) = (commands.clone(), commands.clone());
+                report(Event::Shell(opened.map(|console| {
+                    console
+                        .with_resize(move |columns, rows| {
+                            let _ = resized.send(Command::Resize {
+                                columns: columns.into(),
+                                rows: rows.into(),
+                                shell: true,
+                            });
+                        })
+                        .with_end(move || {
+                            let _ = ended.send(Command::ShellEnded);
+                        })
+                })));
+            }
+            Ok(Command::ShellEnded) => report(Event::ShellEnded),
             // A repeated stop request, a completion without error, or the poll interval.
             Ok(_) | Err(_) => {}
         }
@@ -548,6 +624,8 @@ struct Running {
     stop: Option<AfterStop>,
     /// Set once the guest supervisor got Start; until then the boot is still starting.
     ready: bool,
+    /// Agent mode: set while a shell is being opened.
+    shell_opening: bool,
     /// The provisioning script's exit code, once the supervisor reported it.
     provisioned: Option<i32>,
     /// Agent mode: the supervisor's latest Status and the latest CPU use computed.
@@ -562,17 +640,21 @@ struct Running {
     observer_stalled: bool,
 }
 
-/// Which of an instance's terminals is shown: the session (Terminal tab) or the boot log
-/// (Logs tab).
+/// Which of an instance's terminals is shown: the session (Agent tab), the shell (Terminal
+/// tab) or the boot log (Logs tab).
 #[derive(Clone, Copy, PartialEq)]
 pub enum View {
     Session,
+    Shell,
     Log,
 }
 
-/// An instance's two terminals, kept after its VM stops.
+/// An instance's terminals, kept after its VM stops.
+#[derive(Clone)]
 struct Terminals {
     session: Rc<Terminal>,
+    /// Agent mode: a login shell beside the agent, opened when first shown.
+    shell: Rc<Terminal>,
     /// Read-only: kernel, systemd and supervisor output.
     log: Rc<Terminal>,
 }
@@ -687,6 +769,7 @@ impl VmControl {
                 cpus,
                 stop: None,
                 ready: false,
+                shell_opening: false,
                 provisioned: None,
                 status: None,
                 cpu: None,
@@ -994,14 +1077,20 @@ impl VmControl {
                 if !self.running.borrow().contains_key(id) {
                     return;
                 }
-                let (session_terminal, log_terminal) = self.terminals(id);
-                let attached = session_terminal
+                let terminals = self.terminals(id);
+                let attached = terminals
+                    .session
                     .attach(session)
-                    .and_then(|()| log_terminal.attach(log));
+                    .and_then(|()| terminals.log.attach(log));
                 if let Err(error) = attached {
                     eprintln!("Stopping the virtual machine: couldn't open the console: {error}");
                     self.stop(id, AfterStop::Nothing);
                 }
+                let mode = self.running.borrow().get(id).map(|run| run.mode);
+                terminals.shell.detach(match mode {
+                    Some(BootMode::Agent) => SHELL_MESSAGE,
+                    _ => SHELL_UNAVAILABLE_MESSAGE,
+                });
             }
             Event::State(state) => {
                 let Some((mode, stopping)) = self
@@ -1023,6 +1112,26 @@ impl VmControl {
                     return;
                 };
                 self.show(id, mode, VmState::Running);
+                if self.view.get() == View::Shell && self.shown.borrow().as_deref() == Some(id) {
+                    self.open_shell(id);
+                }
+            }
+            Event::Shell(opened) => {
+                match self.running.borrow_mut().get_mut(id) {
+                    Some(run) => run.shell_opening = false,
+                    None => return,
+                }
+                let shell = self.terminals(id).shell;
+                let attached = opened
+                    .and_then(|console| shell.attach(console).map_err(|error| error.to_string()));
+                if let Err(error) = attached {
+                    shell.detach(&format!("Couldn't open the shell: {error}"));
+                }
+            }
+            Event::ShellEnded => {
+                if self.running.borrow().contains_key(id) {
+                    self.terminals(id).shell.detach("The shell ended.");
+                }
             }
             Event::Forwards(list) => {
                 if !self.running.borrow().contains_key(id) {
@@ -1165,30 +1274,35 @@ impl VmControl {
         self.show(id, mode, VmState::Error);
     }
 
-    /// Ends both of the instance's terminals with the same message, so it shows on either tab.
+    /// Ends all of the instance's terminals with the same message, so it shows on any tab.
     fn detach(&self, id: &str, message: &str) {
-        let (session, log) = self.terminals(id);
-        session.detach(message);
-        log.detach(message);
+        let terminals = self.terminals(id);
+        terminals.session.detach(message);
+        terminals.shell.detach(message);
+        terminals.log.detach(message);
     }
 
-    /// The instance's session and log terminals, created on first use.
-    fn terminals(&self, id: &str) -> (Rc<Terminal>, Rc<Terminal>) {
+    /// The instance's terminals, created on first use.
+    fn terminals(&self, id: &str) -> Terminals {
         let mut terminals = self.terminals.borrow_mut();
-        let terminals = terminals.entry(id.to_owned()).or_insert_with(|| Terminals {
-            session: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, false)),
-            log: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, true)),
-        });
-        (terminals.session.clone(), terminals.log.clone())
+        terminals
+            .entry(id.to_owned())
+            .or_insert_with(|| Terminals {
+                session: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, false)),
+                shell: Rc::new(Terminal::new(self.ui.clone(), SHELL_MESSAGE, false)),
+                log: Rc::new(Terminal::new(self.ui.clone(), STOPPED_MESSAGE, true)),
+            })
+            .clone()
     }
 
-    /// The terminal shown in the Terminal or Logs tab.
+    /// The terminal shown in the Agent, Terminal or Logs tab.
     pub fn shown_terminal(&self) -> Option<Rc<Terminal>> {
         let shown = self.shown.borrow();
         let terminals = self.terminals.borrow();
         let terminals = terminals.get(shown.as_deref()?)?;
         Some(match self.view.get() {
             View::Session => terminals.session.clone(),
+            View::Shell => terminals.shell.clone(),
             View::Log => terminals.log.clone(),
         })
     }
@@ -1197,14 +1311,46 @@ impl VmControl {
     pub fn select(&self, id: &str) {
         if self.shown.borrow().as_deref() != Some(id) {
             self.switch(|control| *control.shown.borrow_mut() = Some(id.to_owned()));
+            if self.view.get() == View::Shell {
+                self.open_shell(id);
+            }
         }
     }
 
-    /// Shows the session or the boot log of the selected instance.
+    /// Shows the session, the shell or the boot log of the selected instance.
     pub fn set_view(&self, view: View) {
         if self.view.get() != view {
             self.switch(|control| control.view.set(view));
         }
+        if view == View::Shell
+            && let Some(id) = self.shown.borrow().clone()
+        {
+            self.open_shell(&id);
+        }
+    }
+
+    /// Opens a shell in the instance unless one runs or is being opened. Only an agent-mode
+    /// boot that is ready has shells.
+    pub fn open_shell(&self, id: &str) {
+        let shell = self.terminals(id).shell;
+        let mut running = self.running.borrow_mut();
+        let Some(run) = running.get_mut(id) else {
+            return;
+        };
+        if run.mode != BootMode::Agent
+            || !run.ready
+            || run.stop.is_some()
+            || run.shell_opening
+            || shell.attached()
+        {
+            return;
+        }
+        let (columns, rows) = self.size.get();
+        let sent = run.commands.send(Command::OpenShell {
+            columns: columns.max(1) as u32,
+            rows: rows.max(1) as u32,
+        });
+        run.shell_opening = sent.is_ok();
     }
 
     /// Hides the shown terminal, applies `change`, then sizes and shows the new one.
@@ -1220,17 +1366,18 @@ impl VmControl {
         }
     }
 
-    /// The terminal view changed size. Both of the shown instance's terminals adopt it, so
-    /// the session keeps its size while the Logs tab is open; hidden instances' terminals
+    /// The terminal view changed size. All of the shown instance's terminals adopt it, so
+    /// the session keeps its size while another tab is open; hidden instances' terminals
     /// adopt it when shown.
     pub fn resize(&self, cols: i32, rows: i32) {
         self.size.set((cols, rows));
         let Some(id) = self.shown.borrow().clone() else {
             return;
         };
-        let (session, log) = self.terminals(&id);
-        session.resize(cols, rows);
-        log.resize(cols, rows);
+        let terminals = self.terminals(&id);
+        terminals.session.resize(cols, rows);
+        terminals.shell.resize(cols, rows);
+        terminals.log.resize(cols, rows);
     }
 
     /// Changes the instance's sidebar row.
