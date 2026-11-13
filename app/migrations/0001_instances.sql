@@ -22,7 +22,7 @@ CREATE TABLE instance_revisions (
     command           TEXT NOT NULL,                -- from the preset, unless custom
     arguments         TEXT NOT NULL CHECK (json_valid(arguments)),     -- ["--flag", …]
     working_directory TEXT NOT NULL,
-    environment       TEXT NOT NULL CHECK (json_valid(environment)),   -- [{name, value}]
+    environment       BLOB NOT NULL,                -- 12-byte nonce + AES-256-GCM ciphertext of [{name, value}]; key in the keychain (db.rs)
     mounts            TEXT NOT NULL CHECK (json_valid(mounts)),        -- [{host_path, guest_path, writable, enabled}]
     network_default   TEXT NOT NULL CHECK (network_default IN ('deny', 'allow')),
     network_rules     TEXT NOT NULL CHECK (json_valid(network_rules)), -- [{target, action}]

@@ -8,24 +8,35 @@
 //! Each saved configuration is a revision. The latest revision stays editable
 //! while it is pending (never booted); the first boot that uses it freezes it,
 //! so the configuration of every run stays on record.
+//!
+//! Environment variables are stored encrypted (AES-256-GCM). The key is created on the
+//! first start and kept in the user's login keychain; every Mac has its own.
 
 use std::error::Error;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use aes_gcm::Aes256Gcm;
+use aes_gcm::aead::{Aead, KeyInit, Nonce};
 use objc2_foundation::{NSFileManager, NSSearchPathDirectory, NSSearchPathDomainMask};
 use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, Type, ValueRef};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use rusqlite_migration::{M, Migrations, SchemaVersion};
+use security_framework::passwords::{get_generic_password, set_generic_password};
+use security_framework::random::SecRandom;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// The app identifier; names the app's Application Support folder.
+/// The app identifier; names the app's Application Support folder and its keychain item.
 pub const APP_ID: &str = "com.programming-group.agentarium";
 const FILE_NAME: &str = "agentarium.sqlite";
+/// The keychain account of the database key, under the service `APP_ID`.
+const KEY_ACCOUNT: &str = "database-key";
+/// AES-GCM's nonce length; each encrypted value starts with its nonce.
+const NONCE_LEN: usize = 12;
 
 // Users' databases are upgraded in place when the app starts, so migrations are
 // append-only: never edit, reorder or delete one that has shipped. Every schema
@@ -38,6 +49,8 @@ fn migrations() -> Migrations<'static> {
 
 pub struct Db {
     conn: Connection,
+    /// Encrypts the environment variables of revisions.
+    cipher: Aes256Gcm,
 }
 
 /// An agent boot, for the Activity tab's run picker. Times are local.
@@ -251,6 +264,30 @@ pub fn logs_dir(id: &str) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// The database key from the keychain, created there on the first start.
+fn database_key() -> Result<Aes256Gcm> {
+    // errSecItemNotFound
+    const ITEM_NOT_FOUND: i32 = -25300;
+    let key = match get_generic_password(APP_ID, KEY_ACCOUNT) {
+        Ok(key) => key,
+        Err(error) if error.code() == ITEM_NOT_FOUND => {
+            let mut key = vec![0; 32];
+            SecRandom::default().copy_bytes(&mut key)?;
+            set_generic_password(APP_ID, KEY_ACCOUNT, &key).map_err(|error| {
+                format!("Couldn't store the database key in the keychain: {error}")
+            })?;
+            key
+        }
+        Err(error) => {
+            return Err(
+                format!("Couldn't read the database key from the keychain: {error}").into(),
+            );
+        }
+    };
+    Ok(Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| "The database key in the keychain has the wrong length.")?)
+}
+
 /// Opens a connection to the database in `dir`. With WAL, the main thread's connection and
 /// the data plane's can read while the other writes.
 fn connect(dir: &Path) -> Result<Connection> {
@@ -271,6 +308,7 @@ pub fn open_writer() -> Result<Connection> {
 impl Db {
     /// Opens the database and brings its schema up to date.
     pub fn open() -> Result<Db> {
+        let cipher = database_key()?;
         let dir = app_dir()?;
         let mut conn = connect(&dir)?;
 
@@ -285,7 +323,7 @@ impl Db {
             }
         }
         migrations.to_latest(&mut conn)?;
-        Ok(Db { conn })
+        Ok(Db { conn, cipher })
     }
 
     pub fn instances(&self) -> Result<Vec<Instance>> {
@@ -321,7 +359,7 @@ impl Db {
             "INSERT INTO instances (id, name, disk_path, kernel) VALUES (?1, ?2, ?3, ?4)",
             params![id, name, disk_path.to_string_lossy(), kernel],
         )?;
-        put_revision(&tx, id, 1, config)?;
+        put_revision(&tx, &self.cipher, id, 1, config)?;
         tx.commit()?;
         Ok(Instance {
             id: id.into(),
@@ -337,7 +375,7 @@ impl Db {
         Ok(self.conn.query_row(
             &format!("{REVISION_QUERY} ORDER BY revision DESC LIMIT 1"),
             [instance_id],
-            revision_from_row,
+            |row| revision_from_row(row, &self.cipher),
         )?)
     }
 
@@ -350,7 +388,7 @@ impl Db {
                     "{REVISION_QUERY} AND booted_at IS NOT NULL ORDER BY revision DESC LIMIT 1"
                 ),
                 [instance_id],
-                revision_from_row,
+                |row| revision_from_row(row, &self.cipher),
             )
             .optional()?)
     }
@@ -376,7 +414,7 @@ impl Db {
         } else {
             latest + 1
         };
-        put_revision(&tx, instance_id, number, config)?;
+        put_revision(&tx, &self.cipher, instance_id, number, config)?;
         tx.commit()?;
         Ok(number)
     }
@@ -495,7 +533,20 @@ const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, disk_gb, comman
     provision_script, port_forwards
     FROM instance_revisions WHERE instance_id = ?1";
 
-fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
+fn revision_from_row(row: &Row, cipher: &Aes256Gcm) -> rusqlite::Result<Revision> {
+    let blob: Vec<u8> = row.get(7)?;
+    let environment = blob
+        .split_at_checked(NONCE_LEN)
+        .and_then(|(nonce, ciphertext)| {
+            cipher
+                .decrypt(&Nonce::<Aes256Gcm>::try_from(nonce).ok()?, ciphertext)
+                .ok()
+        })
+        .ok_or("Couldn't decrypt the environment variables; was the key in the keychain replaced?")
+        .and_then(|json| {
+            serde_json::from_slice(&json).map_err(|_| "Invalid environment variables.")
+        })
+        .map_err(|error| rusqlite::Error::FromSqlConversionFailure(7, Type::Blob, error.into()))?;
     Ok(Revision {
         number: row.get(0)?,
         config: Config {
@@ -505,7 +556,7 @@ fn revision_from_row(row: &Row) -> rusqlite::Result<Revision> {
             command: row.get(4)?,
             arguments: json(row, 5)?,
             working_directory: row.get(6)?,
-            environment: json(row, 7)?,
+            environment,
             mounts: json(row, 8)?,
             network_default: row.get(9)?,
             network_rules: json(row, 10)?,
@@ -528,7 +579,21 @@ fn instance_from_row(row: &Row) -> rusqlite::Result<Instance> {
 }
 
 /// Inserts a revision, or updates it if it exists and is still pending.
-fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Config) -> Result<()> {
+fn put_revision(
+    conn: &Connection,
+    cipher: &Aes256Gcm,
+    instance_id: &str,
+    number: i64,
+    config: &Config,
+) -> Result<()> {
+    // A fresh random nonce for every encryption, stored in front of the ciphertext.
+    let mut environment = vec![0; NONCE_LEN];
+    SecRandom::default().copy_bytes(&mut environment)?;
+    let nonce = Nonce::<Aes256Gcm>::try_from(&environment[..])?;
+    let ciphertext = cipher
+        .encrypt(&nonce, serde_json::to_vec(&config.environment)?.as_slice())
+        .map_err(|_| "Couldn't encrypt the environment variables.")?;
+    environment.extend(ciphertext);
     conn.execute(
         "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
              command, arguments, working_directory, environment, mounts, network_default,
@@ -553,7 +618,7 @@ fn put_revision(conn: &Connection, instance_id: &str, number: i64, config: &Conf
             config.command,
             serde_json::to_string(&config.arguments)?,
             config.working_directory,
-            serde_json::to_string(&config.environment)?,
+            environment,
             serde_json::to_string(&config.mounts)?,
             config.network_default,
             serde_json::to_string(&config.network_rules)?,
