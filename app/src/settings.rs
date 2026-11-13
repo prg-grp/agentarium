@@ -85,6 +85,14 @@ impl SettingsEditor {
         let s = this.clone();
         g.on_remove_argument(move |index| s.edit(|e| remove(&mut e.config.arguments, index)));
         let s = this.clone();
+        g.on_edit_argument(move |index, argument| {
+            s.edit(|e| editor::edit_argument(&mut e.config, index, &argument))
+        });
+        let s = this.clone();
+        g.on_move_argument(move |from, to| {
+            s.edit(|e| editor::move_argument(&mut e.config, from, to))
+        });
+        let s = this.clone();
         g.on_set_working_directory(move |dir| s.edit(|e| e.config.working_directory = dir.into()));
 
         let s = this.clone();

@@ -51,6 +51,8 @@ export global Settings {
     callback set-command(command: string);
     callback add-argument(argument: string);
     callback remove-argument(index: int);
+    callback edit-argument(index: int, argument: string);
+    callback move-argument(from: int, to: int);
     callback set-working-directory(directory: string);
     callback set-script(script: string);
     callback add-env();
@@ -339,6 +341,12 @@ export component SettingsTab {
                             }
                             remove-argument(index) => {
                                 Settings.remove-argument(index);
+                            }
+                            edit-argument(index, argument) => {
+                                Settings.edit-argument(index, argument);
+                            }
+                            move-argument(from, to) => {
+                                Settings.move-argument(from, to);
                             }
                             set-working-directory(directory) => {
                                 Settings.set-working-directory(directory);

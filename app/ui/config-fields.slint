@@ -42,11 +42,21 @@ export component Field {
     in property <bool> mono;
     in property <bool> invalid;
     in property <bool> read-only;
+    out property <bool> has-focus: edit.has-focus;
     callback edited(text: string);
     callback accepted(text: string);
 
+    forward-focus: edit;
+
+    // Focuses the field with the cursor after the last character.
+    public function focus-at-end() {
+        edit.focus();
+        // Byte offsets; anything past the end is clamped to it, and a character has at most 4.
+        edit.set-selection-offsets(edit.text.character-count * 4, edit.text.character-count * 4);
+    }
+
     HorizontalLayout {
-        LineEdit {
+        edit := LineEdit {
             text <=> root.text;
             read-only: root.read-only;
             placeholder-text: root.placeholder;
@@ -246,7 +256,39 @@ export component LaunchFields {
     callback set-command(command: string);
     callback add-argument(argument: string);
     callback remove-argument(index: int);
+    // An empty argument removes it.
+    callback edit-argument(index: int, argument: string);
+    callback move-argument(from: int, to: int);
     callback set-working-directory(directory: string);
+    // The argument being edited, or -1.
+    property <int> editing: -1;
+    // While an argument is dragged by its grip: its index (-1 otherwise), the pointer in window
+    // coordinates, the pill under the pointer, and the slot (0 to the count) it would go to.
+    property <int> drag-from: -1;
+    property <length> pointer-x;
+    property <length> pointer-y;
+    property <int> drop-pill: -1;
+    property <int> drop-slot: -1;
+    property <bool> pointer-inside: root.pointer-x >= pills.absolute-position.x && root.pointer-x < pills.absolute-position.x + pills.width && root.pointer-y >= pills.absolute-position.y && root.pointer-y < pills.absolute-position.y + pills.height;
+    // Dropping now would change the order.
+    property <bool> drop-moves: root.drag-from >= 0 && root.pointer-inside && root.drop-slot >= 0 && root.drop-slot != root.drag-from && root.drop-slot != root.drag-from + 1;
+
+    function end-drag(drop: bool) {
+        if drop && root.drop-moves {
+            root.move-argument(root.drag-from, root.drop-slot > root.drag-from ? root.drop-slot - 1 : root.drop-slot);
+        }
+        root.drag-from = -1;
+        root.drop-pill = -1;
+        root.drop-slot = -1;
+    }
+
+    // Ends editing once, whether by Return or by focus leaving the field.
+    function commit-argument(index: int, text: string) {
+        if root.editing == index {
+            root.editing = -1;
+            root.edit-argument(index, text);
+        }
+    }
 
     VerticalLayout {
         spacing: 14px;
@@ -299,52 +341,155 @@ export component LaunchFields {
                 text: "Arguments";
             }
 
-            HorizontalLayout {
+            pills := FlexboxLayout {
                 spacing: 6px;
-                alignment: start;
 
-                for argument[index] in root.arguments: Rectangle {
-                    border-radius: 4px;
-                    background: Theme.raise;
+                for argument[index] in root.arguments: HorizontalLayout {
+                    if root.editing == index: Field {
+                        // Menlo is monospaced, so the argument's length gives its width; Fluent's
+                        // LineEdit is never narrower than 160px.
+                        width: max(180px, argument.character-count * Theme.font-mono * 0.62 + 40px);
+                        mono: true;
+                        label: "Argument";
+                        text: argument;
+                        init => {
+                            self.focus-at-end();
+                        }
+                        accepted(text) => {
+                            root.commit-argument(index, text);
+                        }
+                        changed has-focus => {
+                            if !self.has-focus {
+                                root.commit-argument(index, self.text);
+                            }
+                        }
+                    }
 
-                    HorizontalLayout {
-                        padding-left: 8px;
-                        padding-right: 2px;
-                        spacing: 2px;
+                    if root.editing != index: Rectangle {
+                        property <bool> dragged: root.drag-from == index;
+                        // Widened by half the spacing, so the gaps between pills count too.
+                        property <bool> under-pointer: root.drag-from >= 0 && root.pointer-x >= self.absolute-position.x - 3px && root.pointer-x < self.absolute-position.x + self.width + 3px && root.pointer-y >= self.absolute-position.y - 3px && root.pointer-y < self.absolute-position.y + self.height + 3px;
+                        property <bool> right-half: root.pointer-x >= self.absolute-position.x + self.width / 2;
 
-                        Text {
-                            text: argument;
-                            color: Theme.tx;
-                            font-family: Theme.mono;
-                            font-size: Theme.font-mono;
-                            vertical-alignment: center;
+                        function aim() {
+                            if self.under-pointer {
+                                root.drop-pill = index;
+                                root.drop-slot = self.right-half ? index + 1 : index;
+                            }
+                        }
+                        changed under-pointer => {
+                            self.aim();
+                        }
+                        changed right-half => {
+                            self.aim();
                         }
 
-                        AppButton {
-                            kind: ButtonKind.ghost;
-                            compact: true;
-                            icon: @image-url("icons/x.svg");
-                            label: "Remove argument " + argument;
+                        min-height: add-field.preferred-height;
+                        border-radius: 4px;
+                        background: dragged ? Theme.acc.transparentize(85%) : pill-touch.has-hover && root.drag-from < 0 ? Theme.hover : Theme.raise;
+                        border-width: dragged ? 1px : 0px;
+                        border-color: Theme.acc;
+
+                        pill-touch := TouchArea {
+                            mouse-cursor: pointer;
                             clicked => {
-                                root.remove-argument(index);
+                                root.editing = index;
                             }
+                        }
+
+                        HorizontalLayout {
+                            padding-left: 6px;
+                            padding-right: 2px;
+                            spacing: 6px;
+
+                            // Only the grip starts a drag, so the text stays clickable. It keeps
+                            // the mouse until release, and with it the cursor.
+                            TouchArea {
+                                width: 16px;
+                                mouse-cursor: self.pressed ? MouseCursor.grabbing : MouseCursor.grab;
+                                moved => {
+                                    if self.pressed {
+                                        root.drag-from = index;
+                                        root.pointer-x = self.absolute-position.x + self.mouse-x;
+                                        root.pointer-y = self.absolute-position.y + self.mouse-y;
+                                    }
+                                }
+                                pointer-event(event) => {
+                                    if event.kind == PointerEventKind.up {
+                                        root.end-drag(true);
+                                    } else if event.kind == PointerEventKind.cancel {
+                                        root.end-drag(false);
+                                    }
+                                }
+
+                                Image {
+                                    x: 1px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 14px;
+                                    height: 14px;
+                                    source: @image-url("icons/grip-vertical.svg");
+                                    colorize: Theme.tx3;
+                                    accessible-role: none;
+                                }
+                            }
+
+                            Text {
+                                text: argument;
+                                color: dragged ? Theme.tx2 : Theme.tx;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                vertical-alignment: center;
+                            }
+
+                            VerticalLayout {
+                                alignment: center;
+                                AppButton {
+                                    kind: ButtonKind.ghost;
+                                    compact: true;
+                                    icon: @image-url("icons/x.svg");
+                                    label: "Remove argument " + argument;
+                                    clicked => {
+                                        root.remove-argument(index);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Where the dragged argument would land: before or after this pill.
+                        if root.drop-moves && root.drop-pill == index && (root.drop-slot == index || root.drop-slot == index + 1): Rectangle {
+                            x: root.drop-slot == index ? -4px : parent.width + 2px;
+                            y: 0;
+                            width: 2px;
+                            height: parent.height;
+                            border-radius: 1px;
+                            background: Theme.acc;
                         }
                     }
                 }
 
-                Field {
+                add-field := Field {
+                    // Over this field, the dragged argument goes to the end.
+                    property <bool> under-pointer: root.drag-from >= 0 && root.pointer-x >= self.absolute-position.x - 3px && root.pointer-x < self.absolute-position.x + self.width && root.pointer-y >= self.absolute-position.y - 3px && root.pointer-y < self.absolute-position.y + self.height + 3px;
+                    changed under-pointer => {
+                        if self.under-pointer {
+                            root.drop-pill = root.arguments.length - 1;
+                            root.drop-slot = root.arguments.length;
+                        }
+                    }
+
                     width: 180px;
                     mono: true;
                     placeholder: "Add argument";
                     accepted(text) => {
                         root.add-argument(text);
                         self.text = "";
+                        self.focus();
                     }
                 }
             }
 
             Text {
-                text: "Press Return to add. Each argument is passed as it is, without shell quoting.";
+                text: "Press Return to add. Click an argument to change it, or drag it to reorder. Each argument is passed as it is, without shell quoting.";
                 color: Theme.tx3;
                 font-size: Theme.font-small;
                 wrap: word-wrap;

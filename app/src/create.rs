@@ -130,6 +130,14 @@ impl Creator {
         let c = this.clone();
         g.on_remove_argument(move |index| c.edit(|d| remove(&mut d.config.arguments, index)));
         let c = this.clone();
+        g.on_edit_argument(move |index, argument| {
+            c.edit(|d| editor::edit_argument(&mut d.config, index, &argument))
+        });
+        let c = this.clone();
+        g.on_move_argument(move |from, to| {
+            c.edit(|d| editor::move_argument(&mut d.config, from, to))
+        });
+        let c = this.clone();
         g.on_set_working_directory(move |dir| c.edit(|d| d.config.working_directory = dir.into()));
 
         let c = this.clone();

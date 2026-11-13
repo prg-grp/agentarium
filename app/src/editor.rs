@@ -102,6 +102,27 @@ pub fn add_argument(c: &mut Config, argument: &str) {
     }
 }
 
+/// Replaces the argument at `index`; an empty one removes it.
+pub fn edit_argument(c: &mut Config, index: i32, argument: &str) {
+    if argument.is_empty() {
+        remove(&mut c.arguments, index);
+    } else if let Some(existing) = c.arguments.get_mut(index as usize) {
+        *existing = argument.into();
+    }
+}
+
+/// Moves the argument at `from` to position `to`.
+pub fn move_argument(c: &mut Config, from: i32, to: i32) {
+    let len = c.arguments.len();
+    if let (Ok(from), Ok(to)) = (usize::try_from(from), usize::try_from(to))
+        && from < len
+        && to < len
+    {
+        let argument = c.arguments.remove(from);
+        c.arguments.insert(to, argument);
+    }
+}
+
 pub fn add_env(c: &mut Config) {
     c.environment.push(EnvVar {
         name: String::new(),

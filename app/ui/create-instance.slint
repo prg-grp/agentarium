@@ -71,6 +71,8 @@ export global Creation {
     callback set-command(command: string);
     callback add-argument(argument: string);
     callback remove-argument(index: int);
+    callback edit-argument(index: int, argument: string);
+    callback move-argument(from: int, to: int);
     callback set-working-directory(directory: string);
     callback add-env();
     callback edit-env(index: int, name: string, value: string);
@@ -488,6 +490,12 @@ export component CreateInstance {
                             }
                             remove-argument(index) => {
                                 Creation.remove-argument(index);
+                            }
+                            edit-argument(index, argument) => {
+                                Creation.edit-argument(index, argument);
+                            }
+                            move-argument(from, to) => {
+                                Creation.move-argument(from, to);
                             }
                             set-working-directory(directory) => {
                                 Creation.set-working-directory(directory);
