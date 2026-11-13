@@ -24,6 +24,12 @@
 //! In agent mode it opens a shell in the guest when the UI asks for one (the Terminal tab):
 //! a connection of its own to the supervisor's shell port, used as the shell terminal's
 //! console.
+//!
+//! Settings saved while an agent or maintenance boot runs apply to it at once where they
+//! can (`VmControl::apply`): the network policy, the shared folders (the VM's share and the
+//! supervisor's mounts, through Update) and the forwarded ports. The launch settings and
+//! environment reach the agent when it next starts; processors, memory and disk size only
+//! the next boot.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -40,12 +46,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use command_plane::{
     AgentExit, CollectorState, EnvVar, FORWARD_PORT, GuestMessage, HostMessage, Launch, Mode,
-    Mount, PORT, PROTOCOL_VERSION, Resize, SET_TIME_INTERVAL, SHELL_PORT, SetTime, Shell, Start,
-    Status, Stop, guest_message, host_message,
+    Mount, PORT, PROTOCOL_VERSION, Resize, RestartAgent, SET_TIME_INTERVAL, SHARE_SLOTS,
+    SHELL_PORT, SetTime, Shell, Start, Status, Stop, Update, guest_message, host_message,
+    share_tag,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::db::{self, Db};
+use crate::db::{self, Config, Db, NetworkAction};
 use crate::editor::{
     FolderProblem, display_path, env_errors, folder_problem, forward_label, guest_path_errors,
 };
@@ -137,6 +144,13 @@ enum Command {
         client: TcpStream,
         guest_port: u16,
     },
+    /// Applies the saved configuration to the running boot as settings `generation`.
+    Apply {
+        generation: u32,
+        config: Config,
+    },
+    /// Agent mode: starts the agent again, with the latest settings.
+    RestartAgent,
 }
 
 /// What a controller thread reports to the UI thread.
@@ -166,6 +180,8 @@ enum Event {
     Shell(Result<Console, String>),
     /// The shell ended.
     ShellEnded,
+    /// The guest applied the latest settings; why some couldn't be, if so.
+    Applied(Vec<String>),
     /// The controller ended: the VM stopped, or failed with the error.
     Ended(Result<(), String>),
 }
@@ -305,13 +321,18 @@ fn run(
     // time, to notice the Mac slept or its clock was set.
     let mut next_set_time: Option<Instant> = None;
     let mut clock = (Instant::now(), SystemTime::now());
+    // The folders in the VM's slots, and the slot to look for a free one from (see
+    // `share_folders`).
+    let mut shares = spec.shares.clone().unwrap_or_default();
+    let mut next_slot = shares.len();
+    let mut port_forwards = spec.forwards.clone();
+    // The latest Update, sent again on every new connection. Until the guest has applied
+    // it, its generation with the folders the share keeps afterwards and the problems found
+    // before sending it.
+    let mut update: Option<Update> = None;
+    let mut updating: Option<(u32, Vec<SharedFolder>, Vec<String>)> = None;
     // The shared folders as (guest path, Mac path), for the observer's file paths.
-    let mounts: Vec<(String, PathBuf)> = start
-        .mounts
-        .iter()
-        .zip(&spec.shares)
-        .map(|(mount, share)| (mount.guest_path.clone(), share.host_path.clone()))
-        .collect();
+    let mounts: observer::Mounts = Arc::new(Mutex::new(host_paths(&start.mounts, &shares)));
     let mut last = VmState::Starting;
     loop {
         let wait = [deadline, next_connect]
@@ -372,6 +393,12 @@ fn run(
                                 sent = channel.send(host_message::Kind::Resize(size));
                             }
                         }
+                        // The guest ignores the repeated Start; the settings changed since.
+                        if let Some(update) = &update
+                            && sent.is_ok()
+                        {
+                            sent = channel.send(host_message::Kind::Update(update.clone()));
+                        }
                         match sent {
                             Ok(()) => {
                                 next_set_time = Some(Instant::now());
@@ -382,19 +409,18 @@ fn run(
                                 }
                                 report(Event::Ready);
                                 // Start is sent again on every new connection; only the
-                                // first counts in the guest, so the ports open once.
-                                if forwards.is_none() && !spec.forwards.is_empty() {
+                                // first counts in the guest, so the ports open once. Agent
+                                // and maintenance boots listen even without ports, as
+                                // settings saved later may add some.
+                                if forwards.is_none() && start.mode() != Mode::Provision {
                                     let accepted = commands.clone();
-                                    match Forwards::start(
-                                        &spec.forwards,
-                                        move |client, guest_port| {
-                                            let _ = accepted
-                                                .send(Command::Forward { client, guest_port });
-                                        },
-                                    ) {
-                                        Ok((opened, list)) => {
+                                    match Forwards::start(move |client, guest_port| {
+                                        let _ =
+                                            accepted.send(Command::Forward { client, guest_port });
+                                    }) {
+                                        Ok(mut opened) => {
+                                            report(Event::Forwards(opened.update(&port_forwards)));
                                             forwards = Some(opened);
-                                            report(Event::Forwards(list));
                                         }
                                         Err(error) => {
                                             eprintln!("Couldn't open the forwarded ports: {error}")
@@ -414,6 +440,25 @@ fn run(
                 // The supervisor powers off by itself; the boot ends with this reason.
                 Some(guest_message::Kind::StartFailed(failed)) => {
                     failure = Some(failed.reason);
+                }
+                // The guest let go of the folders no longer shared, so their slots can too.
+                Some(guest_message::Kind::Updated(updated)) => {
+                    if let Some((_, folders, problems)) =
+                        updating.take_if(|(generation, ..)| *generation == updated.generation)
+                    {
+                        for gone in shares
+                            .iter()
+                            .filter(|share| !folders.iter().any(|folder| folder.slot == share.slot))
+                        {
+                            if let Err(error) = vm.set_share(gone.slot, None) {
+                                eprintln!("Couldn't stop sharing a folder: {error}");
+                            }
+                        }
+                        shares = folders;
+                        report(Event::Applied(
+                            problems.into_iter().chain(updated.mount_errors).collect(),
+                        ));
+                    }
                 }
                 Some(guest_message::Kind::Status(status)) if deadline.is_none() => {
                     last_status = Some(Instant::now());
@@ -552,6 +597,63 @@ fn run(
                 })));
             }
             Ok(Command::ShellEnded) => report(Event::ShellEnded),
+            Ok(Command::Apply { generation, config }) if deadline.is_none() => {
+                // Maintenance boots keep their open internet.
+                let allow_local = config.network_allow_local;
+                if agent_mode {
+                    let rules = config.network_rules.clone();
+                    spec.network.set(config.network_default, rules, allow_local);
+                } else {
+                    spec.network
+                        .set(NetworkAction::Allow, Vec::new(), allow_local);
+                }
+                let (environment, wanted, mut problems) = session_parts(&config);
+                let (folders, guest_mounts) =
+                    share_folders(wanted, &shares, &mut next_slot, &mut problems);
+                // New folders are shared before the guest mounts them; the slots of the
+                // folders that are gone stay until the guest has let go of them (Updated).
+                for folder in &folders {
+                    if !shares.iter().any(|share| share.slot == folder.slot) {
+                        if let Err(error) = vm.set_share(folder.slot, Some(folder)) {
+                            eprintln!("Couldn't share a folder: {error}");
+                        }
+                        shares.push(folder.clone());
+                    }
+                }
+                *mounts.lock().unwrap() = host_paths(&guest_mounts, &folders);
+                let sent = Update {
+                    generation,
+                    launch: Some(Launch {
+                        command: config.command,
+                        arguments: config.arguments,
+                        working_directory: config.working_directory,
+                    }),
+                    environment,
+                    mounts: guest_mounts,
+                    forward_ports: (config.port_forwards.iter())
+                        .map(|forward| forward.guest_port.into())
+                        .collect(),
+                };
+                updating = Some((generation, folders, problems));
+                if let Some(channel) = channel.as_mut()
+                    && let Err(error) = channel.send(host_message::Kind::Update(sent.clone()))
+                {
+                    eprintln!("Couldn't send Update to the guest supervisor: {error}");
+                }
+                update = Some(sent);
+                port_forwards = config.port_forwards;
+                if let Some(forwards) = forwards.as_mut() {
+                    report(Event::Forwards(forwards.update(&port_forwards)));
+                }
+            }
+            Ok(Command::RestartAgent) if agent_mode && deadline.is_none() => {
+                let restart = host_message::Kind::RestartAgent(RestartAgent {});
+                if let Some(channel) = channel.as_mut()
+                    && let Err(error) = channel.send(restart)
+                {
+                    eprintln!("Couldn't send RestartAgent to the guest supervisor: {error}");
+                }
+            }
             // A repeated stop request, a completion without error, or the poll interval.
             Ok(_) | Err(_) => {}
         }
@@ -629,6 +731,106 @@ fn run(
     }
 }
 
+/// What an agent or maintenance session gets from `config`: its environment variables
+/// (rows without a name are left out) and the enabled shared folders that can be shared,
+/// with a problem for each one that can't: gone from the Mac, unreadable, or with an
+/// invalid guest path.
+fn session_parts(config: &Config) -> (Vec<EnvVar>, Vec<db::Mount>, Vec<String>) {
+    let environment = (config.environment.iter())
+        .filter(|var| !var.name.is_empty())
+        .map(|var| EnvVar {
+            name: var.name.clone(),
+            value: var.value.clone(),
+        })
+        .collect();
+    let enabled: Vec<db::Mount> = (config.mounts.iter())
+        .filter(|mount| mount.enabled)
+        .cloned()
+        .collect();
+    let mut problems = Vec::new();
+    let mut mounts = Vec::new();
+    for (mount, guest_error) in enabled.iter().zip(guest_path_errors(&enabled)) {
+        let path = display_path(&mount.host_path);
+        match folder_problem(&mount.host_path) {
+            Some(FolderProblem::Missing) => {
+                problems.push(format!("{path} no longer exists on your Mac."));
+            }
+            Some(FolderProblem::Unreadable) => {
+                problems.push(format!("{path} can't be read by the app."));
+            }
+            None if !guest_error.is_empty() => {
+                problems.push(format!("{}: {guest_error}", mount.guest_path));
+            }
+            None => mounts.push(mount.clone()),
+        }
+    }
+    (environment, mounts, problems)
+}
+
+/// The VM's shared folders and the guest's mounts for `mounts`, one slot each (see
+/// `command_plane::SHARE_SLOTS`). A folder already shared the same way in `shares` keeps
+/// its slot. Any other takes the next free slot from `next_slot` on, round the slots, so a
+/// freed slot is taken again as late as possible: until the guest has closed every file it
+/// had open in its old folder, that folder's mount lingers on the slot. A folder that finds
+/// no free slot isn't shared; `problems` says so.
+fn share_folders(
+    mounts: Vec<db::Mount>,
+    shares: &[SharedFolder],
+    next_slot: &mut usize,
+    problems: &mut Vec<String>,
+) -> (Vec<SharedFolder>, Vec<Mount>) {
+    let mut folders: Vec<SharedFolder> = Vec::new();
+    let mut guest = Vec::new();
+    for mount in mounts {
+        let read_only = !mount.writable;
+        let taken = |slot: usize| folders.iter().any(|folder| folder.slot == slot);
+        let kept = shares
+            .iter()
+            .find(|share| {
+                share.host_path == mount.host_path
+                    && share.read_only == read_only
+                    && !taken(share.slot)
+            })
+            .map(|share| share.slot);
+        let free = || {
+            (0..SHARE_SLOTS)
+                .map(|offset| (*next_slot + offset) % SHARE_SLOTS)
+                .find(|&slot| !taken(slot) && !shares.iter().any(|share| share.slot == slot))
+        };
+        let Some(slot) = kept.or_else(free) else {
+            problems.push(format!(
+                "{}: at most {SHARE_SLOTS} folders can be shared at once.",
+                mount.guest_path
+            ));
+            continue;
+        };
+        if kept.is_none() {
+            *next_slot = (slot + 1) % SHARE_SLOTS;
+        }
+        folders.push(SharedFolder {
+            slot,
+            host_path: mount.host_path,
+            read_only,
+        });
+        guest.push(Mount {
+            share: share_tag(slot),
+            guest_path: mount.guest_path,
+            read_only,
+        });
+    }
+    (folders, guest)
+}
+
+/// The guest's mounts as (guest path, Mac path), for the observer.
+fn host_paths(mounts: &[Mount], shares: &[SharedFolder]) -> Vec<(String, PathBuf)> {
+    (mounts.iter())
+        .filter_map(|mount| {
+            let share = (shares.iter()).find(|share| share_tag(share.slot) == mount.share)?;
+            Some((mount.guest_path.clone(), share.host_path.clone()))
+        })
+        .collect()
+}
+
 thread_local! {
     /// Where controller threads' events go; set by `VmControl::new`.
     static CONTROL: RefCell<Weak<VmControl>> = const { RefCell::new(Weak::new()) };
@@ -668,6 +870,10 @@ struct Running {
     /// Agent mode: the observer's latest Health, and whether it is overdue.
     observed: Option<Summary>,
     observer_stalled: bool,
+    /// The configuration in effect: the boot's, with the settings applied since.
+    in_effect: Config,
+    /// The latest settings applied while it runs, and their generation (`Command::Apply`).
+    latest: Option<(u32, Config)>,
 }
 
 /// Which of an instance's terminals is shown: the session (Agent tab), the shell (Terminal
@@ -730,7 +936,7 @@ impl VmControl {
         if self.running.borrow().contains_key(id) {
             return;
         }
-        let (mut spec, start, mode, revision) = match self.prepare(id, mode) {
+        let (mut spec, start, mode, revision, config) = match self.prepare(id, mode) {
             Ok(prepared) => prepared,
             Err(error) => return self.failed(id, mode, &error.to_string()),
         };
@@ -772,11 +978,7 @@ impl VmControl {
                 }
             };
         }
-        self.update_item(id, |item| {
-            item.active_revision = revision as i32;
-            item.saved_revision = revision as i32;
-            item.pending_changes = 0;
-        });
+        self.update_item(id, |item| item.apply_error = "".into());
         let cpus = spec.cpus;
         let event_id = id.to_owned();
         let spawned = spawn(spec, start, boot, log_file, move |event| {
@@ -807,6 +1009,8 @@ impl VmControl {
                 boot,
                 observed: None,
                 observer_stalled: false,
+                in_effect: config,
+                latest: None,
             },
         );
         self.show(id, mode, VmState::Starting);
@@ -817,12 +1021,75 @@ impl VmControl {
         self.running.borrow().get(id).map(|running| running.boot)
     }
 
+    /// The mode and the configuration in effect of the instance's boot, if it is an agent or
+    /// maintenance boot that is ready and not stopping, so settings can apply to it.
+    pub fn live(&self, id: &str) -> Option<(BootMode, Config)> {
+        let running = self.running.borrow();
+        let run = running.get(id)?;
+        (run.ready && run.stop.is_none() && run.mode != BootMode::Provision)
+            .then(|| (run.mode, run.in_effect.clone()))
+    }
+
+    /// Applies the configuration just saved as `revision` to the instance's running agent
+    /// or maintenance boot, which counts as booting the revision. Processors, memory and
+    /// disk size wait for the next boot; in agent mode, the launch settings and environment
+    /// for the agent's next start. Returns false, and changes nothing, unless such a boot
+    /// is ready and not stopping.
+    pub fn apply(&self, id: &str, revision: i64, config: &Config) -> bool {
+        {
+            let mut running = self.running.borrow_mut();
+            let Some(run) = running.get_mut(id) else {
+                return false;
+            };
+            if !run.ready || run.stop.is_some() || run.mode == BootMode::Provision {
+                return false;
+            }
+            if let Err(error) = self.db.mark_booted(id, revision) {
+                eprintln!("Couldn't record the applied revision: {error}");
+                return false;
+            }
+            let generation = run.latest.as_ref().map_or(0, |(generation, _)| *generation) + 1;
+            let before = std::mem::replace(&mut run.in_effect, config.clone());
+            let now = &mut run.in_effect;
+            (now.cpus, now.memory_mib, now.disk_gb) =
+                (before.cpus, before.memory_mib, before.disk_gb);
+            if run.mode == BootMode::Agent {
+                now.command = before.command;
+                now.arguments = before.arguments;
+                now.working_directory = before.working_directory;
+                now.environment = before.environment;
+            }
+            run.latest = Some((generation, config.clone()));
+            let _ = run.commands.send(Command::Apply {
+                generation,
+                config: config.clone(),
+            });
+        }
+        self.update_item(id, |item| item.apply_error = "".into());
+        true
+    }
+
+    /// Agent mode: starts the instance's agent again, with the latest settings; the VM keeps
+    /// running.
+    pub fn restart_agent(&self, id: &str) {
+        if let Some(run) = self.running.borrow().get(id)
+            && run.mode == BootMode::Agent
+            && run.stop.is_none()
+        {
+            let _ = run.commands.send(Command::RestartAgent);
+        }
+    }
+
     /// Describes the VM and the Start message for its guest supervisor from the instance's
-    /// latest revision, which this boot freezes. Also returns the boot mode and revision
-    /// number. An instance that isn't provisioned yet boots in provision mode instead of
+    /// latest revision, which this boot freezes. Also returns the boot mode, the revision
+    /// number and its configuration. An instance that isn't provisioned yet boots in provision mode instead of
     /// agent mode. Agent and maintenance boots get the enabled shared folders and the
     /// environment; a missing folder or invalid setting fails the boot before the VM starts.
-    fn prepare(&self, id: &str, mode: BootMode) -> db::Result<(VmSpec, Start, BootMode, i64)> {
+    fn prepare(
+        &self,
+        id: &str,
+        mode: BootMode,
+    ) -> db::Result<(VmSpec, Start, BootMode, i64, Config)> {
         let instance = self.db.instance(id)?;
         let revision = self.db.latest_revision(id)?;
         let mode = if mode == BootMode::Agent && !instance.provisioned {
@@ -836,9 +1103,11 @@ impl VmControl {
         // unless the instance allows them.
         let allow_local = config.network_allow_local;
         let network = match mode {
-            BootMode::Agent => {
-                Policy::new(config.network_default, config.network_rules, allow_local)
-            }
+            BootMode::Agent => Policy::new(
+                config.network_default,
+                config.network_rules.clone(),
+                allow_local,
+            ),
             BootMode::Maintenance | BootMode::Provision => Policy::open(allow_local),
         };
         // A new or grown disk size: the file is extended (sparse) and the guest grows the
@@ -854,7 +1123,7 @@ impl VmControl {
             kernel: guest::kernel_path(&instance.kernel)?,
             rootfs: instance.disk_path,
             guest_bin: guest::guest_bin_dir()?,
-            shares: Vec::new(),
+            shares: None,
             network: Arc::new(network),
             netlog: None,
             forwards: Vec::new(),
@@ -863,9 +1132,9 @@ impl VmControl {
             BootMode::Agent => Start {
                 mode: Mode::Agent.into(),
                 launch: Some(Launch {
-                    command: config.command,
-                    arguments: config.arguments,
-                    working_directory: config.working_directory,
+                    command: config.command.clone(),
+                    arguments: config.arguments.clone(),
+                    working_directory: config.working_directory.clone(),
                 }),
                 ..Start::default()
             },
@@ -875,74 +1144,38 @@ impl VmControl {
             },
             BootMode::Provision => Start {
                 mode: Mode::Provision.into(),
-                provision_script: config.provision_script,
+                provision_script: config.provision_script.clone(),
                 ..Start::default()
             },
         };
         // Provisioning runs with open internet, so it gets neither the shared folders nor
         // the agent's environment.
         if mode == BootMode::Provision {
-            return Ok((spec, start, mode, revision.number));
+            return Ok((spec, start, mode, revision.number, config));
         }
 
-        // Checked again here: a folder may have gone since the configuration was saved.
         if env_errors(&config.environment)
             .iter()
             .any(|error| !error.is_empty())
         {
             return Err("some environment variables need a fix in the settings.".into());
         }
-        let mounts: Vec<db::Mount> = config
-            .mounts
-            .into_iter()
-            .filter(|mount| mount.enabled)
-            .collect();
-        for (mount, guest_error) in mounts.iter().zip(guest_path_errors(&mounts)) {
-            let path = display_path(&mount.host_path);
-            match folder_problem(&mount.host_path) {
-                Some(FolderProblem::Missing) => {
-                    return Err(format!("{path} no longer exists on your Mac.").into());
-                }
-                Some(FolderProblem::Unreadable) => {
-                    return Err(format!("the app can't read {path}.").into());
-                }
-                None if !guest_error.is_empty() => {
-                    return Err(format!("{}: {guest_error}", mount.guest_path).into());
-                }
-                None => {}
-            }
+        // Checked again here: a folder may have gone since the configuration was saved.
+        let (environment, mounts, mut problems) = session_parts(&config);
+        let (shares, mounts) = share_folders(mounts, &[], &mut 0, &mut problems);
+        if let Some(problem) = problems.into_iter().next() {
+            return Err(problem.into());
         }
-
-        // Agent and maintenance boots only: provisioning returned above.
+        start.environment = environment;
+        start.mounts = mounts;
+        spec.shares = Some(shares);
         start.forward_ports = config
             .port_forwards
             .iter()
             .map(|forward| forward.guest_port.into())
             .collect();
-        spec.forwards = config.port_forwards;
-        start.environment = config
-            .environment
-            .into_iter()
-            .filter(|var| !var.name.is_empty())
-            .map(|var| EnvVar {
-                name: var.name,
-                value: var.value,
-            })
-            .collect();
-        for (index, mount) in mounts.into_iter().enumerate() {
-            let name = index.to_string();
-            start.mounts.push(Mount {
-                share: name.clone(),
-                guest_path: mount.guest_path,
-                read_only: !mount.writable,
-            });
-            spec.shares.push(SharedFolder {
-                name,
-                host_path: mount.host_path,
-                read_only: !mount.writable,
-            });
-        }
-        Ok((spec, start, mode, revision.number))
+        spec.forwards = config.port_forwards.clone();
+        Ok((spec, start, mode, revision.number, config))
     }
 
     /// Asks the instance's guest to shut down, then does `then`. Its controller stops it hard
@@ -1202,6 +1435,19 @@ impl VmControl {
                             run.status = Some(status);
                             run.cpu = cpu.or(run.cpu);
                             run.status_lost = false;
+                            let now = &mut run.in_effect;
+                            if let Some((generation, latest)) = &run.latest
+                                && status.launch_generation >= *generation
+                                && (now.command != latest.command
+                                    || now.arguments != latest.arguments
+                                    || now.working_directory != latest.working_directory
+                                    || now.environment != latest.environment)
+                            {
+                                now.command = latest.command.clone();
+                                now.arguments = latest.arguments.clone();
+                                now.working_directory = latest.working_directory.clone();
+                                now.environment = latest.environment.clone();
+                            }
                         }
                         _ => run.status_lost = true,
                     }
@@ -1243,6 +1489,16 @@ impl VmControl {
                     },
                 );
             }
+            Event::Applied(problems) => {
+                if self.running.borrow().contains_key(id) {
+                    self.update_item(id, |item| {
+                        item.apply_error = match problems.is_empty() {
+                            true => "".into(),
+                            false => format!("Not applied: {}", problems.join(" ")).into(),
+                        };
+                    });
+                }
+            }
             Event::Ended(result) => {
                 let Some(run) = self.running.borrow_mut().remove(id) else {
                     return;
@@ -1250,6 +1506,7 @@ impl VmControl {
                 if let Err(error) = self.db.end_boot(run.boot) {
                     eprintln!("Couldn't record the end of the boot: {error}");
                 }
+                self.update_item(id, |item| item.apply_error = "".into());
                 let quitting = self.quitting.get();
                 // The VM is down either way; a failed deletion shows the instance stopped.
                 if run.stop == Some(AfterStop::Delete) && self.finish_delete(id) {

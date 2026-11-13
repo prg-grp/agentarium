@@ -60,11 +60,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ui = AppWindow::new()?;
 
     let db = Rc::new(Db::open().map_err(|error| format!("Couldn't open the database: {error}"))?);
-    let items: Vec<InstanceItem> = db
-        .instances()?
-        .into_iter()
-        .map(|instance| to_item(&db, instance))
-        .collect();
+    let items: Vec<InstanceItem> = db.instances()?.into_iter().map(to_item).collect();
     let instances = Rc::new(VecModel::from(items));
     ui.set_instances(ModelRc::from(instances.clone()));
 
@@ -100,7 +96,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     // sidebar row and, unless the user opted out, start and provision right away.
     let c = control.clone();
     let ui_handle = ui.as_weak();
-    let db_handle = db.clone();
     let creator = create::Creator::new(&ui, db, instances.clone(), move |instance, start| {
         let Some(ui) = ui_handle.upgrade() else {
             return;
@@ -114,7 +109,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .is_some_and(|item| item.name.to_lowercase() > name)
             })
             .unwrap_or(instances.row_count());
-        instances.insert(row, to_item(&db_handle, instance));
+        instances.insert(row, to_item(instance));
         ui.set_selected_index(row as i32);
         ui.set_current_tab(0);
         c.select(&id);
@@ -338,16 +333,11 @@ fn set_dock_icon() {
 }
 
 /// A sidebar row for a stored instance; it shows as stopped until its VM runs.
-fn to_item(db: &Db, instance: db::Instance) -> InstanceItem {
+fn to_item(instance: db::Instance) -> InstanceItem {
     let reading = |value: &str| StatusReading {
         value: value.into(),
         tone: Tone::Neutral,
     };
-    let (active_revision, saved_revision, pending_changes) =
-        settings::revision_fields(db, &instance.id).unwrap_or_else(|error| {
-            eprintln!("Couldn't read the instance's revisions: {error}");
-            (0, 0, 0)
-        });
     InstanceItem {
         id: instance.id.into(),
         name: instance.name.into(),
@@ -362,9 +352,7 @@ fn to_item(db: &Db, instance: db::Instance) -> InstanceItem {
             ..Usage::default()
         },
         provisioned: instance.provisioned,
-        active_revision,
-        saved_revision,
-        pending_changes,
+        apply_error: "".into(),
         has_terminal: true,
         transition: "".into(),
         forwards: ModelRc::default(),

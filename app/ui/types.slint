@@ -4,6 +4,11 @@ export enum Tone { ok, warn, bad, neutral, muted, accent }
 
 export enum InstanceState { running, agent-exited, maintenance, startup-failed, stopped, draft }
 
+// What Save does beyond saving and applying the edits to the running instance: nothing,
+// restart the agent (new launch settings or environment), or reboot (new processors, memory
+// or disk size). See save_kind in src/settings.rs.
+export enum SaveKind { save, restart-agent, reboot }
+
 export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, restart-agent, delete }
 
 // A preset offered on the Harness step, in the order of Preset::ALL (src/preset.rs).
@@ -61,11 +66,8 @@ export struct InstanceItem {
     usage: Usage,
     // Whether a provisioning run succeeded; Settings opens only then.
     provisioned: bool,
-    // The newest booted revision and the latest saved one; pending-changes counts the
-    // changes between them (src/settings.rs).
-    active-revision: int,
-    saved-revision: int,
-    pending-changes: int,
+    // Why settings saved while it runs couldn't all be applied; "" if they could.
+    apply-error: string,
     has-terminal: bool,
     // Label of the start, stop or restart in progress, shown over the terminal; "" when none.
     transition: string,

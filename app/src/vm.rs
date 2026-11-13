@@ -14,15 +14,16 @@ use block2::RcBlock;
 use dispatch2::{DispatchQueue, DispatchQueueAttr, DispatchRetained};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_foundation::{NSArray, NSDictionary, NSError, NSFileHandle, NSString, NSURL};
+use objc2_foundation::{NSArray, NSError, NSFileHandle, NSString, NSURL};
 use objc2_virtualization::{
-    VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
+    VZDirectoryShare, VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
     VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZMultipleDirectoryShare,
     VZSharedDirectory, VZSingleDirectoryShare, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
-    VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration,
-    VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
-    VZVirtualMachine, VZVirtualMachineConfiguration, VZVirtualMachineState,
+    VZVirtioFileSystemDevice, VZVirtioFileSystemDeviceConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketConnection, VZVirtioSocketDevice,
+    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZVirtualMachineState,
 };
 
 use crate::db::PortForward;
@@ -55,9 +56,11 @@ pub struct VmSpec {
     /// shared read-only through a virtio-fs device of its own (`GUEST_BIN_TAG`). The base
     /// rootfs mounts it and starts the supervisor from it.
     pub guest_bin: PathBuf,
-    /// Host folders shared live through one virtio-fs device (`SHARE_TAG`); the guest
-    /// supervisor mounts them where `Start.mounts` says.
-    pub shares: Vec<SharedFolder>,
+    /// Host folders shared live, each through the virtio-fs device of its slot
+    /// (`command_plane::share_tag`); the guest supervisor mounts them where `Start.mounts`
+    /// says. `None` (provision boots): no such devices. Otherwise all `SHARE_SLOTS` devices
+    /// exist, the unused ones empty, so `Vm::set_share` can add folders later.
+    pub shares: Option<Vec<SharedFolder>>,
     /// What the guest may reach over the network.
     pub network: Arc<Policy>,
     /// Where the network's lookups and connections are recorded (agent boots).
@@ -67,10 +70,11 @@ pub struct VmSpec {
     pub forwards: Vec<PortForward>,
 }
 
-/// A host folder in the instance's virtio-fs share.
+/// A host folder shared with the guest.
+#[derive(Clone)]
 pub struct SharedFolder {
-    /// Its name inside the share, as `Mount.share` names it to the guest.
-    pub name: String,
+    /// The virtio-fs device (below `SHARE_SLOTS`) that shares it.
+    pub slot: usize,
     pub host_path: PathBuf,
     /// Enforced by the Mac, so nothing in the guest can write to it.
     pub read_only: bool,
@@ -213,34 +217,16 @@ impl Vm {
                 ),
             )));
             let mut directory_devices = vec![Retained::into_super(guest_bin)];
-            if !spec.shares.is_empty() {
-                let names: Vec<_> = spec
-                    .shares
-                    .iter()
-                    .map(|share| NSString::from_str(&share.name))
-                    .collect();
-                let directories: Vec<_> = spec
-                    .shares
-                    .iter()
-                    .map(|share| {
-                        VZSharedDirectory::initWithURL_readOnly(
-                            VZSharedDirectory::alloc(),
-                            &file_url(&share.host_path),
-                            share.read_only,
-                        )
-                    })
-                    .collect();
-                let names: Vec<&NSString> = names.iter().map(|name| &**name).collect();
-                let share = VZMultipleDirectoryShare::initWithDirectories(
-                    VZMultipleDirectoryShare::alloc(),
-                    &NSDictionary::from_retained_objects(&names, &directories),
-                );
-                let device = VZVirtioFileSystemDeviceConfiguration::initWithTag(
-                    VZVirtioFileSystemDeviceConfiguration::alloc(),
-                    &NSString::from_str(command_plane::SHARE_TAG),
-                );
-                device.setShare(Some(&share));
-                directory_devices.push(Retained::into_super(device));
+            if let Some(shares) = &spec.shares {
+                for slot in 0..command_plane::SHARE_SLOTS {
+                    let device = VZVirtioFileSystemDeviceConfiguration::initWithTag(
+                        VZVirtioFileSystemDeviceConfiguration::alloc(),
+                        &NSString::from_str(&command_plane::share_tag(slot)),
+                    );
+                    let folder = shares.iter().find(|folder| folder.slot == slot);
+                    device.setShare(Some(&directory_share(folder)));
+                    directory_devices.push(Retained::into_super(device));
+                }
             }
             config.setDirectorySharingDevices(&NSArray::from_retained_slice(&directory_devices));
             config
@@ -326,6 +312,26 @@ impl Vm {
         });
     }
 
+    /// Shares `folder` through the device of `slot` while the VM runs, or nothing (`None`).
+    /// The guest must not have that device mounted: the files it opened through the
+    /// device's previous share become invalid.
+    pub fn set_share(&self, slot: usize, folder: Option<&SharedFolder>) -> Result<(), String> {
+        let tag = command_plane::share_tag(slot);
+        let mut replaced = Err(format!("The virtual machine has no device {tag}."));
+        self.queue.exec_sync(|| unsafe {
+            let devices = self.machine.directorySharingDevices();
+            let device = devices
+                .iter()
+                .filter_map(|device| device.downcast::<VZVirtioFileSystemDevice>().ok())
+                .find(|device| device.tag().to_string() == tag);
+            if let Some(device) = device {
+                device.setShare(Some(&directory_share(folder)));
+                replaced = Ok(());
+            }
+        });
+        replaced
+    }
+
     pub fn state(&self) -> VmState {
         let mut state = VmState::Other;
         self.queue.exec_sync(|| {
@@ -362,6 +368,23 @@ pub fn create_disk(base: &Path, disk: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// The share of a slot: the folder, or nothing (an empty multiple-directory share).
+fn directory_share(folder: Option<&SharedFolder>) -> Retained<VZDirectoryShare> {
+    unsafe {
+        match folder {
+            Some(folder) => Retained::into_super(VZSingleDirectoryShare::initWithDirectory(
+                VZSingleDirectoryShare::alloc(),
+                &VZSharedDirectory::initWithURL_readOnly(
+                    VZSharedDirectory::alloc(),
+                    &file_url(&folder.host_path),
+                    folder.read_only,
+                ),
+            )),
+            None => Retained::into_super(VZMultipleDirectoryShare::new()),
+        }
+    }
 }
 
 fn file_url(path: &Path) -> Retained<NSURL> {

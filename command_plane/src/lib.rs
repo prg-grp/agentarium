@@ -29,8 +29,16 @@ pub const SHELL_PORT: u32 = 703;
 /// binaries are stale.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-/// The tag of the virtio-fs device that holds an instance's shared folders.
-pub const SHARE_TAG: &str = "agentarium-shares";
+/// How many shared folders an agent or maintenance boot can have at once. Each folder gets
+/// a virtio-fs device (a slot) of its own, as replacing a device's share invalidates every
+/// file the guest has open through it; the devices exist from the boot on, as none can be
+/// added later.
+pub const SHARE_SLOTS: usize = 16;
+
+/// The virtio-fs tag of shared-folder slot `slot` (below `SHARE_SLOTS`).
+pub fn share_tag(slot: usize) -> String {
+    format!("agentarium-share-{slot}")
+}
 
 /// The tag of the read-only virtio-fs device that holds the app's build of the guest
 /// supervisor and observer. The base rootfs mounts it at /opt/agentarium (its /etc/fstab

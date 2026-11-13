@@ -21,6 +21,11 @@
 //! In agent and maintenance mode it also accepts forwarded ports from the app on their
 //! own vsock port and connects each to the guest port it names, on the guest's loopback.
 //!
+//! In those modes the app may change the session's settings while it runs (Update): the
+//! shared folders and forwarded ports follow at once, and the agent, the root shell and new
+//! shells get the launch settings and environment when they next start. RestartAgent ends
+//! the agent's cgroup, so the agent starts again with them.
+//!
 //! The supervisor logs with `tracing` to stdout, which systemd sends to the journal and
 //! to the kernel console (`hvc0`, the app's read-only Logs tab). Logs name programs and
 //! variables but never contain argument or variable values or the provisioning script.
@@ -32,7 +37,7 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, TcpStream};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -43,9 +48,9 @@ use std::time::Duration;
 use command_plane::vsock::{accept, listen};
 use command_plane::{
     AgentExit, AgentUsage, CollectorState, EnvVar, FORWARD_PORT, Forward, GuestMessage, Hello,
-    HostMessage, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHARE_TAG, SHELL_PORT,
-    STATUS_INTERVAL, SetTime, Shell, Start, StartFailed, Status, guest_message, host_message,
-    read_message,
+    HostMessage, Launch, Mode, Mount, PORT, PROTOCOL_VERSION, ProvisionFinished, SHELL_PORT,
+    STATUS_INTERVAL, SetTime, Shell, Start, StartFailed, Status, Updated, guest_message,
+    host_message, read_message,
 };
 use tracing::{debug, error, info, info_span, warn};
 
@@ -56,9 +61,9 @@ const SESSION_TTY: &str = "/dev/hvc1";
 const RESTART_DELAY: Duration = Duration::from_secs(2);
 /// Where the provisioning script is written; a tmpfs, gone after the boot.
 const RUN_DIR: &str = "/run/agentarium";
-/// Where the virtio-fs share with all shared folders is mounted. Root only: the session
-/// reaches each folder only where it is mounted.
-const SHARES_DIR: &str = "/run/agentarium/shares";
+/// The mount points the supervisor created on the instance's disk, from any boot, one path
+/// per line; they go again with their folders while they're empty.
+const MOUNT_POINTS: &str = "/var/lib/agentarium/mount-points";
 /// The observer, beside the supervisor in the app's read-only share (`GUEST_BIN_TAG`,
 /// mounted there by the base's /etc/fstab).
 const OBSERVER: &str = "/opt/agentarium/agentarium-observer";
@@ -74,6 +79,27 @@ type Channel = Arc<Mutex<Option<File>>>;
 /// The latest shell's pseudo-terminal (its master), while it runs.
 type Pty = Arc<Mutex<Option<File>>>;
 
+/// The session's settings: Start's, as later Updates replace them.
+type Current = Arc<Mutex<Settings>>;
+
+#[derive(Default)]
+struct Settings {
+    /// Set by Start.
+    mode: Option<Mode>,
+    /// 0 for Start's, then the latest Update's.
+    generation: u32,
+    launch: Launch,
+    environment: Vec<EnvVar>,
+    /// The shared folders that are mounted.
+    mounts: Vec<Mount>,
+    /// The directories the supervisor created as mount points or for them, in any boot
+    /// (`MOUNT_POINTS`).
+    mount_points: Vec<PathBuf>,
+    forward_ports: Vec<u32>,
+    /// Agent mode: the agent's cgroup, which RestartAgent ends.
+    agent_cgroup: Option<PathBuf>,
+}
+
 /// The agent's state during an agent-mode boot, as Status reports it.
 #[derive(Default)]
 struct AgentState {
@@ -81,6 +107,8 @@ struct AgentState {
     running: bool,
     restarts: u32,
     last_exit: Option<AgentExit>,
+    /// The settings generation the agent last started with.
+    generation: u32,
     /// Whether the observer runs.
     collector: CollectorState,
 }
@@ -154,11 +182,12 @@ fn main() {
 
     let channel = Channel::default();
     let pty = Pty::default();
+    let current = Current::default();
     let mut started = false;
     loop {
         match accept(&listener) {
             Ok((connection, cid, port)) => info_span!("connection", cid, port)
-                .in_scope(|| serve(connection, &channel, &mut started, &tty, &pty)),
+                .in_scope(|| serve(connection, &channel, &mut started, &tty, &pty, &current)),
             Err(error) => {
                 warn!(%error, "couldn't accept a connection");
                 thread::sleep(Duration::from_secs(1));
@@ -168,16 +197,16 @@ fn main() {
 }
 
 /// Accepts the app's forwarded ports for this boot. Each connection names its guest port in
-/// a Forward and is then relayed to that port on the guest's loopback, if the boot's Start
-/// allows the port.
-fn forward(ports: Vec<u32>) {
+/// a Forward and is then relayed to that port on the guest's loopback, if the latest
+/// settings forward the port.
+fn forward(current: Current) {
     let listener = match listen(FORWARD_PORT) {
         Ok(listener) => listener,
         Err(error) => {
             return error!(port = FORWARD_PORT, %error, "couldn't listen for forwarded ports");
         }
     };
-    info!(port = FORWARD_PORT, ?ports, "listening for forwarded ports");
+    info!(port = FORWARD_PORT, "listening for forwarded ports");
     loop {
         let connection = match accept(&listener) {
             Ok((connection, ..)) => connection,
@@ -187,14 +216,14 @@ fn forward(ports: Vec<u32>) {
                 continue;
             }
         };
-        let ports = ports.clone();
+        let current = current.clone();
         thread::spawn(move || {
             let mut connection = connection;
             let port = match read_message::<Forward>(&mut connection) {
                 Ok(request) => request.port,
                 Err(error) => return debug!(%error, "a forwarded connection sent no port"),
             };
-            if !ports.contains(&port) {
+            if !current.lock().unwrap().forward_ports.contains(&port) {
                 return warn!(port, "refused a forward to a port that isn't forwarded");
             }
             let Ok(port16) = u16::try_from(port) else {
@@ -230,9 +259,10 @@ fn relay(connection: File, target: TcpStream) {
 /// Accepts the app's shells in agent mode. Each connection names its terminal size in a
 /// Shell and gets a login shell as `ubuntu` on a pseudo-terminal of its own, in the shell
 /// cgroup, which isn't observed. The connection closes when the shell exits; the shell is
-/// hung up when the app closes the connection. `current` holds the latest shell's
+/// hung up when the app closes the connection. Each shell gets the latest environment and
+/// starts in the latest working directory. `current` holds the latest shell's
 /// pseudo-terminal, for Resize.
-fn shell(environment: Vec<EnvVar>, directory: String, current: Pty) {
+fn shell(settings: Current, current: Pty) {
     let listener = match listen(SHELL_PORT) {
         Ok(listener) => listener,
         Err(error) => return error!(port = SHELL_PORT, %error, "couldn't listen for shells"),
@@ -251,12 +281,14 @@ fn shell(environment: Vec<EnvVar>, directory: String, current: Pty) {
                 continue;
             }
         };
-        let (environment, directory, current, cgroup) = (
-            environment.clone(),
-            directory.clone(),
-            current.clone(),
-            cgroup.clone(),
-        );
+        let (environment, directory) = {
+            let settings = settings.lock().unwrap();
+            (
+                settings.environment.clone(),
+                settings.launch.working_directory.clone(),
+            )
+        };
+        let (current, cgroup) = (current.clone(), cgroup.clone());
         thread::spawn(move || {
             let mut connection = connection;
             let size = match read_message::<Shell>(&mut connection) {
@@ -356,7 +388,14 @@ fn shell(environment: Vec<EnvVar>, directory: String, current: Pty) {
 
 /// Says Hello on a new connection from the app, then follows its messages until it closes.
 /// The session keeps running when the connection closes.
-fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>, pty: &Pty) {
+fn serve(
+    connection: File,
+    channel: &Channel,
+    started: &mut bool,
+    tty: &Arc<Tty>,
+    pty: &Pty,
+    current: &Current,
+) {
     info!("the app connected");
     let mut reader = match connection.try_clone() {
         Ok(reader) => reader,
@@ -385,8 +424,58 @@ fn serve(connection: File, channel: &Channel, started: &mut bool, tty: &Arc<Tty>
             Some(host_message::Kind::Start(start)) if !*started => {
                 info!(mode = ?start.mode(), "received Start");
                 *started = true;
-                let (channel, tty, pty) = (channel.clone(), tty.clone(), pty.clone());
-                thread::spawn(move || run(start, &channel, &tty, pty));
+                // Mounted here, before any Update is read, which changes the mounts.
+                let mounted = {
+                    let mut settings = current.lock().unwrap();
+                    *settings = Settings {
+                        mode: Some(start.mode()),
+                        launch: start.launch.clone().unwrap_or_default(),
+                        environment: start.environment.clone(),
+                        forward_ports: start.forward_ports.clone(),
+                        ..Settings::default()
+                    };
+                    match start.mode() {
+                        Mode::Agent | Mode::Maintenance => {
+                            mount_shares(&mut settings, &start.mounts)
+                        }
+                        _ => Ok(()),
+                    }
+                };
+                let (channel, tty, pty, current) =
+                    (channel.clone(), tty.clone(), pty.clone(), current.clone());
+                thread::spawn(move || run(start, mounted, &channel, &tty, pty, current));
+            }
+            Some(host_message::Kind::Update(update)) => {
+                let mut settings = current.lock().unwrap();
+                if !matches!(settings.mode, Some(Mode::Agent | Mode::Maintenance)) {
+                    warn!("ignoring Update: no agent or maintenance session has started");
+                    continue;
+                }
+                info!(generation = update.generation, "received Update");
+                let mount_errors = remount(&mut settings, &update.mounts);
+                settings.generation = update.generation;
+                if let Some(launch) = update.launch {
+                    settings.launch = launch;
+                }
+                settings.environment = update.environment;
+                settings.forward_ports = update.forward_ports;
+                drop(settings);
+                let updated = guest_message::Kind::Updated(Updated {
+                    generation: update.generation,
+                    mount_errors,
+                });
+                if send(channel, updated) {
+                    debug!("sent Updated");
+                }
+            }
+            Some(host_message::Kind::RestartAgent(_)) => {
+                let cgroup = current.lock().unwrap().agent_cgroup.clone();
+                // The agent's session returns once all of it has ended, and starts again.
+                match cgroup.map(|dir| fs::write(dir.join("cgroup.kill"), "1")) {
+                    Some(Ok(())) => info!("ended the agent, to start it again"),
+                    Some(Err(error)) => warn!(%error, "couldn't end the agent"),
+                    None => warn!("ignoring RestartAgent: the agent has no cgroup"),
+                }
             }
             Some(host_message::Kind::Start(start)) => {
                 warn!(mode = ?start.mode(), "ignoring Start: this boot has already started");
@@ -440,15 +529,21 @@ fn send(channel: &Channel, kind: guest_message::Kind) -> bool {
     }
 }
 
-/// Runs the boot mode the app chose. Agent and maintenance sessions start again
-/// whenever they exit; there is no fallback to a shell.
-fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
+/// Runs the boot mode the app chose, once Start's shared folders were `mounted`. Agent and
+/// maintenance sessions start again whenever they exit, with the latest settings in
+/// `current`; there is no fallback to a shell.
+fn run(
+    start: Start,
+    mounted: io::Result<()>,
+    channel: &Channel,
+    tty: &Tty,
+    pty: Pty,
+    current: Current,
+) {
     let mode = start.mode();
     let _span = info_span!("mode", ?mode).entered();
     // Nothing starts without all of its shared folders.
-    if matches!(mode, Mode::Agent | Mode::Maintenance)
-        && let Err(error) = mount_shares(&start.mounts)
-    {
+    if let Err(error) = mounted {
         error!("not starting: the shared folders aren't all mounted, powering off");
         tty.notify(&format!(
             "Couldn't mount the shared folders: {error}. Nothing was started. Powering off."
@@ -463,21 +558,25 @@ fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
         }
         return power_off();
     }
-    if matches!(mode, Mode::Agent | Mode::Maintenance) && !start.forward_ports.is_empty() {
-        let ports = start.forward_ports.clone();
-        thread::spawn(move || forward(ports));
+    // Listens even without ports, as an Update may forward some.
+    if matches!(mode, Mode::Agent | Mode::Maintenance) {
+        let current = current.clone();
+        thread::spawn(move || forward(current));
     }
     match mode {
         Mode::Agent => {
-            let Some(launch) = start.launch.filter(|launch| !launch.command.is_empty()) else {
+            if start
+                .launch
+                .as_ref()
+                .is_none_or(|launch| launch.command.is_empty())
+            {
                 error!("the app sent no command to start");
                 return tty.notify("The app sent no command to start.");
-            };
+            }
             info!("starting agent mode");
             {
-                let (environment, directory) =
-                    (start.environment.clone(), launch.working_directory.clone());
-                thread::spawn(move || shell(environment, directory, pty));
+                let current = current.clone();
+                thread::spawn(move || shell(current, pty));
             }
             let cgroup = Cgroup::create("agent")
                 .inspect_err(|error| {
@@ -485,6 +584,7 @@ fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
                 })
                 .ok();
             let cgroup_dir = cgroup.as_ref().map(|cgroup| cgroup.dir.clone());
+            current.lock().unwrap().agent_cgroup = cgroup_dir.clone();
             let agent = Arc::new(Mutex::new(AgentState::default()));
             let report = {
                 let (channel, agent, cgroup_dir) =
@@ -510,12 +610,22 @@ fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
                     agent.lock().unwrap().collector = CollectorState::Stopped;
                 }
             }
-            repeat(tty, &launch.command, || {
+            let command = || current.lock().unwrap().launch.command.clone();
+            repeat(tty, command, || {
+                let (launch, environment, generation) = {
+                    let settings = current.lock().unwrap();
+                    (
+                        settings.launch.clone(),
+                        settings.environment.clone(),
+                        settings.generation,
+                    )
+                };
                 {
                     let mut state = agent.lock().unwrap();
                     state.restarts += u32::from(state.started);
                     state.started = true;
                     state.running = true;
+                    state.generation = generation;
                 }
                 report();
                 let result = session(
@@ -524,7 +634,7 @@ fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
                     &launch.command,
                     &launch.arguments,
                     &launch.working_directory,
-                    &start.environment,
+                    &environment,
                     true,
                     cgroup.as_ref().map(|cgroup| &cgroup.procs),
                 );
@@ -544,18 +654,23 @@ fn run(start: Start, channel: &Channel, tty: &Tty, pty: Pty) {
         }
         Mode::Maintenance => {
             info!("starting maintenance mode");
-            repeat(tty, "The root shell", || {
-                session(
-                    tty,
-                    "root",
-                    "/bin/bash",
-                    &["--login".into()],
-                    "",
-                    &start.environment,
-                    true,
-                    None,
-                )
-            });
+            repeat(
+                tty,
+                || "The root shell".into(),
+                || {
+                    let environment = current.lock().unwrap().environment.clone();
+                    session(
+                        tty,
+                        "root",
+                        "/bin/bash",
+                        &["--login".into()],
+                        "",
+                        &environment,
+                        true,
+                        None,
+                    )
+                },
+            );
         }
         Mode::Provision => {
             info!("starting provision mode");
@@ -643,80 +758,198 @@ fn observe(cgroup: &Path, agent: &Arc<Mutex<AgentState>>) {
     }
 }
 
-/// Mounts the virtio-fs share at `SHARES_DIR`, then binds each shared folder to its guest
-/// path, parents before folders nested in them. Read-only folders are also mounted
-/// read-only, though the Mac already enforces it. The mounts last for this boot only.
-fn mount_shares(mounts: &[Mount]) -> io::Result<()> {
-    if mounts.is_empty() {
-        return Ok(());
+/// Mounts Start's shared folders (see `remount`); fails if any can't be mounted. Before
+/// that, nothing is mounted yet, so the empty mount points left by earlier boots go: those
+/// of folders no longer shared stay gone, the others are created again.
+fn mount_shares(settings: &mut Settings, mounts: &[Mount]) -> io::Result<()> {
+    let mut recorded = load_mount_points();
+    recorded.sort_by_key(|dir| std::cmp::Reverse(dir.components().count()));
+    // Keeps the ones that aren't empty.
+    recorded.retain(|dir| match fs::remove_dir(dir) {
+        Ok(()) => {
+            debug!(path = %dir.display(), "removed a mount point left by an earlier boot");
+            false
+        }
+        Err(error) => error.kind() != io::ErrorKind::NotFound,
+    });
+    settings.mount_points = recorded;
+    match remount(settings, mounts).as_slice() {
+        [] => Ok(()),
+        errors => Err(io::Error::other(errors.join("; "))),
     }
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(SHARES_DIR)
-        .and_then(|()| {
-            mount(
-                Path::new(SHARE_TAG),
-                Path::new(SHARES_DIR),
-                Some("virtiofs"),
-                0,
-            )
-        })
-        .inspect_err(|error| error!(tag = SHARE_TAG, %error, "couldn't mount the share"))?;
-    info!(tag = SHARE_TAG, path = SHARES_DIR, "mounted the share");
+}
 
-    // Mount points the supervisor creates belong to the agent, like the rest of its home.
-    let agent = Account::find("ubuntu")?;
-    let mut mounts: Vec<&Mount> = mounts.iter().collect();
-    mounts.sort_by_key(|mount| Path::new(&mount.guest_path).components().count());
-    for folder in mounts {
-        let (share, guest_path, read_only) = (&folder.share, &folder.guest_path, folder.read_only);
-        let fail = |step: &str, error: io::Error| {
-            error!(%share, %guest_path, %error, "couldn't {step}");
-            io::Error::new(
-                error.kind(),
-                format!("{guest_path}: couldn't {step}: {error}"),
-            )
-        };
-        // The agent may have left a symbolic link at the path on the persistent disk;
-        // following it would mount the folder somewhere else.
-        let mut target = PathBuf::from("/");
-        for part in Path::new(guest_path).components() {
-            let Component::Normal(part) = part else {
-                continue;
-            };
-            target.push(part);
-            match fs::symlink_metadata(&target) {
-                Ok(meta) if meta.file_type().is_symlink() => {
-                    return Err(fail(
-                        "create the mount point",
-                        io::Error::other(format!("{} is a symbolic link", target.display())),
-                    ));
-                }
-                Ok(_) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    fs::create_dir(&target)
-                        .and_then(|()| {
-                            std::os::unix::fs::chown(&target, Some(agent.uid), Some(agent.gid))
-                        })
-                        .map_err(|error| fail("create the mount point", error))?;
-                }
-                Err(error) => return Err(fail("create the mount point", error)),
+/// Changes the mounted shared folders to `wanted`: unmounts those no longer wanted,
+/// deepest first, then mounts the new ones, parents before folders nested in them. A folder
+/// that stays but lies inside a changed one is mounted again, as unmounting or mounting its
+/// parent would hide it. Unmounting is lazy: files still open in a folder keep it until
+/// they are closed; the mount points the supervisor created for a folder, in this boot or an
+/// earlier one, go with it while they're empty. Returns an error per folder that couldn't be unmounted or mounted; the
+/// folders that failed to mount are left out of `settings.mounts`. The mounts last for this
+/// boot only.
+fn remount(settings: &mut Settings, wanted: &[Mount]) -> Vec<String> {
+    let inside =
+        |inner: &Mount, outer: &Mount| Path::new(&inner.guest_path).starts_with(&outer.guest_path);
+    let depth = |mount: &Mount| Path::new(&mount.guest_path).components().count();
+    let changed: Vec<Mount> = (settings.mounts.iter())
+        .filter(|mount| !wanted.contains(mount))
+        .chain(
+            wanted
+                .iter()
+                .filter(|mount| !settings.mounts.contains(mount)),
+        )
+        .cloned()
+        .collect();
+    let (kept, mut gone): (Vec<Mount>, Vec<Mount>) = settings.mounts.drain(..).partition(|mount| {
+        wanted.contains(mount) && !changed.iter().any(|other| inside(mount, other))
+    });
+    settings.mounts = kept;
+
+    let mut errors = Vec::new();
+    gone.sort_by_key(|mount| std::cmp::Reverse(depth(mount)));
+    for folder in &gone {
+        match unmount(&folder.guest_path) {
+            Ok(()) => {
+                info!(share = %folder.share, guest_path = %folder.guest_path, "unmounted a shared folder");
+                remove_mount_points(&mut settings.mount_points, Path::new(&folder.guest_path));
+            }
+            Err(error) => {
+                error!(guest_path = %folder.guest_path, %error, "couldn't unmount a shared folder");
+                errors.push(format!(
+                    "{}: couldn't unmount it: {error}",
+                    folder.guest_path
+                ));
             }
         }
-        let source = Path::new(SHARES_DIR).join(share);
-        mount(&source, &target, None, libc::MS_BIND)
-            .map_err(|error| fail("bind the shared folder", error))?;
-        if read_only {
-            mount(
-                &source,
-                &target,
-                None,
-                libc::MS_BIND | libc::MS_REMOUNT | libc::MS_RDONLY,
-            )
-            .map_err(|error| fail("make it read-only", error))?;
+    }
+
+    let mut added: Vec<&Mount> = (wanted.iter())
+        .filter(|mount| !settings.mounts.contains(mount))
+        .collect();
+    added.sort_by_key(|mount| depth(mount));
+    // Mount points the supervisor creates belong to the agent, like the rest of its home.
+    let prepared = Account::find("ubuntu");
+    for folder in added {
+        let mut created = Vec::new();
+        match prepared
+            .as_ref()
+            .map(|agent| mount_folder(folder, agent, &mut created))
+        {
+            Ok(Ok(())) => {
+                settings.mounts.push(folder.clone());
+                settings.mount_points.extend(created);
+            }
+            Ok(Err(error)) => {
+                // Takes back what it created before failing.
+                let last = created.last().cloned();
+                settings.mount_points.extend(created);
+                if let Some(last) = last {
+                    remove_mount_points(&mut settings.mount_points, &last);
+                }
+                errors.push(error.to_string());
+            }
+            Err(error) => errors.push(format!("{}: {error}", folder.guest_path)),
         }
-        info!(%share, %guest_path, read_only, "mounted a shared folder");
+    }
+    save_mount_points(&settings.mount_points);
+    errors
+}
+
+/// Removes `path` and its parents as long as each is a mount point the supervisor created
+/// (in `points`, which then forgets it) and empty: whatever was put in one, or another
+/// folder mounted below it, keeps it and its parents.
+fn remove_mount_points(points: &mut Vec<PathBuf>, path: &Path) {
+    let mut dir = Some(path);
+    while let Some(current) = dir
+        && let Some(index) = points.iter().position(|point| point == current)
+    {
+        if let Err(error) = fs::remove_dir(current) {
+            return debug!(path = %current.display(), %error, "kept a mount point");
+        }
+        debug!(path = %current.display(), "removed a mount point");
+        points.swap_remove(index);
+        dir = current.parent();
+    }
+}
+
+/// The mount points recorded in `MOUNT_POINTS`; none if it can't be read.
+fn load_mount_points() -> Vec<PathBuf> {
+    fs::read_to_string(MOUNT_POINTS)
+        .map(|text| {
+            text.lines()
+                .filter(|line| !line.is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Records the mount points in `MOUNT_POINTS`, for the next boots. A path with a line break
+/// can't be written and is forgotten after this boot.
+fn save_mount_points(points: &[PathBuf]) {
+    let text: String = (points.iter())
+        .filter_map(|point| point.to_str())
+        .filter(|point| !point.contains('\n'))
+        .map(|point| format!("{point}\n"))
+        .collect();
+    let written = Path::new(MOUNT_POINTS)
+        .parent()
+        .map_or(Ok(()), fs::create_dir_all)
+        .and_then(|()| fs::write(MOUNT_POINTS, text));
+    if let Err(error) = written {
+        warn!(path = MOUNT_POINTS, %error, "couldn't record the mount points");
+    }
+}
+
+/// Mounts a shared folder's virtio-fs device at its guest path, read-only if it is (though
+/// the Mac already enforces it), creating the mount point for `agent` if needed. Each
+/// directory it creates goes to `created`, parents first.
+fn mount_folder(folder: &Mount, agent: &Account, created: &mut Vec<PathBuf>) -> io::Result<()> {
+    let (share, guest_path, read_only) = (&folder.share, &folder.guest_path, folder.read_only);
+    let fail = |step: &str, error: io::Error| {
+        error!(%share, %guest_path, %error, "couldn't {step}");
+        io::Error::new(
+            error.kind(),
+            format!("{guest_path}: couldn't {step}: {error}"),
+        )
+    };
+    // The agent may have left a symbolic link at the path on the persistent disk;
+    // following it would mount the folder somewhere else.
+    let mut target = PathBuf::from("/");
+    for part in Path::new(guest_path).components() {
+        let Component::Normal(part) = part else {
+            continue;
+        };
+        target.push(part);
+        match fs::symlink_metadata(&target) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(fail(
+                    "create the mount point",
+                    io::Error::other(format!("{} is a symbolic link", target.display())),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                fs::create_dir(&target).map_err(|error| fail("create the mount point", error))?;
+                created.push(target.clone());
+                std::os::unix::fs::chown(&target, Some(agent.uid), Some(agent.gid))
+                    .map_err(|error| fail("create the mount point", error))?;
+            }
+            Err(error) => return Err(fail("create the mount point", error)),
+        }
+    }
+    let flags = if read_only { libc::MS_RDONLY } else { 0 };
+    mount(Path::new(share), &target, Some("virtiofs"), flags)
+        .map_err(|error| fail("mount the shared folder", error))?;
+    info!(%share, %guest_path, read_only, "mounted a shared folder");
+    Ok(())
+}
+
+/// Detaches the mount at `path` lazily: umount2(2) with MNT_DETACH.
+fn unmount(path: &str) -> io::Result<()> {
+    let path = CString::new(path)?;
+    if unsafe { libc::umount2(path.as_ptr(), libc::MNT_DETACH) } < 0 {
+        return Err(io::Error::last_os_error());
     }
     Ok(())
 }
@@ -749,10 +982,13 @@ fn mount(
 }
 
 /// Starts a session again and again, a little after each exit, and tells the user so on
-/// the session console.
-fn repeat(tty: &Tty, name: &str, start: impl Fn() -> io::Result<ExitStatus>) -> ! {
+/// the session console, calling it `name()`.
+fn repeat(tty: &Tty, name: impl Fn() -> String, start: impl Fn() -> io::Result<ExitStatus>) -> ! {
     loop {
-        match start() {
+        let result = start();
+        let name = name();
+        let name = name.as_str();
+        match result {
             Ok(status) => {
                 let ended = ended(status);
                 info!(session = name, status = %ended, "the session ended");
@@ -1124,6 +1360,7 @@ fn status(agent: &AgentState, cgroup: Option<&Path>) -> Status {
         agent_running: agent.running,
         agent_restarts: agent.restarts,
         agent_last_exit: agent.last_exit,
+        launch_generation: agent.generation,
         // Like the VM's figure, the agent's memory leaves out cache the kernel can reclaim.
         agent_usage: cgroup.map(|dir| AgentUsage {
             cpu_usec: field(&read(&dir.join("cpu.stat")), "usage_usec "),

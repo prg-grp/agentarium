@@ -1,9 +1,10 @@
-// Settings tab: the instance's configuration, edited for its next boot and saved explicitly.
+// Settings tab: the instance's configuration, saved explicitly and applied to the running
+// instance where it can be.
 // See design/settings-pending.md.
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { InstanceItem, InstanceState, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow } from "types.slint";
+import { InstanceItem, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, SaveKind } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -23,6 +24,8 @@ export global Settings {
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
     in property <[MountRow]> mounts;
+    // How many folders can be shared at once (command_plane::SHARE_SLOTS).
+    in property <int> max-folders;
     in property <[LayoutRow]> layout;
     in property <bool> network-deny: true;
     in property <bool> network-allow-local;
@@ -38,14 +41,15 @@ export global Settings {
     in property <string> name-error;
     in property <string> command-error;
     in property <string> working-directory-error;
-    // Saved but inactive changes per section, in the order of the section navigation.
-    in property <[int]> section-changes;
     // The edits differ from the saved configuration.
     in property <bool> dirty;
     in property <bool> can-save;
-    in property <bool> can-restart;
+    in property <SaveKind> save-kind;
     // Why saving (or restarting) is blocked, or why the last save failed; "" when nothing is.
     in property <string> note;
+    // What the last save did, e.g. "Saved and applied to the running instance."; "" after
+    // the next edit.
+    in property <string> notice;
 
     callback set-name(name: string);
     callback set-command(command: string);
@@ -77,8 +81,8 @@ export global Settings {
     callback set-memory(gb: int);
     callback set-disk(gb: int);
     callback discard();
-    // Saves the edits; with restart, also boots the instance in agent mode.
-    callback save(restart: bool);
+    // Saves the edits and applies them, restarting the agent or rebooting as save-kind says.
+    callback save();
 }
 
 // A section: heading and description above its fields. Also used by Preferences.
@@ -123,11 +127,8 @@ export component Group {
 
 export component SettingsTab {
     in property <InstanceItem> item;
-    // Reboots the instance in agent mode, from the pending-changes bar.
-    callback restart-now();
 
     property <[string]> sections: ["Agent and launch", "Shared folders", "Network", "Environment", "Resources"];
-    property <bool> stopped: item.state == InstanceState.stopped;
     // The section at the top of the scroll area; the last one once scrolled to the end.
     property <int> current-section: scroll.content-y <= scroll.visible-height - scroll.content-height + 1px ? 4
         : -scroll.content-y >= s4.y - 24px ? 4
@@ -152,70 +153,6 @@ export component SettingsTab {
     }
 
     VerticalLayout {
-        // Pending-changes bar
-        if root.item.pending-changes > 0: Rectangle {
-            background: Theme.acc.with-alpha(0.08);
-
-            Rectangle {
-                y: parent.height - 1px;
-                height: 1px;
-                background: Theme.line;
-            }
-
-            HorizontalLayout {
-                padding-left: 28px;
-                padding-right: 28px;
-                padding-top: 10px;
-                padding-bottom: 10px;
-                spacing: 10px;
-
-                VerticalLayout {
-                    alignment: center;
-                    Image {
-                        source: @image-url("icons/device-floppy.svg");
-                        colorize: Theme.acc;
-                        width: 16px;
-                        height: 16px;
-                        accessible-role: none;
-                    }
-                }
-
-                Text {
-                    horizontal-stretch: 0;
-                    text: root.stopped ? "Saved. Changes apply when you start the instance." : "Saved; restart required.";
-                    color: Theme.tx;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                }
-
-                Text {
-                    horizontal-stretch: 1;
-                    text: root.stopped ? ""
-                        : root.item.pending-changes == 1
-                        ? "The instance is running revision \{root.item.active-revision}. Your change is in revision \{root.item.saved-revision} and applies on the next boot."
-                        : "The instance is running revision \{root.item.active-revision}. Your \{root.item.pending-changes} changes are in revision \{root.item.saved-revision} and apply on the next boot.";
-                    color: Theme.tx2;
-                    font-size: Theme.font-small;
-                    vertical-alignment: center;
-                    wrap: word-wrap;
-                }
-
-                if !root.stopped: VerticalLayout {
-                    alignment: center;
-                    AppButton {
-                        kind: ButtonKind.neutral;
-                        compact: true;
-                        text: "Restart now";
-                        icon: @image-url("icons/refresh.svg");
-                        enabled: root.item.transition == "";
-                        clicked => {
-                            root.restart-now();
-                        }
-                    }
-                }
-            }
-        }
-
         HorizontalLayout {
             vertical-stretch: 1;
 
@@ -237,7 +174,6 @@ export component SettingsTab {
 
                     for name[index] in root.sections: Rectangle {
                         property <bool> selected: index == root.current-section;
-                        property <int> changes: root.item.pending-changes > 0 ? Settings.section-changes[index] : 0;
 
                         height: 34px;
                         border-radius: Theme.radius-item;
@@ -262,13 +198,6 @@ export component SettingsTab {
                                 color: selected ? Theme.tx : Theme.tx2;
                                 vertical-alignment: center;
                                 overflow: elide;
-                            }
-
-                            if changes > 0: Text {
-                                text: changes == 1 ? "1 change" : "\{changes} changes";
-                                color: Theme.acc;
-                                font-size: Theme.font-meta;
-                                vertical-alignment: center;
                             }
                         }
 
@@ -389,6 +318,7 @@ export component SettingsTab {
 
                         FolderTable {
                             rows: Settings.mounts;
+                            max-folders: Settings.max-folders;
                             layout: Settings.layout;
                             choose-folder(index) => {
                                 Settings.choose-folder(index);
@@ -409,6 +339,7 @@ export component SettingsTab {
                             AppButton {
                                 text: "Add folder";
                                 icon: @image-url("icons/folder-plus.svg");
+                                enabled: Settings.mounts.length < Settings.max-folders;
                                 clicked => {
                                     Settings.add-folder();
                                 }
@@ -418,7 +349,7 @@ export component SettingsTab {
 
                     s2 := Group {
                         title: "Network";
-                        description: Settings.network-allow-local ? "Applies to agent boots. Your Mac and local network follow the rules, and maintenance boots can reach them too." : "Applies to agent boots. Your Mac and local network stay unreachable, whatever the rules say.";
+                        description: Settings.network-allow-local ? "Applies to agent boots, to new connections as soon as you save. Your Mac and local network follow the rules, and maintenance boots can reach them too." : "Applies to agent boots, to new connections as soon as you save. Your Mac and local network stay unreachable, whatever the rules say.";
 
                         NetworkFields {
                             deny: Settings.network-deny;
@@ -522,8 +453,10 @@ export component SettingsTab {
 
             Text {
                 horizontal-stretch: 1;
-                text: Settings.note != "" ? Settings.note : (Settings.dirty ? "Unsaved changes" : "");
-                color: Settings.note != "" ? Theme.bad : Theme.tx2;
+                text: Settings.note != "" ? Settings.note
+                    : Settings.dirty ? "Unsaved changes"
+                    : root.item.apply-error != "" ? root.item.apply-error : Settings.notice;
+                color: Settings.note != "" || (!Settings.dirty && root.item.apply-error != "") ? Theme.bad : Theme.tx2;
                 font-size: Theme.font-small;
                 horizontal-alignment: right;
                 vertical-alignment: center;
@@ -531,20 +464,13 @@ export component SettingsTab {
             }
 
             AppButton {
-                text: root.stopped ? "Save and start" : "Save and restart";
-                icon: root.stopped ? @image-url("icons/player-play.svg") : @image-url("icons/refresh.svg");
-                enabled: Settings.can-restart && root.item.transition == "";
-                clicked => {
-                    Settings.save(true);
-                }
-            }
-
-            AppButton {
                 kind: ButtonKind.primary;
-                text: "Save";
-                enabled: Settings.can-save;
+                text: Settings.save-kind == SaveKind.reboot ? "Save and reboot"
+                    : Settings.save-kind == SaveKind.restart-agent ? "Save and restart agent" : "Save";
+                icon: Settings.save-kind == SaveKind.save ? @image-url("") : @image-url("icons/refresh.svg");
+                enabled: Settings.can-save && (Settings.save-kind == SaveKind.save || root.item.transition == "");
                 clicked => {
-                    Settings.save(false);
+                    Settings.save();
                 }
             }
         }

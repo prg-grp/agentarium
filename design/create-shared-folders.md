@@ -8,7 +8,8 @@ Third creation step. Flow rules (draft in sidebar, step indicator, footer) are i
 Shared folders                                                     [Add folder]
 Optional. The agent works in ~/workspace on the instance's own disk. Each folder you
 share appears at the path you set, and the agent works on your Mac's files there directly.
-Nothing else on your Mac is shared.
+Nothing else on your Mac is shared. Up to 16 folders: each gets a virtual device of its
+own, and a virtual machine's devices are fixed when it starts.
 
 On your Mac               Inside the instance        Access
 ──────────────────────────────────────────────────────────────────────────────
@@ -26,6 +27,7 @@ Inside the instance
   billing-service          ← ~/code/billing-service on your Mac, read and write
   shared-protos            ← ~/code/shared-protos on your Mac, read only
 A shared folder hides anything the instance already has at that path while it is shared.
+                                                                               2/16 folders
 ──────────────────────────────────────────────────────────────────────────────
 Cancel                                          [< Back]  [Continue to network]
 ```
@@ -33,7 +35,8 @@ Cancel                                          [< Back]  [Continue to network]
 ## Elements
 
 - Title "Shared folders" (16 / 500) and the description in `tx2`. The description says the step is optional, where the agent works without folders, and that a shared folder is the Mac's folder itself, not a copy.
-- "Add folder" (neutral, folder-plus icon) opens the macOS folder picker.
+- "Add folder" (neutral, folder-plus icon) opens the macOS folder picker. It is disabled once 16 folders are listed (`SHARE_SLOTS`): each shared folder gets a virtio-fs device of its own, and a VM's devices are fixed at boot. The description ends with the one-sentence reason: "Up to 16 folders: each gets a virtual device of its own, and a virtual machine's devices are fixed when it starts."
+- Below the table and the "Inside the instance" lines, always: "<n>/16 folders" in `tx3` 12 px, right-aligned. The same line shows in the Settings tab.
 - Without folders, a `tx3` line says "No folders are shared. That's fine if you don't need the results on your Mac right away: the agent's work stays on the instance's disk, and you can share a folder later."
 - **Inside the instance** (always shown below the table, also without folders): what the agent sees, built from the rows.
   - Header "Inside the instance" in `tx3` 12 px. One line per entry: the path in monospace in a 280 px column, then the source in 13 px.

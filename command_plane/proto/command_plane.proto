@@ -28,6 +28,12 @@
 //
 // The guest has no hardware clock and no NTP. Its clock is set at boot from the kernel
 // command line, then kept on the Mac's time by the app's SetTime.
+//
+// In agent and maintenance mode the app may change the session's settings while the boot
+// runs: Update replaces those of Start (and of earlier Updates), and the supervisor answers
+// with Updated once the shared folders follow it. Shared folders and forwarded ports change
+// at once; the launch settings and environment apply from the agent's next start (and to
+// new shells), which RestartAgent brings about without rebooting.
 syntax = "proto3";
 
 package agent_toolbox.command_plane.v1;
@@ -39,6 +45,8 @@ message HostMessage {
     Stop stop = 2;
     Resize resize = 3;
     SetTime set_time = 4;
+    Update update = 5;
+    RestartAgent restart_agent = 6;
   }
 }
 
@@ -49,6 +57,7 @@ message GuestMessage {
     ProvisionFinished provision_finished = 2;
     StartFailed start_failed = 3;
     Status status = 4;
+    Updated updated = 5;
   }
 }
 
@@ -68,7 +77,7 @@ enum Mode {
   MODE_PROVISION = 3;
 }
 
-// What this boot runs. Only the first Start of a boot counts.
+// What this boot runs. Only the first Start of a boot counts. Its settings are generation 0.
 message Start {
   Mode mode = 1;
   // Agent mode only.
@@ -84,6 +93,27 @@ message Start {
   // supervisor listens on FORWARD_PORT once the shared folders are mounted.
   repeated uint32 forward_ports = 6;
 }
+
+// Agent and maintenance modes, after Start: the session's settings as now saved, replacing
+// those of Start and earlier Updates. Ignored in provision mode and before Start. The
+// supervisor unmounts the shared folders no longer listed (lazily, so open files don't block
+// it), mounts the new ones, and answers with Updated; only then does the app free the
+// devices of the folders that are gone. Sending the same Update again changes
+// nothing.
+message Update {
+  // Counts up from 1 within a boot; Start is 0.
+  uint32 generation = 1;
+  // Agent mode: used from the agent's next start.
+  Launch launch = 2;
+  // Used from the session's next start and by new shells.
+  repeated EnvVar environment = 3;
+  repeated Mount mounts = 4;
+  repeated uint32 forward_ports = 5;
+}
+
+// Agent mode: ends the agent and every process it started (its cgroup), so it starts again
+// at once with the latest settings. The VM, shells and forwarded ports keep running.
+message RestartAgent {}
 
 // The first and only message on a forward connection: connect it to this guest TCP port
 // on the guest's loopback. A port not in Start.forward_ports is refused by closing.
@@ -103,9 +133,10 @@ message EnvVar {
   string value = 2;
 }
 
-// A host folder, shared through the virtio-fs device tagged SHARE_TAG (see src/lib.rs).
+// A host folder, shared through a virtio-fs device of its own (see SHARE_SLOTS and
+// share_tag in src/lib.rs).
 message Mount {
-  // The folder's name inside that share.
+  // The tag of the folder's virtio-fs device.
   string share = 1;
   // Where it appears in the guest; absolute.
   string guest_path = 2;
@@ -140,6 +171,14 @@ message SetTime {
   uint64 unix_usec = 1;
 }
 
+// The answer to an Update, once the shared folders follow it.
+message Updated {
+  uint32 generation = 1;
+  // One per shared folder that couldn't be mounted, e.g. "/work: couldn't bind …". Those
+  // folders stay unmounted.
+  repeated string mount_errors = 2;
+}
+
 message ProvisionFinished {
   // The script's exit code; -1 if it couldn't run or was killed by a signal.
   int32 exit_code = 1;
@@ -170,6 +209,9 @@ message Status {
   // The agent's cgroup; absent if it couldn't be set up.
   AgentUsage agent_usage = 8;
   CollectorState collector = 9;
+  // The settings generation (Start: 0, then Update.generation) the running agent, or the
+  // last one, started with.
+  uint32 launch_generation = 10;
 }
 
 message AgentExit {

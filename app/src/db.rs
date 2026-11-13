@@ -383,20 +383,6 @@ impl Db {
         )?)
     }
 
-    /// The newest revision that was booted: the one the instance runs, or ran last.
-    pub fn active_revision(&self, instance_id: &str) -> Result<Option<Revision>> {
-        Ok(self
-            .conn
-            .query_row(
-                &format!(
-                    "{REVISION_QUERY} AND booted_at IS NOT NULL ORDER BY revision DESC LIMIT 1"
-                ),
-                [instance_id],
-                |row| revision_from_row(row, &self.cipher),
-            )
-            .optional()?)
-    }
-
     pub fn rename_instance(&self, id: &str, name: &str) -> Result<()> {
         self.conn
             .execute("UPDATE instances SET name = ?2 WHERE id = ?1", [id, name])?;

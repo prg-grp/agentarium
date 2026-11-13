@@ -610,6 +610,8 @@ export component EnvironmentFields {
 export component FolderTable {
     in property <[MountRow]> rows;
     in property <[LayoutRow]> layout;
+    // How many folders can be shared at once (command_plane::SHARE_SLOTS).
+    in property <int> max-folders;
     callback choose-folder(index: int);
     callback edit-guest-path(index: int, path: string);
     callback set-writable(index: int, writable: bool);
@@ -787,6 +789,13 @@ export component FolderTable {
                 font-size: Theme.font-small;
                 wrap: word-wrap;
             }
+        }
+
+        Text {
+            text: "\{root.rows.length}/\{root.max-folders} folders";
+            color: Theme.tx3;
+            font-size: Theme.font-meta;
+            horizontal-alignment: right;
         }
     }
 }

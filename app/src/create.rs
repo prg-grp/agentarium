@@ -68,6 +68,7 @@ impl Creator {
 
         let g = ui.global::<Creation>();
         let lists = &this.lists;
+        g.set_max_folders(command_plane::SHARE_SLOTS as i32);
         g.set_arguments(ModelRc::from(lists.arguments.clone()));
         g.set_environment(ModelRc::from(lists.environment.clone()));
         g.set_mounts(ModelRc::from(lists.mounts.clone()));

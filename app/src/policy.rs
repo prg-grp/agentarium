@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, PoisonError, RwLock, RwLockReadGuard};
 use std::time::{Duration, Instant};
 
 use simple_dns::rdata::RData;
@@ -57,22 +57,30 @@ pub struct Answer {
     pub addresses: Vec<(IpAddr, u32)>,
 }
 
+/// The rules may change while the VM runs (`set`); each new connection and lookup is
+/// decided by the rules of the moment, and connections already open stay open.
 pub struct Policy {
+    rules: RwLock<Rules>,
+    /// Each address from a DNS answer with the names that returned it, and until when.
+    names: Mutex<HashMap<IpAddr, Vec<(String, Instant)>>>,
+}
+
+struct Rules {
     default: NetworkAction,
     rules: Vec<NetworkRule>,
     /// Whether the Mac and the local network go through the rules, instead of being
     /// unreachable.
     allow_local: bool,
-    /// Each address from a DNS answer with the names that returned it, and until when.
-    names: Mutex<HashMap<IpAddr, Vec<(String, Instant)>>>,
 }
 
 impl Policy {
     pub fn new(default: NetworkAction, rules: Vec<NetworkRule>, allow_local: bool) -> Policy {
         Policy {
-            default,
-            rules,
-            allow_local,
+            rules: RwLock::new(Rules {
+                default,
+                rules,
+                allow_local,
+            }),
             names: Mutex::default(),
         }
     }
@@ -83,9 +91,22 @@ impl Policy {
         Policy::new(NetworkAction::Allow, Vec::new(), allow_local)
     }
 
+    /// Replaces the rules; the names learned from DNS stay.
+    pub fn set(&self, default: NetworkAction, rules: Vec<NetworkRule>, allow_local: bool) {
+        *self.rules.write().unwrap_or_else(PoisonError::into_inner) = Rules {
+            default,
+            rules,
+            allow_local,
+        };
+    }
+
+    fn rules(&self) -> RwLockReadGuard<'_, Rules> {
+        self.rules.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
     /// Whether the guest may connect to `destination`, and what decided it.
     pub fn verdict(&self, destination: IpAddr) -> Verdict {
-        if !self.allow_local && local(destination) {
+        if !self.rules().allow_local && local(destination) {
             return Verdict {
                 allowed: false,
                 rule: Some(LOCAL.to_owned()),
@@ -109,8 +130,11 @@ impl Policy {
     /// Decides a DNS query of the guest: `None` to forward it, or the reply that refuses
     /// it with the refused questions. A query that can't be read is refused too.
     pub fn check_query(&self, query: &[u8]) -> Option<(Vec<u8>, Vec<Query>)> {
-        if self.rules.is_empty() && self.default == NetworkAction::Allow {
-            return None;
+        {
+            let rules = self.rules();
+            if rules.rules.is_empty() && rules.default == NetworkAction::Allow {
+                return None;
+            }
         }
         let (id, questions, rcode) = match Packet::parse(query) {
             Ok(packet) => {
@@ -189,8 +213,9 @@ impl Policy {
 
     /// Deny rules win over allow rules; without a matching rule, the default applies.
     fn decide(&self, targets: &[RuleTarget]) -> Verdict {
+        let rules = self.rules();
         let matching = |action| {
-            self.rules.iter().find(|rule| {
+            rules.rules.iter().find(|rule| {
                 rule.action == action && targets.iter().any(|target| rule.target.covers(target))
             })
         };
@@ -198,7 +223,7 @@ impl Policy {
             Some(rule) => (false, Some(rule)),
             None => match matching(NetworkAction::Allow) {
                 Some(rule) => (true, Some(rule)),
-                None => (self.default == NetworkAction::Allow, None),
+                None => (rules.default == NetworkAction::Allow, None),
             },
         };
         Verdict {

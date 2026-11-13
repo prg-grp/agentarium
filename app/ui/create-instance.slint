@@ -32,6 +32,8 @@ export global Creation {
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
     in property <[MountRow]> mounts;
+    // How many folders can be shared at once (command_plane::SHARE_SLOTS).
+    in property <int> max-folders;
     in property <[LayoutRow]> layout;
     in property <bool> network-deny: true;
     in property <bool> network-allow-local;
@@ -542,7 +544,7 @@ export component CreateInstance {
                             }
 
                             Text {
-                                text: "Optional. The agent works in ~/workspace on the instance's own disk. Each folder you share appears at the path you set, and the agent works on your Mac's files there directly. Nothing else on your Mac is shared.";
+                                text: "Optional. The agent works in ~/workspace on the instance's own disk. Each folder you share appears at the path you set, and the agent works on your Mac's files there directly. Nothing else on your Mac is shared. Up to \{Creation.max-folders} folders: each gets a virtual device of its own, and a virtual machine's devices are fixed when it starts.";
                                 color: Theme.tx2;
                                 wrap: word-wrap;
                             }
@@ -553,6 +555,7 @@ export component CreateInstance {
                             AppButton {
                                 text: "Add folder";
                                 icon: @image-url("icons/folder-plus.svg");
+                                enabled: Creation.mounts.length < Creation.max-folders;
                                 clicked => {
                                     Creation.add-folder();
                                 }
@@ -562,6 +565,7 @@ export component CreateInstance {
 
                     FolderTable {
                         rows: Creation.mounts;
+                        max-folders: Creation.max-folders;
                         layout: Creation.layout;
                         choose-folder(index) => {
                             Creation.choose-folder(index);

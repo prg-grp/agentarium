@@ -13,6 +13,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use data_plane::{
@@ -48,12 +49,16 @@ impl Drop for Stream {
     }
 }
 
+/// The shared folders as (guest path, Mac path); the controller changes them while the VM
+/// runs.
+pub type Mounts = Arc<Mutex<Vec<(String, PathBuf)>>>;
+
 /// Reads the observer's messages on `socket` on a thread of its own and stores them for
-/// the boot `boot`. `mounts` are the shared folders as (guest path, Mac path).
+/// the boot `boot`, with the Mac's paths of files in `mounts`.
 pub fn spawn(
     socket: File,
     boot: i64,
-    mounts: Vec<(String, PathBuf)>,
+    mounts: Mounts,
     report: impl Fn(Observed) + Send + 'static,
 ) -> io::Result<Stream> {
     let reader = socket.try_clone()?;
@@ -76,7 +81,7 @@ pub fn spawn(
 fn serve(
     mut socket: File,
     boot: i64,
-    mut mounts: Vec<(String, PathBuf)>,
+    mounts: Mounts,
     report: &impl Fn(Observed),
 ) -> Result<(), Box<dyn Error>> {
     let hello = match data_plane::read_message::<ObserverMessage>(&mut socket)?.kind {
@@ -86,14 +91,15 @@ fn serve(
     if hello.protocol_version != data_plane::PROTOCOL_VERSION {
         return Err("the instance's observer doesn't match this app".into());
     }
-    // A folder nested in another one wins.
-    mounts.sort_by_key(|(guest, _)| std::cmp::Reverse(guest.len()));
     let mut conn = db::open_writer()?;
     // When the last collector_health row was stored, and its loss counters.
     let mut last_stored: Option<(Instant, u64, u64)> = None;
     loop {
         match data_plane::read_message::<ObserverMessage>(&mut socket)?.kind {
             Some(observer_message::Kind::Events(events)) => {
+                let mut mounts = mounts.lock().unwrap().clone();
+                // A folder nested in another one wins.
+                mounts.sort_by_key(|(guest, _)| std::cmp::Reverse(guest.len()));
                 let tx = conn.transaction()?;
                 for event in &events.events {
                     store(&tx, boot, hello.run, &mounts, event)?;

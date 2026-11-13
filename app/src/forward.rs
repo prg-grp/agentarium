@@ -10,20 +10,27 @@ use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener, TcpStream as StdTcpStream};
 use std::os::fd::OwnedFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
+use std::sync::Arc;
 use std::time::Duration;
 
 use command_plane::{Forward, write_message};
 use tokio::net::{TcpListener, TcpStream, UnixStream};
 use tokio::runtime::{Handle, Runtime};
+use tokio::task::JoinHandle;
 
 use crate::db::PortForward;
 
 /// Runs a boot's listeners until dropped.
 pub struct Forwards {
     runtime: Option<Runtime>,
+    /// Gets each accepted connection with its guest port.
+    accepted: Arc<dyn Fn(StdTcpStream, u16) + Send + Sync>,
+    /// Each forward with how it turned out and, while the Mac listens, its listener's task.
+    open: Vec<(PortForward, Forwarded, Option<JoinHandle<()>>)>,
 }
 
 /// How a forward of the boot turned out.
+#[derive(Clone)]
 pub struct Forwarded {
     pub guest_port: u16,
     /// The port listened on; for a failed forward the fixed port asked for, if any.
@@ -33,67 +40,96 @@ pub struct Forwarded {
 }
 
 impl Forwards {
-    /// Listens for each forward. A port that can't be opened, such as one in use, is
-    /// reported in its `Forwarded` and leaves the others working. `accepted` gets each
-    /// connection with its guest port.
+    /// Starts without listeners; `update` opens them. `accepted` gets each connection with
+    /// its guest port.
     pub fn start(
-        forwards: &[PortForward],
-        accepted: impl Fn(StdTcpStream, u16) + Clone + Send + 'static,
-    ) -> io::Result<(Forwards, Vec<Forwarded>)> {
+        accepted: impl Fn(StdTcpStream, u16) + Send + Sync + 'static,
+    ) -> io::Result<Forwards> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .thread_name("vm-forward")
             .enable_all()
             .build()?;
-        let opened = forwards
-            .iter()
-            .map(|forward| {
-                let address = if forward.all_interfaces {
-                    Ipv4Addr::UNSPECIFIED
-                } else {
-                    Ipv4Addr::LOCALHOST
-                };
-                // Port 0 has the system pick a free one.
-                let listener = StdTcpListener::bind((address, forward.host_port.unwrap_or(0)))
-                    .and_then(|listener| {
-                        listener.set_nonblocking(true)?;
-                        let port = listener.local_addr()?.port();
-                        let _context = runtime.enter();
-                        Ok((TcpListener::from_std(listener)?, port))
-                    });
-                match listener {
-                    Ok((listener, port)) => {
-                        runtime.spawn(accept(listener, forward.guest_port, accepted.clone()));
-                        Forwarded {
-                            guest_port: forward.guest_port,
-                            host_port: Some(port),
-                            error: None,
-                        }
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "Couldn't forward guest port {} on {address}: {error}",
-                            forward.guest_port
-                        );
-                        Forwarded {
-                            guest_port: forward.guest_port,
-                            host_port: forward.host_port,
-                            error: Some(if error.kind() == ErrorKind::AddrInUse {
-                                "in use".into()
-                            } else {
-                                "unavailable".into()
-                            }),
-                        }
-                    }
+        Ok(Forwards {
+            runtime: Some(runtime),
+            accepted: Arc::new(accepted),
+            open: Vec::new(),
+        })
+    }
+
+    /// Listens for each of `forwards`: listeners of unchanged forwards stay, those of
+    /// removed ones close (their connections keep running), and new or failed ones are
+    /// opened. A port that can't be opened, such as one in use, is reported in its
+    /// `Forwarded` and leaves the others working.
+    pub fn update(&mut self, forwards: &[PortForward]) -> Vec<Forwarded> {
+        let Some(runtime) = &self.runtime else {
+            return Vec::new();
+        };
+        let (mut kept, removed): (Vec<_>, Vec<_>) = std::mem::take(&mut self.open)
+            .into_iter()
+            .partition(|(open, _, task)| forwards.contains(open) && task.is_some());
+        // Closed first, so a new forward can take a removed one's fixed port. Connections
+        // already accepted run on.
+        runtime.block_on(async {
+            for task in removed.into_iter().filter_map(|(_, _, task)| task) {
+                task.abort();
+                let _ = task.await;
+            }
+        });
+        for forward in forwards {
+            if let Some(index) = kept.iter().position(|(open, ..)| open == forward) {
+                self.open.push(kept.swap_remove(index));
+                continue;
+            }
+            let address = if forward.all_interfaces {
+                Ipv4Addr::UNSPECIFIED
+            } else {
+                Ipv4Addr::LOCALHOST
+            };
+            // Port 0 has the system pick a free one.
+            let listener = StdTcpListener::bind((address, forward.host_port.unwrap_or(0)))
+                .and_then(|listener| {
+                    listener.set_nonblocking(true)?;
+                    let port = listener.local_addr()?.port();
+                    let _context = runtime.enter();
+                    Ok((TcpListener::from_std(listener)?, port))
+                });
+            self.open.push(match listener {
+                Ok((listener, port)) => {
+                    let accepted = self.accepted.clone();
+                    let task =
+                        runtime.spawn(accept(listener, forward.guest_port, move |client, port| {
+                            accepted(client, port)
+                        }));
+                    let forwarded = Forwarded {
+                        guest_port: forward.guest_port,
+                        host_port: Some(port),
+                        error: None,
+                    };
+                    (*forward, forwarded, Some(task))
                 }
-            })
-            .collect();
-        Ok((
-            Forwards {
-                runtime: Some(runtime),
-            },
-            opened,
-        ))
+                Err(error) => {
+                    eprintln!(
+                        "Couldn't forward guest port {} on {address}: {error}",
+                        forward.guest_port
+                    );
+                    let forwarded = Forwarded {
+                        guest_port: forward.guest_port,
+                        host_port: forward.host_port,
+                        error: Some(if error.kind() == ErrorKind::AddrInUse {
+                            "in use".into()
+                        } else {
+                            "unavailable".into()
+                        }),
+                    };
+                    (*forward, forwarded, None)
+                }
+            });
+        }
+        self.open
+            .iter()
+            .map(|(_, forwarded, _)| forwarded.clone())
+            .collect()
     }
 
     /// Where `relay` runs.
