@@ -17,7 +17,6 @@ use crate::editor::{
     self, FolderProblem, Host, Lists, command_error, display_path, env_errors, folder_problem,
     guest_path_errors, pick_folder, remove, working_directory_error,
 };
-use crate::preset::Preset;
 use crate::vm::BootMode;
 use crate::{AppWindow, InstanceItem, SaveKind, Settings};
 
@@ -25,8 +24,6 @@ use crate::{AppWindow, InstanceItem, SaveKind, Settings};
 struct Shown {
     id: String,
     saved_name: String,
-    /// Until provisioning has succeeded, the provisioning script can be edited too.
-    provisioned: bool,
     /// The latest revision's configuration.
     saved: Config,
     /// The disk's current size in GiB, at least `DISK_MIN_GB`: disks only grow.
@@ -200,7 +197,6 @@ impl SettingsEditor {
                 Ok(Shown {
                     id: id.into(),
                     saved_name: instance.name.clone(),
-                    provisioned: instance.provisioned,
                     min_disk_gb: (std::fs::metadata(&instance.disk_path)?
                         .len()
                         .div_ceil(1 << 30) as u32)
@@ -411,8 +407,7 @@ impl SettingsEditor {
 }
 
 /// Whether the edits can be saved: an error if not; otherwise a problem that keeps the
-/// instance from booting with them (a provisioning script still to be written, a shared
-/// folder that is gone), if there is one.
+/// instance from booting with them (a shared folder that is gone), if there is one.
 fn check(e: &Shown, name_error: &'static str) -> Result<Option<String>, &'static str> {
     let c = &e.config;
     let invalid = !name_error.is_empty()
@@ -426,17 +421,6 @@ fn check(e: &Shown, name_error: &'static str) -> Result<Option<String>, &'static
             .any(|error| !error.is_empty());
     if invalid {
         return Err("Fix the marked fields to save.");
-    }
-    // The script only runs while the instance isn't provisioned yet.
-    if !e.provisioned {
-        if c.provision_script.trim().is_empty() {
-            return Ok(Some("The provisioning script is empty.".into()));
-        }
-        if c.provision_script == Preset::Custom.provision_script() {
-            return Ok(Some(
-                "Fill in the provisioning script so it installs your agent.".into(),
-            ));
-        }
     }
     Ok(c.mounts.iter().find_map(|mount| {
         let path = display_path(&mount.host_path);

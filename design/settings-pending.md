@@ -37,7 +37,7 @@ There is no pending-changes bar, tab label or per-section change count: Save put
 
 ## Behavior
 
-- Settings is available from creation on, so settings can be changed before the first run. Until provisioning has succeeded, Agent and launch also shows the provisioning script, editable, with "Runs once as root with internet access before the first start. It can't be changed once provisioning has succeeded."; afterwards the script is gone from Settings. An empty script or the unchanged custom template allows Save, with the reason in the footer.
+- Settings is available from creation on, so settings can be changed before the first run. Until provisioning has succeeded, Agent and launch also shows the provisioning script, editable, with "Runs once as root with internet access before the first start. It can't be changed once provisioning has succeeded."; afterwards the script is gone from Settings. Any script is valid, including an empty one and the unchanged custom template.
 - Edits are not saved automatically. A footer under the page holds "Discard changes" (ghost) and one primary save button, enabled while the edits differ from the saved configuration, with "Unsaved changes" in `tx2` beside them. Its label says what saving does to a running agent or maintenance boot, compared with the configuration in effect:
   - "Save": everything edited applies at once, or the instance isn't running (or is still starting or provisioning), so the edits are only saved.
   - "Save and restart agent" (refresh icon): the edits include launch settings or environment variables; the agent restarts with them, the VM keeps running.

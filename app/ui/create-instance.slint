@@ -23,11 +23,12 @@ export global Creation {
     in-out property <int> disk-gb;
 
     in property <[PresetRow]> presets;
-    // The selected preset, as an index into presets. Only the custom agent's script and
-    // command can be edited.
+    // The selected preset, as an index into presets. Only the custom agent's command can be
+    // edited; every script can.
     in property <int> preset;
     in property <bool> is-custom;
     in property <string> preset-name;
+    // Whether the script differs from the preset's (for a custom agent, the template).
     in property <bool> script-changed;
     in property <[string]> arguments;
     in property <[EnvRow]> environment;
@@ -366,8 +367,12 @@ export component CreateInstance {
 
                 // Step 1: harness
                 if Creation.step == 0: VerticalLayout {
-                    // A preset's script is shown on request, read-only.
+                    // A preset's script is shown on request; it starts shown once edited,
+                    // so the edits stay in view.
                     property <bool> show-script;
+                    init => {
+                        show-script = Creation.script-changed;
+                    }
 
                     Section {
                         first: true;
@@ -427,8 +432,8 @@ export component CreateInstance {
                     Section {
                         title: "Provisioning script";
                         description: Creation.is-custom
-                            ? "Runs once as root with internet access before the first start. Must be safe to run again."
-                            : "Defined by the \{Creation.preset-name} preset. Runs once as root with internet access before the first start. Choose Custom agent to write your own.";
+                            ? "Runs once as root with internet access before the first start. Must be safe to run again. Leave it as it is if your command needs nothing installed."
+                            : "From the \{Creation.preset-name} preset; you can adapt it. Runs once as root with internet access before the first start. Must be safe to run again.";
 
                         if !Creation.is-custom: HorizontalLayout {
                             alignment: start;
@@ -444,7 +449,6 @@ export component CreateInstance {
 
                         if Creation.is-custom || show-script: TextEdit {
                             height: 320px;
-                            read-only: !Creation.is-custom;
                             text <=> Creation.script;
                             font-family: Theme.mono;
                             font-size: Theme.font-mono;
@@ -460,7 +464,7 @@ export component CreateInstance {
                             AppButton {
                                 kind: ButtonKind.ghost;
                                 compact: true;
-                                text: "Reset to template";
+                                text: Creation.is-custom ? "Reset to template" : "Reset to preset script";
                                 clicked => {
                                     Creation.reset-script();
                                 }

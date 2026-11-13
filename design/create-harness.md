@@ -37,8 +37,8 @@ agent that runs…             ( ) Codex               OpenAI's coding agent
                              ( ) Custom agent        Bring your own provisioning script and command
 ───────────────────────────────────────────────────────────────────────
 Provisioning script Show script
-Defined by the
-Claude Code preset…
+From the Claude
+Code preset; you…
 ───────────────────────────────────────────────────────────────────────
 Cancel                                              [Continue to agent]
 ```
@@ -55,23 +55,22 @@ No preset needs environment variables: the terminal agents sign in in the termin
 
 A preset only exists while the instance is drafted. Creating the instance copies these values into its first revision; the chosen preset isn't stored, and later app versions don't change existing instances.
 
-The command and script of a preset can't be changed. The only way to use others is Custom agent. The arguments, network rules and forwarded ports are only the initial selection: the user can change or remove them on the Agent and Network steps.
+The command of a preset can't be changed; the only way to use another is Custom agent. The provisioning script, arguments, network rules and forwarded ports are only the initial selection: the user can adapt the script here and change or remove the rest on the Agent and Network steps.
 
 ## Elements
 
 - **Name:** text field, max width 320 px. Required, and unique among instances (case-insensitive). Used in the sidebar and header.
 - **Harness:** radio list of the presets, in the order of `Preset::ALL`, each with a one-line note in `tx3`. Claude Code is preselected.
 - **Provisioning script:**
-  - For a preset: a "Show script" / "Hide script" toggle (ghost, compact) reveals the script read-only in the monospace editor. Description: "Defined by the <preset> preset. Runs once as root with internet access before the first start. Choose Custom agent to write your own."
-  - For a custom agent: a monospace multi-line editor, about 320 px high, without wrapping, prefilled with the template `vms/provision/custom.sh`. "Reset to template" (ghost, compact) appears once the script differs from it. Description: "Runs once as root with internet access before the first start. Must be safe to run again."
+  - For a preset: a "Show script" / "Hide script" toggle (ghost, compact) reveals the script in the editable monospace editor. It starts shown when the step opens with an edited script. "Reset to preset script" (ghost, compact) appears once the script differs from the preset's. Description: "From the <preset> preset; you can adapt it. Runs once as root with internet access before the first start. Must be safe to run again."
+  - For a custom agent: a monospace multi-line editor, about 320 px high, without wrapping, prefilled with the template `vms/provision/custom.sh`. "Reset to template" (ghost, compact) appears once the script differs from it. Description: "Runs once as root with internet access before the first start. Must be safe to run again. Leave it as it is if your command needs nothing installed."
 
 ## Behavior
 
 - Switching preset sets the launch command and the provisioning script to the new preset's.
-- Switching away from Custom agent keeps its command and script in the draft, so switching back restores them.
+- Switching away from a preset keeps its edited script in the draft, and switching away from Custom agent also keeps its command, so switching back restores them.
 - Switching preset also swaps the network rules. The old preset's rules that the user left unchanged are removed, and the new preset's rules are added unless the same target is already in the same list. Rules the user added or changed stay. Forwarded ports are swapped the same way, and the arguments are replaced only while they still equal the old preset's.
-- A custom agent whose script is still the unchanged template can be created but not started. Review lists "Fill in the provisioning script so it installs your agent."
-- An empty custom script is a blocking problem on Review.
+- Any provisioning script is valid, including an empty one and the unchanged custom template: a custom agent's command (for example `bash`) may need nothing installed.
 - A duplicate name shows "Another instance already uses this name." below the field, which is outlined in `bad`.
 
 ## Copy

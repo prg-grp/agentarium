@@ -31,9 +31,11 @@ struct Draft {
     name: String,
     preset: Preset,
     config: Config,
-    /// The custom agent's command and script, kept while another preset is selected.
+    /// The custom agent's command, kept while another preset is selected.
     custom_command: String,
-    custom_script: String,
+    /// Each preset's script with the user's edits, in the order of `Preset::ALL`, kept
+    /// while another preset is selected. The selected one's is in `config`.
+    scripts: [String; Preset::ALL.len()],
 }
 
 pub struct Creator {
@@ -97,25 +99,15 @@ impl Creator {
         g.on_set_name(move |name| c.edit(|d| d.name = name.into()));
         let c = this.clone();
         g.on_set_preset(move |index| c.set_preset(index));
-        // A preset's script and command are fixed; only a custom agent's can be edited.
         let c = this.clone();
-        g.on_set_script(move |script| {
-            c.edit(|d| {
-                if d.preset == Preset::Custom {
-                    d.config.provision_script = script.into();
-                }
-            })
-        });
+        g.on_set_script(move |script| c.edit(|d| d.config.provision_script = script.into()));
         let c = this.clone();
         g.on_reset_script(move || {
-            c.edit(|d| {
-                if d.preset == Preset::Custom {
-                    d.config.provision_script = Preset::Custom.provision_script().into();
-                }
-            });
+            c.edit(|d| d.config.provision_script = d.preset.provision_script().into());
             c.show_fields();
         });
 
+        // A preset's command is fixed; only a custom agent's can be edited.
         let c = this.clone();
         g.on_set_command(move |command| {
             c.edit(|d| {
@@ -251,7 +243,7 @@ impl Creator {
                 preset,
                 config,
                 custom_command: String::new(),
-                custom_script: Preset::Custom.provision_script().into(),
+                scripts: Preset::ALL.map(|preset| preset.provision_script().into()),
             });
 
             let g = ui.global::<Creation>();
@@ -357,8 +349,9 @@ impl Creator {
     }
 
     /// Switches the draft to the preset at `index` in `Preset::ALL`. The preset sets the
-    /// command and script; its arguments, network rules and forwarded ports replace the old
-    /// preset's that the user left alone, so ones the user added or changed stay.
+    /// command and script (with the user's edits to it); its arguments, network rules and
+    /// forwarded ports replace the old preset's that the user left alone, so ones the user
+    /// added or changed stay.
     fn set_preset(&self, index: i32) {
         let Some(&preset) = usize::try_from(index)
             .ok()
@@ -372,17 +365,17 @@ impl Creator {
                 return;
             }
             let c = &mut d.config;
+            let slot = |preset| Preset::ALL.iter().position(|&p| p == preset).unwrap_or(0);
+            d.scripts[slot(old)] = std::mem::take(&mut c.provision_script);
+            c.provision_script = d.scripts[slot(preset)].clone();
             if old == Preset::Custom {
                 d.custom_command = std::mem::take(&mut c.command);
-                d.custom_script = std::mem::take(&mut c.provision_script);
             }
-            if preset == Preset::Custom {
-                c.command = d.custom_command.clone();
-                c.provision_script = d.custom_script.clone();
+            c.command = if preset == Preset::Custom {
+                d.custom_command.clone()
             } else {
-                c.command = preset.command().into();
-                c.provision_script = preset.provision_script().into();
-            }
+                preset.command().into()
+            };
             let old_rules = old.network_rules();
             c.network_rules.retain(|rule| !old_rules.contains(rule));
             for rule in preset.network_rules() {
@@ -448,11 +441,11 @@ impl Creator {
         self.sync_draft_row(&ui, name, d.preset.name());
 
         let custom = d.preset == Preset::Custom;
-        let template = c.provision_script == Preset::Custom.provision_script();
+        let changed = c.provision_script != d.preset.provision_script();
         g.set_preset(Preset::ALL.iter().position(|&p| p == d.preset).unwrap_or(0) as i32);
         g.set_is_custom(custom);
         g.set_preset_name(d.preset.name().into());
-        g.set_script_changed(custom && !template);
+        g.set_script_changed(changed);
         // An empty name is only reported on Review, not while the user starts typing.
         g.set_name_error(
             if name.is_empty() {
@@ -475,10 +468,12 @@ impl Creator {
         sync(&self.issues, issues);
 
         g.set_review_runs(command_line(c).into());
-        g.set_review_script(match (custom, template) {
-            (true, true) => "Template, not filled in yet".into(),
-            (true, false) => "Custom script".into(),
-            (false, _) => format!("Script from the {} preset", d.preset.name()).into(),
+        g.set_review_script(match (custom, changed) {
+            _ if c.provision_script.trim().is_empty() => "None".into(),
+            (true, false) => "Custom agent template".into(),
+            (true, true) => "Custom script".into(),
+            (false, false) => format!("Script from the {} preset", d.preset.name()).into(),
+            (false, true) => format!("Edited script from the {} preset", d.preset.name()).into(),
         });
         let targets = |action| {
             let names: Vec<_> = rule_rows(&c.network_rules, action)
@@ -520,18 +515,8 @@ impl Creator {
         if !name_error.is_empty() {
             add(HARNESS, name_error, true);
         }
-        // A preset's script is complete; only a custom agent's needs checking.
-        if d.preset == Preset::Custom {
-            if c.provision_script.trim().is_empty() {
-                add(HARNESS, "The provisioning script is empty.", false);
-            } else if c.provision_script == Preset::Custom.provision_script() {
-                add(
-                    HARNESS,
-                    "Fill in the provisioning script so it installs your agent.",
-                    false,
-                );
-            }
-        }
+        // Any provisioning script is fine, even an empty one or the custom template: a
+        // custom agent's command may need nothing installed.
         for error in [
             command_error(&c.command),
             working_directory_error(&c.working_directory),
