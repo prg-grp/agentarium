@@ -14,7 +14,7 @@ for UI/UX guidelines.
 - `app/` – the desktop app (Rust + [Slint](https://slint.dev) UI)
 - `command_plane/` – the protobuf protocol between the app and the guest supervisor, over virtio-vsock
 - `data_plane/` – the protobuf protocol from the guest observer to the app, over virtio-vsock
-- `guest_supervisor/` – the guest supervisor (`agentarium-supervisor`), a static Linux binary baked into the base rootfs that starts the boot mode the app sends
+- `guest_supervisor/` – the guest supervisor (`agentarium-supervisor`), a static Linux binary the app shares read-only with every boot that starts the boot mode the app sends
 - `guest_observer/` – the guest observer (`agentarium-observer`), which loads the eBPF programs in agent mode and streams what the agent does to the app
 - `guest_observer_ebpf/` – the observer's eBPF programs (aya); `guest_observer_common/` – the event structs both share
 - `design/` – per-screen design specs (see DESIGN.md)
@@ -47,8 +47,9 @@ committed: `make guest`, `make run` and `make check` generate it from the pinned
 with `scripts/gen-vmlinux.sh` (needs Docker), and again when the kernel changes.
 
 ```bash
-make run     # download the guest kernel, build the base rootfs, then cargo run
-make guest   # only fetch the kernel and build the base root filesystem into target/
+make run     # download the guest kernel, build the base rootfs and guest binaries, then cargo run
+make guest   # only fetch the kernel and build the base rootfs and guest binaries into target/
+make guest-bin  # only build the supervisor and observer into target/guest/bin
 make check   # fmt, cargo check, clippy and script syntax checks
 make clean-app  # delete the app's data: database and all instance disks
 ```
@@ -56,12 +57,13 @@ make clean-app  # delete the app's data: database and all instance disks
 `cargo run` signs the binary ad hoc with the virtualization entitlement before starting it
 (see `.cargo/config.toml` and `scripts/codesign-run.sh`). `make run` also sets
 `AGENT_TOOLBOX_BASE_ROOTFS`, the base image that instance disks are cloned from. The base
-rootfs is rebuilt only when files in `vms/rootfs/base`, the supervisor or the observer change;
-`make clean-guest` removes all guest artifacts. Instance disks are clones of the base taken
-at creation, so after a base change that existing instances can't use (such as a new
-supervisor protocol), run `make clean-app`.
+rootfs is rebuilt only when files in `vms/rootfs/base` change; `make clean-guest` removes all
+guest artifacts. The supervisor and observer aren't part of it: every boot gets the current
+ones from `target/guest/bin`, so after changing them `make guest-bin` (or `make run`) and a
+reboot of the instance are enough. Instance disks are clones of the base taken at creation,
+so after a base change that existing instances can't use, run `make clean-app`.
 
-Development builds (`cargo run`, `make run`) use the kernel and base rootfs from `target/`
+Development builds (`cargo run`, `make run`) use the kernel, base rootfs and guest binaries from `target/`
 and don't update themselves; Preferences says so.
 
 ## Releases

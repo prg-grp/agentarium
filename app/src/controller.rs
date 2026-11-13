@@ -352,8 +352,7 @@ fn run(
                 Some(guest_message::Kind::Hello(hello)) => {
                     hello_deadline = None;
                     if hello.protocol_version != PROTOCOL_VERSION {
-                        failure =
-                            Some("The instance's guest supervisor doesn't match this app.".into());
+                        failure = Some("The guest supervisor doesn't match this app.".into());
                         force_stop(&vm);
                     } else if deadline.is_none()
                         && let Some(channel) = channel.as_mut()
@@ -823,6 +822,7 @@ impl VmControl {
             memory_mib: config.memory_mib.into(),
             kernel: guest::kernel_path(&instance.kernel)?,
             rootfs: instance.disk_path,
+            guest_bin: guest::guest_bin_dir()?,
             shares: Vec::new(),
             network: Arc::new(network),
             netlog: None,

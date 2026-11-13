@@ -3,18 +3,14 @@
 # provisioning script installs its agent on the first boot.
 OUT := ../../target/rootfs
 
-# The guest supervisor (agentarium-supervisor) and observer (agentarium-observer) binaries;
-# the root Makefile builds and sets them.
-SUPERVISOR ?=
-OBSERVER ?=
-
 SHELL := /bin/bash
 .PHONY: all clean
 .DELETE_ON_ERROR:
 
 all: $(OUT)/base.ext4
 
-# Rebuilt when anything in base/ or a guest binary changes. The docker export is unpacked
+# Rebuilt when anything in base/ changes. The guest supervisor and observer aren't part of
+# it: the app shares them with every boot (see base/Dockerfile). The docker export is unpacked
 # in an Alpine container whose mkfs.ext4 writes a sparse raw ext4 image just bigger than
 # its contents (a quarter and 512 MiB of headroom). The app extends each instance's clone
 # to the instance's disk size before it boots, and the guest grows the filesystem to fill
@@ -26,13 +22,9 @@ all: $(OUT)/base.ext4
 # virtio-blk disk (/dev/vda).
 # /.dockerenv is dropped: with it, systemd thinks it runs in a Docker container and skips
 # kernel command line conditions, timesyncd and its clock floor.
-# The binaries are handed to Docker as the named build contexts "supervisor" and "observer".
-$(OUT)/base.ext4: $(shell find base -type f) Makefile $(SUPERVISOR) $(OBSERVER)
-	@test -n "$(SUPERVISOR)" && test -n "$(OBSERVER)" || { echo 'SUPERVISOR or OBSERVER is not set; run `make rootfs` from the repository root.' >&2; exit 1; }
-	mkdir -p $(OUT)/supervisor $(OUT)/observer
-	cp $(SUPERVISOR) $(OUT)/supervisor/agentarium-supervisor
-	cp $(OBSERVER) $(OUT)/observer/agentarium-observer
-	docker build --platform linux/arm64 --build-context supervisor=$(OUT)/supervisor --build-context observer=$(OUT)/observer -t agent-toolbox/base base
+$(OUT)/base.ext4: $(shell find base -type f) Makefile
+	mkdir -p $(OUT)
+	docker build --platform linux/arm64 -t agent-toolbox/base base
 	set -euo pipefail; \
 	cid=$$(docker create --platform linux/arm64 agent-toolbox/base); \
 	trap 'docker rm $$cid >/dev/null' EXIT; \

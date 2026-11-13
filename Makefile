@@ -1,15 +1,16 @@
-# Development tasks. The guest kernel is downloaded into target/guest and the base root
-# filesystem is built into target/rootfs (workspace target dir). The app clones instance
-# disks from the base rootfs named by AGENT_TOOLBOX_BASE_ROOTFS.
+# Development tasks. The guest kernel is downloaded into target/guest, the guest binaries
+# are built into target/guest/bin and the base root filesystem is built into target/rootfs
+# (workspace target dir). The app clones instance disks from the base rootfs named by
+# AGENT_TOOLBOX_BASE_ROOTFS and shares target/guest/bin read-only with every boot.
 
 APP := app
 GUEST_DIR := target/guest
 KERNEL := $(GUEST_DIR)/Image
 BASE_ROOTFS := $(abspath target/rootfs/base.ext4)
-# The guest supervisor and observer, static Linux binaries baked into the base rootfs.
+# The guest supervisor and observer, static Linux binaries the app shares with the guest.
+# They aren't part of the base rootfs, so changing them needs no new rootfs or instance.
 GUEST_TARGET := aarch64-unknown-linux-musl
-SUPERVISOR := $(abspath target/$(GUEST_TARGET)/release/agentarium-supervisor)
-OBSERVER := $(abspath target/$(GUEST_TARGET)/release/agentarium-observer)
+GUEST_BIN := $(GUEST_DIR)/bin
 # Linux-only crates: checked for the guest target. guest_observer_ebpf is compiled for the
 # BPF target by guest_observer's build script (nightly with rust-src, and bpf-linker).
 GUEST_CRATES := -p guest_supervisor -p guest_observer
@@ -22,9 +23,9 @@ HOST_ONLY := --exclude guest_supervisor --exclude guest_observer --exclude guest
 # The app's Application Support folder (database, instance disks); named by db::APP_ID.
 APP_DATA := $(HOME)/Library/Application Support/com.programming-group.agentarium
 
-.PHONY: guest rootfs run check clean-guest clean-app
+.PHONY: guest guest-bin rootfs run check clean-guest clean-app
 
-guest: $(KERNEL) rootfs
+guest: $(KERNEL) rootfs guest-bin
 
 $(KERNEL): scripts/build-guest.sh
 	scripts/build-guest.sh
@@ -35,11 +36,18 @@ $(VMLINUX): $(KERNEL) scripts/gen-vmlinux.sh
 $(LICENSES): Cargo.lock about.hbs about.toml
 	cargo about generate --output-file $@ about.hbs
 
-# Cargo and the rootfs makefile decide themselves whether the guest binaries and the image
-# are stale. Needs the target once: rustup target add aarch64-unknown-linux-musl
-rootfs: $(VMLINUX)
+# Cargo decides itself whether the guest binaries are stale. install replaces each file
+# with a new one, so a running guest keeps the binary it started. Needs the target once:
+# rustup target add aarch64-unknown-linux-musl
+guest-bin: $(VMLINUX)
 	cargo build --release $(GUEST_CRATES) --target $(GUEST_TARGET)
-	$(MAKE) -C vms/rootfs SUPERVISOR=$(SUPERVISOR) OBSERVER=$(OBSERVER)
+	mkdir -p $(GUEST_BIN)
+	install -m 755 target/$(GUEST_TARGET)/release/agentarium-supervisor $(GUEST_BIN)/
+	install -m 755 target/$(GUEST_TARGET)/release/agentarium-observer $(GUEST_BIN)/
+
+# The rootfs makefile decides itself whether the image is stale.
+rootfs:
+	$(MAKE) -C vms/rootfs
 
 run: guest $(LICENSES)
 	AGENT_TOOLBOX_BASE_ROOTFS=$(BASE_ROOTFS) cargo run -p $(APP)

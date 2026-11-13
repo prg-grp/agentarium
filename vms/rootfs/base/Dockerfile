@@ -26,22 +26,26 @@ RUN systemctl set-default multi-user.target && \
 # mounts root itself (no initrd); this entry only adds the growing and keeps the options.
 RUN printf '/dev/vda / ext4 rw,noinit_itable,x-systemd.growfs 0 1\n' > /etc/fstab
 
+# The supervisor and observer aren't part of the base: the app shares its current build of
+# both read-only through a virtio-fs device of their own (command_plane::GUEST_BIN_TAG),
+# mounted here on every boot. So every boot runs the app's binaries, and an app update
+# never leaves a disk with an outdated supervisor. The Mac enforces read-only, so not even
+# root can change them. nofail: without the share, the supervisor doesn't start
+# (RequiresMountsFor= in its unit) and the app fails the boot when no Hello arrives.
+RUN mkdir -p /opt/agentarium && \
+    printf 'agentarium-guest /opt/agentarium virtiofs ro,nodev,nofail 0 0\n' >> /etc/fstab
+
 # The guest has two virtio consoles. hvc0 is the kernel console: kernel, systemd and the
 # supervisor's logs, shown read-only in the app's Logs tab. hvc1 is the session, shown
 # in the app's Terminal tab. No login runs on either, or anywhere: the supervisor alone
 # starts what a boot runs on hvc1, once the app sends Start over the command plane
 # (vsock): the agent's command as ubuntu, a root shell in maintenance mode, or the
-# provisioning script in provision mode. The binary is built from guest_supervisor and
-# handed in as the build context "supervisor" (see vms/rootfs/Makefile).
+# provisioning script in provision mode. The binary comes from the app's share at
+# /opt/agentarium (see above); only its unit is part of the base. The observer beside it
+# has no unit: only the supervisor starts it, in agent mode.
 RUN systemctl mask serial-getty@hvc0.service serial-getty@hvc1.service getty@tty1.service
-COPY --from=supervisor --chmod=755 agentarium-supervisor /usr/local/sbin/agentarium-supervisor
 COPY agentarium-supervisor.service /etc/systemd/system/agentarium-supervisor.service
 RUN systemctl enable agentarium-supervisor.service
-
-# The observer (built from guest_observer, build context "observer") loads eBPF programs
-# that watch what the agent does. Only the supervisor starts it, in agent mode, so it has
-# no systemd unit: maintenance and provision boots are never observed.
-COPY --from=observer --chmod=755 agentarium-observer /usr/local/sbin/agentarium-observer
 
 # The command plane's vsock transport, loaded early so the supervisor can listen right away.
 RUN printf 'vmw_vsock_virtio_transport\n' > /etc/modules-load.d/vsock.conf

@@ -1,5 +1,10 @@
 // The command plane between the app (host) and the guest supervisor.
 //
+// The supervisor and observer come from the app's read-only share (GUEST_BIN_TAG in
+// src/lib.rs), not from the instance's disk, so every boot runs the app's own build: both
+// sides always speak the same version, and Hello's version only guards against stale
+// development builds.
+//
 // The app connects to the supervisor on vsock port 700 (see PORT in src/lib.rs); only
 // root can listen on ports up to 1023 in the guest. Each message is a big-endian u32
 // length followed by the encoded message. The guest says Hello first; the app answers
@@ -177,7 +182,7 @@ message AgentUsage {
 // app over the data plane (see data_plane/proto/data_plane.proto).
 enum CollectorState {
   COLLECTOR_STATE_UNSPECIFIED = 0;
-  // The rootfs has no observer.
+  // The guest binaries the app shares have no observer.
   COLLECTOR_STATE_NOT_INSTALLED = 1;
   // It runs and its programs are attached.
   COLLECTOR_STATE_RUNNING = 2;

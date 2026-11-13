@@ -3,8 +3,8 @@
 #   that draft, which Velopack publishes once everything is uploaded;
 # - creating or updating its release PR → dev build into a new dev-<run> prerelease, which
 #   Velopack creates itself. A failed dev build has its release and tag removed again.
-# Both channels are packaged, signed, notarized and uploaded by Velopack; the guest kernel
-# and base rootfs are attached to every release for the app to download.
+# Both channels are packaged, signed, notarized and uploaded by Velopack; the guest kernel,
+# base rootfs, supervisor and observer are attached to every release for the app to download.
 # Everything runs in this one workflow, so github.run_number is the dev build number and no
 # PAT is needed (resources created with GITHUB_TOKEN only fail to trigger *other* workflows).
 name: release
@@ -127,64 +127,91 @@ jobs:
     outputs:
       kernel_sha256: ${{ steps.hashes.outputs.kernel }}
       rootfs_sha256: ${{ steps.hashes.outputs.rootfs }}
+      supervisor_sha256: ${{ steps.hashes.outputs.supervisor }}
+      observer_sha256: ${{ steps.hashes.outputs.observer }}
     steps:
       - uses: actions/checkout@v4
 
-      # Rebuilt only when something that ends up in the guest changes.
-      - id: cache
+      # The kernel and base rootfs are rebuilt only when something that ends up in them
+      # changes; the guest binaries aren't part of the rootfs, so guest code changes don't
+      # change its hash and the app doesn't download it again.
+      - id: image-cache
         uses: actions/cache@v4
         with:
-          path: dist/guest
-          key: guest-${{ hashFiles('Makefile', 'Cargo.lock', 'scripts/build-guest.sh', 'scripts/gen-vmlinux.sh', 'vms/rootfs/**', 'guest_supervisor/**', 'guest_observer/**', 'guest_observer_common/**', 'guest_observer_ebpf/**', 'command_plane/**', 'data_plane/**') }}
+          path: dist/guest-image
+          key: guest-image-${{ hashFiles('Makefile', 'scripts/build-guest.sh', 'vms/rootfs/**') }}
 
-      - if: steps.cache.outputs.cache-hit != 'true'
+      # The supervisor and observer, which the app shares with every boot.
+      - id: bin-cache
+        uses: actions/cache@v4
+        with:
+          path: dist/guest-bin
+          key: guest-bin-${{ hashFiles('Makefile', 'Cargo.lock', 'scripts/build-guest.sh', 'scripts/gen-vmlinux.sh', 'guest_supervisor/**', 'guest_observer/**', 'guest_observer_common/**', 'guest_observer_ebpf/**', 'command_plane/**', 'data_plane/**') }}
+
+      - if: steps.bin-cache.outputs.cache-hit != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-musl
 
-      - if: steps.cache.outputs.cache-hit != 'true'
+      - if: steps.bin-cache.outputs.cache-hit != 'true'
         run: rustup toolchain install nightly --profile minimal --component rust-src
 
-      - if: steps.cache.outputs.cache-hit != 'true'
+      - if: steps.bin-cache.outputs.cache-hit != 'true'
         uses: cargo-bins/cargo-binstall@main
 
-      - if: steps.cache.outputs.cache-hit != 'true'
+      - if: steps.bin-cache.outputs.cache-hit != 'true'
         run: cargo binstall -y bpf-linker
 
       # The runner's resolver often times out on ubuntu.com (Canonical's name servers are
       # partly unreachable from it). Docker containers take this file over as well.
-      - if: steps.cache.outputs.cache-hit != 'true'
+      - if: steps.image-cache.outputs.cache-hit != 'true' || steps.bin-cache.outputs.cache-hit != 'true'
         name: Use public DNS resolvers
         run: |
           sudo rm -f /etc/resolv.conf
           printf 'nameserver 1.1.1.1\nnameserver 9.9.9.9\noptions timeout:3 attempts:3\n' | sudo tee /etc/resolv.conf
 
-      - if: steps.cache.outputs.cache-hit != 'true'
-        name: Build kernel and base rootfs
-        run: make guest
-
       # The rootfs is a sparse image just bigger than its 1-2G of data; zstd turns the holes
-      # into almost nothing. The app checks the compressed files against these hashes.
-      - if: steps.cache.outputs.cache-hit != 'true'
-        name: Package guest assets
+      # into almost nothing. The app checks the compressed files against their hashes.
+      - if: steps.image-cache.outputs.cache-hit != 'true'
+        name: Build kernel and base rootfs
+        run: |
+          set -euo pipefail
+          make target/guest/Image rootfs
+          mkdir -p dist/guest-image
+          zstd -q -T0 -19 target/guest/Image -o dist/guest-image/agentarium-kernel.zst
+          zstd -q -T0 -12 --long=27 target/rootfs/base.ext4 -o dist/guest-image/agentarium-rootfs.ext4.zst
+
+      - if: steps.bin-cache.outputs.cache-hit != 'true'
+        name: Build guest binaries
+        run: |
+          set -euo pipefail
+          make guest-bin
+          mkdir -p dist/guest-bin
+          zstd -q -T0 -19 target/guest/bin/agentarium-supervisor -o dist/guest-bin/agentarium-supervisor.zst
+          zstd -q -T0 -19 target/guest/bin/agentarium-observer -o dist/guest-bin/agentarium-observer.zst
+
+      - name: Package guest assets
         run: |
           set -euo pipefail
           mkdir -p dist/guest
-          zstd -q -T0 -19 target/guest/Image -o dist/guest/agentarium-kernel.zst
-          zstd -q -T0 -12 --long=27 target/rootfs/base.ext4 -o dist/guest/agentarium-rootfs.ext4.zst
+          cp dist/guest-image/* dist/guest-bin/* dist/guest/
           cd dist/guest
+          entry() {
+            jq -n --arg file "$1" --arg sha "$(sha256sum "$1" | cut -d' ' -f1)" \
+              --argjson size "$(stat -c %s "$1")" '{file: $file, sha256: $sha, size: $size}'
+          }
           jq -n \
-            --arg ks "$(sha256sum agentarium-kernel.zst | cut -d' ' -f1)" \
-            --arg rs "$(sha256sum agentarium-rootfs.ext4.zst | cut -d' ' -f1)" \
-            --argjson kn "$(stat -c %s agentarium-kernel.zst)" \
-            --argjson rn "$(stat -c %s agentarium-rootfs.ext4.zst)" \
-            '{kernel: {file: "agentarium-kernel.zst", sha256: $ks, size: $kn},
-              rootfs: {file: "agentarium-rootfs.ext4.zst", sha256: $rs, size: $rn}}' > guest.json
+            --argjson kernel "$(entry agentarium-kernel.zst)" \
+            --argjson rootfs "$(entry agentarium-rootfs.ext4.zst)" \
+            --argjson supervisor "$(entry agentarium-supervisor.zst)" \
+            --argjson observer "$(entry agentarium-observer.zst)" \
+            '{kernel: $kernel, rootfs: $rootfs, supervisor: $supervisor, observer: $observer}' > guest.json
 
       - id: hashes
         run: |
-          echo "kernel=$(jq -r .kernel.sha256 dist/guest/guest.json)" >> "$GITHUB_OUTPUT"
-          echo "rootfs=$(jq -r .rootfs.sha256 dist/guest/guest.json)" >> "$GITHUB_OUTPUT"
+          for asset in kernel rootfs supervisor observer; do
+            echo "$asset=$(jq -r ".$asset.sha256" dist/guest/guest.json)" >> "$GITHUB_OUTPUT"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -235,6 +262,8 @@ jobs:
           AGENTARIUM_RELEASE_TAG: ${{ needs.plan.outputs.tag }}
           AGENTARIUM_KERNEL_SHA256: ${{ needs.guest.outputs.kernel_sha256 }}
           AGENTARIUM_ROOTFS_SHA256: ${{ needs.guest.outputs.rootfs_sha256 }}
+          AGENTARIUM_SUPERVISOR_SHA256: ${{ needs.guest.outputs.supervisor_sha256 }}
+          AGENTARIUM_OBSERVER_SHA256: ${{ needs.guest.outputs.observer_sha256 }}
         run: cargo build --release -p app --target aarch64-apple-darwin
 
       - name: Prepare bundle inputs
@@ -326,7 +355,8 @@ jobs:
           vpk upload github --repoUrl "$REPO_URL" --token "$GH_TOKEN" --channel "$CHANNEL" \
             --tag "$TAG" --releaseName "$VERSION" --targetCommitish "$GITHUB_SHA" \
             --merge --publish ${pre[@]+"${pre[@]}"} -o dist/releases
-          gh release upload "$TAG" dist/guest/agentarium-kernel.zst dist/guest/agentarium-rootfs.ext4.zst dist/guest/guest.json --clobber
+          gh release upload "$TAG" dist/guest/agentarium-kernel.zst dist/guest/agentarium-rootfs.ext4.zst \
+            dist/guest/agentarium-supervisor.zst dist/guest/agentarium-observer.zst dist/guest/guest.json --clobber
 
       - name: Remove keychain
         if: always()

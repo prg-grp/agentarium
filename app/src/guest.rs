@@ -1,18 +1,22 @@
-//! The guest kernel and the base root filesystem that instance disks are cloned from.
+//! The guest kernel, the base root filesystem that instance disks are cloned from, and the
+//! guest supervisor and observer that every boot gets through a read-only share.
 //!
 //! Release builds carry their GitHub release's tag and the SHA-256 of the compressed guest
 //! assets attached to it (set by .github/workflows/release.yml). When some of them are
-//! missing at launch (first launch, or an update that ships a new guest image), a blocking
+//! missing at launch (first launch, or an update that ships new guest assets), a blocking
 //! dialog asks for the download; once the user starts it, the files go into Application
 //! Support, on the same APFS volume as the instance disks, so `vm::create_disk` can clone
 //! the base. A disk's kernel modules match only the
 //! kernel it was cloned for, so each instance records its kernel, and a kernel stays as
-//! long as an instance uses it. Development builds use what `make guest` built in target/.
+//! long as an instance uses it. The supervisor and observer aren't on the disks: every boot
+//! shares this release's build of them (`guest_bin_dir`), so only the newest is kept.
+//! Development builds use what `make guest` built in target/.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
@@ -25,9 +29,15 @@ use crate::{AppWindow, GuestImage, GuestState};
 /// Where releases, updates and guest assets are published.
 pub const REPO_URL: &str = "https://github.com/prg-grp/agentarium";
 
-/// The kernel of development builds: the one `make guest` downloads.
-const DEV_KERNEL_ID: &str = "dev";
+/// How instances of development builds record their kernel and base; their kernel is the
+/// one `make guest` downloads.
+const DEV_ID: &str = "dev";
 const DEV_KERNEL: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/Image");
+/// The guest binaries of development builds: the ones `make guest` builds.
+const DEV_BIN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../target/guest/bin");
+/// The guest binaries, by the names the base rootfs expects them under in the share.
+const SUPERVISOR: &str = "agentarium-supervisor";
+const OBSERVER: &str = "agentarium-observer";
 /// Names the base rootfs of development builds; `make run` sets it.
 const BASE_ROOTFS_VAR: &str = "AGENT_TOOLBOX_BASE_ROOTFS";
 
@@ -40,6 +50,8 @@ struct Release {
     tag: &'static str,
     kernel: &'static str,
     rootfs: &'static str,
+    supervisor: &'static str,
+    observer: &'static str,
 }
 
 fn release() -> Option<Release> {
@@ -48,6 +60,8 @@ fn release() -> Option<Release> {
         tag: baked(option_env!("AGENTARIUM_RELEASE_TAG"))?,
         kernel: baked(option_env!("AGENTARIUM_KERNEL_SHA256"))?,
         rootfs: baked(option_env!("AGENTARIUM_ROOTFS_SHA256"))?,
+        supervisor: baked(option_env!("AGENTARIUM_SUPERVISOR_SHA256"))?,
+        observer: baked(option_env!("AGENTARIUM_OBSERVER_SHA256"))?,
     })
 }
 
@@ -63,14 +77,25 @@ fn rootfs_name(rootfs: &str) -> String {
     format!("rootfs-{rootfs}.ext4")
 }
 
+/// The directory with a release's supervisor and observer; nothing else is in it, since
+/// it is shared with the guest as it is.
+fn bin_name(tag: &str) -> String {
+    format!("bin-{tag}")
+}
+
+/// The base rootfs that new instances are cloned from, as `instances.base` records it.
+pub fn current_base() -> &'static str {
+    release().map_or(DEV_ID, |release| release.rootfs)
+}
+
 /// The kernel that new instances are created for.
 pub fn current_kernel() -> &'static str {
-    release().map_or(DEV_KERNEL_ID, |release| release.kernel)
+    release().map_or(DEV_ID, |release| release.kernel)
 }
 
 /// The kernel image of instances created for `kernel`.
 pub fn kernel_path(kernel: &str) -> db::Result<PathBuf> {
-    if kernel == DEV_KERNEL_ID {
+    if kernel == DEV_ID {
         return Ok(PathBuf::from(DEV_KERNEL));
     }
     Ok(guest_dir()?.join(kernel_name(kernel)))
@@ -95,28 +120,71 @@ pub fn base_rootfs() -> Result<PathBuf, String> {
     }
 }
 
+/// The directory with the guest supervisor and observer that every boot shares read-only
+/// with the guest (`vm::VmSpec::guest_bin`).
+pub fn guest_bin_dir() -> Result<PathBuf, String> {
+    let (dir, missing) = match release() {
+        Some(release) => (
+            guest_dir()
+                .map_err(|error| error.to_string())?
+                .join(bin_name(release.tag)),
+            "the guest image hasn't finished downloading.",
+        ),
+        None => (
+            PathBuf::from(DEV_BIN),
+            "the guest binaries haven't been built. Start the app with `make run`.",
+        ),
+    };
+    match [SUPERVISOR, OBSERVER]
+        .iter()
+        .all(|bin| dir.join(bin).exists())
+    {
+        true => Ok(dir),
+        false => Err(missing.into()),
+    }
+}
+
 /// One file of this release that isn't here yet.
 struct Download {
     step: &'static str,
     file: &'static str,
     sha256: &'static str,
     to: PathBuf,
+    /// Run in the guest, so made executable.
+    executable: bool,
 }
 
 /// The files of the release that aren't in `dir` yet.
 fn missing(release: Release, dir: &Path) -> Vec<Download> {
+    let bin = dir.join(bin_name(release.tag));
     [
         Download {
             step: "Downloading kernel",
             file: "agentarium-kernel.zst",
             sha256: release.kernel,
             to: dir.join(kernel_name(release.kernel)),
+            executable: false,
         },
         Download {
             step: "Downloading root filesystem",
             file: "agentarium-rootfs.ext4.zst",
             sha256: release.rootfs,
             to: dir.join(rootfs_name(release.rootfs)),
+            executable: false,
+        },
+        Download {
+            step: "Downloading guest supervisor",
+            file: "agentarium-supervisor.zst",
+            sha256: release.supervisor,
+            to: bin.join(SUPERVISOR),
+            executable: true,
+        },
+        Download {
+            step: "Downloading guest observer",
+            file: "agentarium-observer.zst",
+            sha256: release.observer,
+            to: bin.join(OBSERVER),
+            executable: true,
         },
     ]
     .into_iter()
@@ -288,8 +356,9 @@ impl GuestAssets {
         g.set_error(error.into());
     }
 
-    /// Deletes earlier releases' assets: base images, kernels no instance uses anymore,
-    /// and unfinished downloads.
+    /// Deletes earlier releases' assets: base images, guest binaries, kernels no instance
+    /// uses anymore, and unfinished downloads. No VM runs yet when this runs at launch, and
+    /// updates install only after the instances have shut down.
     fn remove_unused(&self) {
         let (Some(release), Ok(dir)) = (release(), guest_dir()) else {
             return;
@@ -301,16 +370,26 @@ impl GuestAssets {
         let keep: HashSet<String> = instances
             .iter()
             .map(|instance| kernel_name(&instance.kernel))
-            .chain([kernel_name(release.kernel), rootfs_name(release.rootfs)])
+            .chain([
+                kernel_name(release.kernel),
+                rootfs_name(release.rootfs),
+                bin_name(release.tag),
+            ])
             .collect();
         let Ok(entries) = std::fs::read_dir(&dir) else {
             return;
         };
         for entry in entries.flatten() {
-            if !keep.contains(entry.file_name().to_string_lossy().as_ref())
-                && let Err(error) = std::fs::remove_file(entry.path())
-            {
-                eprintln!("Couldn't remove {}: {error}", entry.path().display());
+            if keep.contains(entry.file_name().to_string_lossy().as_ref()) {
+                continue;
+            }
+            let path = entry.path();
+            let removed = match path.is_dir() {
+                true => std::fs::remove_dir_all(&path),
+                false => std::fs::remove_file(&path),
+            };
+            if let Err(error) = removed {
+                eprintln!("Couldn't remove {}: {error}", path.display());
             }
         }
     }
@@ -333,6 +412,9 @@ fn fetch(tag: &str, download: &Download, progress: &dyn Fn(u64, u64)) -> Result<
         progress,
     };
     let partial = download.to.with_extension("partial");
+    if let Some(parent) = partial.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| failed(&e))?;
+    }
     let unpacked = unpack(&mut source, &partial).and_then(|()| {
         // zstd stops at the end of its frame; whatever follows counts for the hash too.
         io::copy(&mut source, &mut io::sink()).map(|_| ())
@@ -350,6 +432,10 @@ fn fetch(tag: &str, download: &Download, progress: &dyn Fn(u64, u64)) -> Result<
     if hash != download.sha256 {
         let _ = std::fs::remove_file(&partial);
         return Err(format!("{} arrived damaged. Try again.", download.file));
+    }
+    if download.executable {
+        std::fs::set_permissions(&partial, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| failed(&e))?;
     }
     std::fs::rename(&partial, &download.to).map_err(|e| failed(&e))
 }

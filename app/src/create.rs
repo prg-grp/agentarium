@@ -338,8 +338,9 @@ impl Creator {
             .and_then(|base| vm::create_disk(&base, &disk))
             .map_err(Box::<dyn Error>::from)
             .and_then(|()| {
-                let kernel = guest::current_kernel();
-                self.db.create_instance(id, name, &disk, kernel, config)
+                let (kernel, base) = (guest::current_kernel(), guest::current_base());
+                self.db
+                    .create_instance(id, name, &disk, kernel, base, config)
             });
         if created.is_err() {
             let _ = std::fs::remove_dir_all(&dir);

@@ -24,11 +24,18 @@ pub const FORWARD_PORT: u32 = 702;
 /// with a `Shell`. Below 1024 for the same reason as `PORT`.
 pub const SHELL_PORT: u32 = 703;
 
-/// Sent in `Hello`; the app refuses a supervisor that speaks another version.
+/// Sent in `Hello`; the app refuses a supervisor that speaks another version. The app and
+/// the guest binaries ship together, so they only differ when a development build's guest
+/// binaries are stale.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// The tag of the virtio-fs device that holds an instance's shared folders.
 pub const SHARE_TAG: &str = "agentarium-shares";
+
+/// The tag of the read-only virtio-fs device that holds the app's build of the guest
+/// supervisor and observer. The base rootfs mounts it at /opt/agentarium (its /etc/fstab
+/// and the supervisor's unit), so the tag and that path must stay as they are.
+pub const GUEST_BIN_TAG: &str = "agentarium-guest";
 
 /// How often the supervisor reports `Status` in agent mode.
 pub const STATUS_INTERVAL: Duration = Duration::from_secs(2);

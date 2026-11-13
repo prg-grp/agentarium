@@ -346,18 +346,22 @@ impl Db {
 
     /// Creates an instance with `config` as its first revision. The caller picks the
     /// id (a UUIDv7), so the disk can be created in `instance_dir(id)` beforehand.
+    /// `base` names the base rootfs the disk was cloned from. Nothing reads it yet: it is
+    /// there so a later app can tell disks of older bases apart if what the guest binaries
+    /// expect of the disk (their mount point, the supervisor's unit) ever changes.
     pub fn create_instance(
         &self,
         id: &str,
         name: &str,
         disk_path: &Path,
         kernel: &str,
+        base: &str,
         config: &Config,
     ) -> Result<Instance> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO instances (id, name, disk_path, kernel) VALUES (?1, ?2, ?3, ?4)",
-            params![id, name, disk_path.to_string_lossy(), kernel],
+            "INSERT INTO instances (id, name, disk_path, kernel, base) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, name, disk_path.to_string_lossy(), kernel, base],
         )?;
         put_revision(&tx, &self.cipher, id, 1, config)?;
         tx.commit()?;

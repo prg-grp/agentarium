@@ -5,6 +5,7 @@ CREATE TABLE instances (
     name       TEXT NOT NULL UNIQUE COLLATE NOCASE,
     disk_path  TEXT NOT NULL,                       -- persistent root disk image
     kernel     TEXT NOT NULL,                       -- the guest kernel the disk's modules match (guest.rs)
+    base       TEXT NOT NULL,                       -- the base rootfs the disk was cloned from (guest.rs); written once, read by nothing yet
     provisioned_at INTEGER,                         -- NULL until a provisioning run succeeded
     created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
 ) STRICT;

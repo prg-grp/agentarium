@@ -58,8 +58,9 @@ const RUN_DIR: &str = "/run/agentarium";
 /// Where the virtio-fs share with all shared folders is mounted. Root only: the session
 /// reaches each folder only where it is mounted.
 const SHARES_DIR: &str = "/run/agentarium/shares";
-/// The observer, baked into the base rootfs beside the supervisor.
-const OBSERVER: &str = "/usr/local/sbin/agentarium-observer";
+/// The observer, beside the supervisor in the app's read-only share (`GUEST_BIN_TAG`,
+/// mounted there by the base's /etc/fstab).
+const OBSERVER: &str = "/opt/agentarium/agentarium-observer";
 /// How long the agent's start waits for the observer to attach its programs.
 const OBSERVER_READY: Duration = Duration::from_secs(10);
 
@@ -584,7 +585,7 @@ fn observe(cgroup: &Path, agent: &Arc<Mutex<AgentState>>) {
     if !Path::new(OBSERVER).exists() {
         warn!(
             path = OBSERVER,
-            "not observing the agent: the observer isn't installed"
+            "not observing the agent: the observer isn't in the guest binaries"
         );
         agent.lock().unwrap().collector = CollectorState::NotInstalled;
         return;

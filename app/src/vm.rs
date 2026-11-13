@@ -18,7 +18,7 @@ use objc2_foundation::{NSArray, NSDictionary, NSError, NSFileHandle, NSString, N
 use objc2_virtualization::{
     VZDiskImageStorageDeviceAttachment, VZFileHandleNetworkDeviceAttachment,
     VZFileHandleSerialPortAttachment, VZLinuxBootLoader, VZMultipleDirectoryShare,
-    VZSharedDirectory, VZVirtioBlockDeviceConfiguration,
+    VZSharedDirectory, VZSingleDirectoryShare, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioEntropyDeviceConfiguration,
     VZVirtioFileSystemDeviceConfiguration, VZVirtioNetworkDeviceConfiguration,
     VZVirtioSocketConnection, VZVirtioSocketDevice, VZVirtioSocketDeviceConfiguration,
@@ -51,6 +51,10 @@ pub struct VmSpec {
     pub kernel: PathBuf,
     /// Raw ext4 image, attached read-write as the guest's /dev/vda.
     pub rootfs: PathBuf,
+    /// The directory with the guest supervisor and observer (`guest::guest_bin_dir`),
+    /// shared read-only through a virtio-fs device of its own (`GUEST_BIN_TAG`). The base
+    /// rootfs mounts it and starts the supervisor from it.
+    pub guest_bin: PathBuf,
     /// Host folders shared live through one virtio-fs device (`SHARE_TAG`); the guest
     /// supervisor mounts them where `Start.mounts` says.
     pub shares: Vec<SharedFolder>,
@@ -103,7 +107,7 @@ impl Vm {
         if !unsafe { VZVirtualMachine::isSupported() } {
             return Err("Virtualization isn't available on this Mac.".into());
         }
-        for path in [&spec.kernel, &spec.rootfs] {
+        for path in [&spec.kernel, &spec.rootfs, &spec.guest_bin] {
             if !path.exists() {
                 return Err(format!("{} is missing.", path.display()));
             }
@@ -195,6 +199,20 @@ impl Vm {
             config.setSocketDevices(&NSArray::from_retained_slice(&[Retained::into_super(
                 VZVirtioSocketDeviceConfiguration::new(),
             )]));
+            // The Mac enforces read-only, so not even root in the guest can change them.
+            let guest_bin = VZVirtioFileSystemDeviceConfiguration::initWithTag(
+                VZVirtioFileSystemDeviceConfiguration::alloc(),
+                &NSString::from_str(command_plane::GUEST_BIN_TAG),
+            );
+            guest_bin.setShare(Some(&VZSingleDirectoryShare::initWithDirectory(
+                VZSingleDirectoryShare::alloc(),
+                &VZSharedDirectory::initWithURL_readOnly(
+                    VZSharedDirectory::alloc(),
+                    &file_url(&spec.guest_bin),
+                    true,
+                ),
+            )));
+            let mut directory_devices = vec![Retained::into_super(guest_bin)];
             if !spec.shares.is_empty() {
                 let names: Vec<_> = spec
                     .shares
@@ -222,10 +240,9 @@ impl Vm {
                     &NSString::from_str(command_plane::SHARE_TAG),
                 );
                 device.setShare(Some(&share));
-                config.setDirectorySharingDevices(&NSArray::from_retained_slice(&[
-                    Retained::into_super(device),
-                ]));
+                directory_devices.push(Retained::into_super(device));
             }
+            config.setDirectorySharingDevices(&NSArray::from_retained_slice(&directory_devices));
             config
                 .validateWithError()
                 .map_err(|error| error.localizedDescription().to_string())?;
