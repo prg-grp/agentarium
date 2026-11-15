@@ -2,7 +2,9 @@
 # - merging its release PR creates the vX.Y.Z tag and a draft release → stable build into
 #   that draft, which Velopack publishes once everything is uploaded;
 # - creating or updating its release PR → dev build into a new dev-<run> prerelease, which
-#   Velopack creates itself. A failed dev build has its release and tag removed again.
+#   Velopack creates itself. It builds the release PR's head commit, so the crates carry the
+#   proposed version; its tag stays on the main commit. A failed dev build has its release and
+#   tag removed again.
 # Both channels are packaged, signed, notarized and uploaded by Velopack; the guest kernel,
 # base rootfs, supervisor and observer are attached to every release for the app to download.
 # Everything runs in this one workflow, so github.run_number is the dev build number and no
@@ -34,6 +36,7 @@ jobs:
       version: ${{ steps.decide.outputs.version }}
       tag: ${{ steps.decide.outputs.tag }}
       prev_tag: ${{ steps.decide.outputs.prev_tag }}
+      ref: ${{ steps.decide.outputs.ref }}
     steps:
       - id: rp
         uses: googleapis/release-please-action@v4
@@ -67,6 +70,7 @@ jobs:
               echo "version=$RELEASE_VERSION"
               echo "tag=$RELEASE_TAG"
               echo "prev_tag=$prev"
+              echo "ref=$GITHUB_SHA"
             } >> "$GITHUB_OUTPUT"
           elif [ "$PRS_CREATED" = "true" ]; then
             # The version the release PR will ship, with the run number as dev build number.
@@ -77,6 +81,11 @@ jobs:
               exit 1
             fi
             git fetch origin "$branch"
+            # The build uses the PR's head commit (main plus the version bump), pinned so a
+            # later push to the PR branch can't change it. The dev tag still goes on the main
+            # commit: release-please force-pushes the PR branch, so tags on its commits would
+            # not be ancestors of later ones and the describes below would miss them.
+            ref=$(git rev-parse FETCH_HEAD)
             next=$(git show FETCH_HEAD:.release-please-manifest.json | jq -r '."."')
             version="$next-dev.$RUN_NUMBER"
             # A re-run of a finished build must not fail later and have its release cleaned up.
@@ -109,6 +118,7 @@ jobs:
               echo "version=$version"
               echo "tag=dev-$RUN_NUMBER"
               echo "prev_tag=$prev"
+              echo "ref=$ref"
             } >> "$GITHUB_OUTPUT"
           else
             echo "mode=none" >> "$GITHUB_OUTPUT"
@@ -131,6 +141,8 @@ jobs:
       observer_sha256: ${{ steps.hashes.outputs.observer }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
 
       # The kernel and base rootfs are rebuilt only when something that ends up in them
       # changes; the guest binaries aren't part of the rootfs, so guest code changes don't
@@ -234,6 +246,8 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
       - run: echo "KEYCHAIN=$RUNNER_TEMP/release.keychain-db" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
