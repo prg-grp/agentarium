@@ -1150,6 +1150,23 @@ fn key_bytes(text: &str, ctrl: bool, shift: bool, app_cursor: bool) -> Option<Ve
         return Some(text.as_bytes().to_vec());
     }
 
+    // Pressing a modifier on its own produces no input. Its key code would
+    // otherwise pass as a control character while Ctrl is held (Ctrl alone is ^W).
+    let modifiers = [
+        Key::Shift,
+        Key::ShiftR,
+        Key::Control,
+        Key::ControlR,
+        Key::Alt,
+        Key::AltGr,
+        Key::Meta,
+        Key::MetaR,
+        Key::CapsLock,
+    ];
+    if modifiers.iter().any(|key| char::from(*key) == c) {
+        return None;
+    }
+
     if let Some((_, sequence)) = KEY_SEQUENCES.iter().find(|(key, _)| char::from(*key) == c) {
         return Some(sequence.as_bytes().to_vec());
     }
