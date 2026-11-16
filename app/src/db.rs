@@ -34,6 +34,9 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 /// The app identifier; names the app's Application Support folder and its keychain item.
 pub const APP_ID: &str = "com.programming-group.agentarium";
+/// Names another app folder for debug builds; `make run` sets it so a development
+/// build keeps its data apart from the installed app's.
+const APP_DIR_VAR: &str = "AGENT_TOOLBOX_APP_DIR";
 const FILE_NAME: &str = "agentarium.sqlite";
 /// The keychain account of the database key, under the service `APP_ID`.
 const KEY_ACCOUNT: &str = "database-key";
@@ -257,17 +260,21 @@ pub struct Revision {
 }
 
 /// The app's folder in Application Support, created if needed. It holds the database
-/// and, under `instances/<id>`, each instance's files.
+/// and, under `instances/<id>`, each instance's files. Debug builds use the folder named
+/// by `APP_DIR_VAR` instead, when it is set.
 pub fn app_dir() -> Result<PathBuf> {
-    let dir = NSFileManager::defaultManager()
-        .URLsForDirectory_inDomains(
-            NSSearchPathDirectory::ApplicationSupportDirectory,
-            NSSearchPathDomainMask::UserDomainMask,
-        )
-        .firstObject()
-        .and_then(|url| url.to_file_path())
-        .ok_or("Couldn't find the Application Support folder.")?
-        .join(APP_ID);
+    let dir = match std::env::var_os(APP_DIR_VAR).filter(|_| cfg!(debug_assertions)) {
+        Some(dir) => PathBuf::from(dir),
+        None => NSFileManager::defaultManager()
+            .URLsForDirectory_inDomains(
+                NSSearchPathDirectory::ApplicationSupportDirectory,
+                NSSearchPathDomainMask::UserDomainMask,
+            )
+            .firstObject()
+            .and_then(|url| url.to_file_path())
+            .ok_or("Couldn't find the Application Support folder.")?
+            .join(APP_ID),
+    };
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
 }

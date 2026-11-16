@@ -1,7 +1,8 @@
 # Development tasks. The guest kernel is downloaded into target/guest, the guest binaries
 # are built into target/guest/bin and the base root filesystem is built into target/rootfs
 # (workspace target dir). The app clones instance disks from the base rootfs named by
-# AGENT_TOOLBOX_BASE_ROOTFS and shares target/guest/bin read-only with every boot.
+# AGENT_TOOLBOX_BASE_ROOTFS and shares target/guest/bin read-only with every boot. make run
+# points the app at its own data folder (AGENT_TOOLBOX_APP_DIR), apart from the installed app's.
 
 APP := app
 GUEST_DIR := target/guest
@@ -20,8 +21,9 @@ VMLINUX := guest_observer_ebpf/src/vmlinux.rs
 # Needs cargo-about once: cargo install cargo-about
 LICENSES := app/src/licenses.rs
 HOST_ONLY := --exclude guest_supervisor --exclude guest_observer --exclude guest_observer_ebpf
-# The app's Application Support folder (database, instance disks); named by db::APP_ID.
-APP_DATA := $(HOME)/Library/Application Support/com.programming-group.agentarium
+# The data folder of development builds (database, instance disks). The installed app keeps
+# its own, named by db::APP_ID, so both can run side by side.
+APP_DATA ?= $(HOME)/Library/Application Support/com.programming-group.agentarium-dev
 
 .PHONY: guest guest-bin rootfs run check clean-guest clean-app
 
@@ -50,7 +52,7 @@ rootfs:
 	$(MAKE) -C vms/rootfs
 
 run: guest $(LICENSES)
-	AGENT_TOOLBOX_BASE_ROOTFS=$(BASE_ROOTFS) cargo run -p $(APP)
+	AGENT_TOOLBOX_BASE_ROOTFS=$(BASE_ROOTFS) AGENT_TOOLBOX_APP_DIR="$(APP_DATA)" cargo run -p $(APP)
 
 check: $(VMLINUX) $(LICENSES)
 	cargo fmt --all --check
@@ -75,6 +77,7 @@ clean-guest:
 	rm -rf $(GUEST_DIR) $(VMLINUX)
 	$(MAKE) -C vms/rootfs clean
 
-# Deletes all app data: the database and every instance with its disk.
+# Deletes the development builds' data: the database and every instance with its disk.
+# The installed app's data stays.
 clean-app:
 	rm -rf "$(APP_DATA)"

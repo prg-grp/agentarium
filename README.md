@@ -51,7 +51,7 @@ make run     # download the guest kernel, build the base rootfs and guest binari
 make guest   # only fetch the kernel and build the base rootfs and guest binaries into target/
 make guest-bin  # only build the supervisor and observer into target/guest/bin
 make check   # fmt, cargo check, clippy and script syntax checks
-make clean-app  # delete the app's data: database and all instance disks
+make clean-app  # delete the development builds' data: database and all instance disks
 ```
 
 `cargo run` signs the binary ad hoc with the virtualization entitlement before starting it
@@ -62,6 +62,12 @@ guest artifacts. The supervisor and observer aren't part of it: every boot gets 
 ones from `target/guest/bin`, so after changing them `make guest-bin` (or `make run`) and a
 reboot of the instance are enough. Instance disks are clones of the base taken at creation,
 so after a base change that existing instances can't use, run `make clean-app`.
+
+`make run` also sets `AGENT_TOOLBOX_APP_DIR`, so development builds keep their database and
+instances in `~/Library/Application Support/com.programming-group.agentarium-dev` instead of
+the installed app's folder, and both can run side by side. `make clean-app` deletes only that
+folder. Release builds ignore the variable, and a plain `cargo run` without it uses the
+installed app's folder.
 
 Development builds (`cargo run`, `make run`) use the kernel, base rootfs and guest binaries from `target/`
 and don't update themselves; Preferences says so.
