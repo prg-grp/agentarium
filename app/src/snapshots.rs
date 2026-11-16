@@ -1,9 +1,9 @@
 //! The Snapshots tab: snapshots of the shown instance's disk, each with the configuration
-//! revision that was the latest when it was taken. See design/snapshots.md.
+//! revision that was the current one when it was taken. See design/snapshots.md.
 //!
 //! A snapshot is an APFS clone of the stopped instance's disk (`vm::create_disk`), kept in
-//! the instance's `snapshots` folder. Restoring one clones it back over the disk and saves
-//! its revision's configuration for the next boot. Both need the instance to be stopped;
+//! the instance's `snapshots` folder. Restoring one clones it back over the disk and makes
+//! its revision the current one, for the next boot. Both need the instance to be stopped;
 //! deleting a snapshot doesn't. After a successful provisioning run, the controller takes a
 //! "Freshly provisioned" snapshot unless the user turned that off in Preferences.
 
@@ -31,10 +31,10 @@ pub fn auto_snapshot(db: &Db) -> bool {
         .is_none_or(|value| value != "off")
 }
 
-/// Takes a snapshot of the stopped instance's disk, linking its latest revision.
+/// Takes a snapshot of the stopped instance's disk, linking its current revision.
 pub fn take(db: &Db, instance_id: &str, name: &str) -> db::Result<()> {
     let instance = db.instance(instance_id)?;
-    let revision = db.latest_revision(instance_id)?.number;
+    let revision = db.current_revision(instance_id)?.number;
     let id = uuid::Uuid::now_v7().to_string();
     let disk = db::instance_dir(instance_id)?
         .join("snapshots")
@@ -147,10 +147,10 @@ impl SnapshotsView {
         }
     }
 
-    /// Replaces the stopped instance's disk with a clone of the snapshot and saves the
-    /// snapshot's configuration for the next boot. The clone is made next to the disk first
-    /// and only renamed over it once the configuration is saved, so a failure leaves both
-    /// as they were.
+    /// Replaces the stopped instance's disk with a clone of the snapshot and makes the
+    /// snapshot's revision the current one, for the next boot. The clone is made next to
+    /// the disk first and only renamed over it once the revision is switched, so a failure
+    /// leaves the disk as it was.
     fn restore(&self, index: i32) {
         let Some(id) = self.stopped_instance() else {
             return;
@@ -161,7 +161,7 @@ impl SnapshotsView {
         };
         let restored = (|| -> db::Result<(String, String)> {
             let instance = self.db.instance(&id)?;
-            let config = self.db.revision(&id, revision)?.config;
+            let command = self.db.revision(&id, revision)?.config.command;
             let temp = instance.disk_path.with_extension("ext4.restoring");
             if let Err(error) = std::fs::remove_file(&temp)
                 && error.kind() != io::ErrorKind::NotFound
@@ -170,16 +170,14 @@ impl SnapshotsView {
             }
             vm::create_disk(&disk, &temp)?;
             let replaced = (|| -> db::Result<()> {
-                if self.db.latest_revision(&id)?.config != config {
-                    self.db.save_config(&id, &config)?;
-                }
+                self.db.set_current_revision(&id, revision)?;
                 std::fs::rename(&temp, &instance.disk_path)?;
                 Ok(())
             })();
             if replaced.is_err() {
                 let _ = std::fs::remove_file(&temp);
             }
-            replaced.map(|()| (instance.name, config.command))
+            replaced.map(|()| (instance.name, command))
         })();
         match restored {
             Ok((name, command)) => {

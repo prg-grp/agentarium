@@ -1083,7 +1083,7 @@ impl VmControl {
     }
 
     /// Describes the VM and the Start message for its guest supervisor from the instance's
-    /// latest revision, which this boot freezes. Also returns the boot mode, the revision
+    /// current revision, which this boot freezes. Also returns the boot mode, the revision
     /// number and its configuration. An instance that isn't provisioned yet boots in provision mode instead of
     /// agent mode. Agent and maintenance boots get the enabled shared folders and the
     /// environment; a missing folder or invalid setting fails the boot before the VM starts.
@@ -1093,7 +1093,7 @@ impl VmControl {
         mode: BootMode,
     ) -> db::Result<(VmSpec, Start, BootMode, i64, Config)> {
         let instance = self.db.instance(id)?;
-        let revision = self.db.latest_revision(id)?;
+        let revision = self.db.current_revision(id)?;
         let mode = if mode == BootMode::Agent && !instance.provisioned {
             BootMode::Provision
         } else {
@@ -1244,7 +1244,7 @@ impl VmControl {
         });
         let folders: Vec<SharedString> = self
             .db
-            .latest_revision(id)
+            .current_revision(id)
             .map(|revision| {
                 revision
                     .config

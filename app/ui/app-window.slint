@@ -2,7 +2,7 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem, SnapshotItem } from "types.slint";
+import { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, ActivityRow, DetailField, DetailEntry, DetailItem, DetailSection, RunItem, SnapshotItem, RevisionItem } from "types.slint";
 import { AppButton, ButtonKind } from "widgets.slint";
 import { EmptyState } from "empty-state.slint";
 import { TerminalSession, TerminalView } from "terminal.slint";
@@ -16,7 +16,7 @@ import { Updates, UpdateState, VmDefaults, PreferencesView } from "preferences.s
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 import { LicensesWindow, LicenseGroup, LicensedCrate } from "licenses.slint";
 
-export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, VmDefaults, Snapshots, SnapshotItem, LicensesWindow, LicenseGroup, LicensedCrate }
+export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, VmDefaults, Snapshots, SnapshotItem, RevisionItem, LicensesWindow, LicenseGroup, LicensedCrate }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;

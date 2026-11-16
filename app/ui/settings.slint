@@ -4,7 +4,7 @@
 
 import { ScrollView, TextEdit } from "std-widgets.slint";
 import { Theme } from "theme.slint";
-import { InstanceItem, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, SaveKind } from "types.slint";
+import { InstanceItem, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, SaveKind, RevisionItem } from "types.slint";
 import { AppButton, ButtonKind, SegmentedControl } from "widgets.slint";
 import { Field, Message, LaunchFields, EnvironmentFields, FolderTable, NetworkFields, ResourceFields } from "config-fields.slint";
 
@@ -53,6 +53,18 @@ export global Settings {
     // the next edit.
     in property <string> notice;
 
+    // The instance's configuration revisions, newest first.
+    in property <[RevisionItem]> revisions;
+    // The one the next boot uses.
+    in property <int> current-revision;
+    // The one the edits started from, and when it was created.
+    in property <int> viewed-revision;
+    in property <string> viewed-created;
+    // Another revision is shown unchanged: Save makes it the current one.
+    in property <bool> switching;
+    // The edits are the viewed revision's configuration, so another can be picked.
+    in property <bool> can-pick-revision: true;
+
     callback set-name(name: string);
     callback set-command(command: string);
     callback add-argument(argument: string);
@@ -84,6 +96,8 @@ export global Settings {
     callback set-disk(gb: int);
     callback set-autostart(on: bool);
     callback discard();
+    // Loads the revision's configuration as edits.
+    callback pick-revision(index: int);
     // Saves the edits and applies them, restarting the agent or rebooting as save-kind says.
     callback save();
 }
@@ -474,6 +488,102 @@ export component SettingsTab {
             padding-bottom: 14px;
             spacing: 10px;
 
+            revision-button := AppButton {
+                kind: ButtonKind.neutral;
+                text: "Revision " + Settings.viewed-revision + "  ▾";
+                label: "Choose a configuration revision";
+                enabled: Settings.can-pick-revision && Settings.revisions.length > 1;
+                clicked => {
+                    picker.show();
+                }
+            }
+
+            picker := PopupWindow {
+                x: revision-button.x;
+                y: revision-button.y - self.height - 4px;
+                width: 360px;
+                height: min(Settings.revisions.length * 48px, 336px) + 42px;
+
+                Rectangle {
+                    background: #1C2028;
+                    border-width: 1px;
+                    border-color: Theme.line2;
+                    border-radius: 10px;
+
+                    VerticalLayout {
+                        padding: 8px;
+                        spacing: 2px;
+
+                        Text {
+                            text: "Configuration revisions";
+                            font-size: Theme.font-meta;
+                            color: Theme.tx3;
+                            height: 24px;
+                            vertical-alignment: center;
+                        }
+
+                        ScrollView {
+                            vertical-stretch: 1;
+                            content-width: self.visible-width;
+                            horizontal-scrollbar-policy: always-off;
+
+                            VerticalLayout {
+                                spacing: 2px;
+                                alignment: start;
+
+                                for revision[index] in Settings.revisions: Rectangle {
+                                    height: 46px;
+                                    border-radius: Theme.radius-control;
+                                    background: revision.number == Settings.viewed-revision ? #232A38 : (pick.has-hover ? Theme.hover : transparent);
+
+                                    pick := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            Settings.pick-revision(index);
+                                            picker.close();
+                                        }
+                                    }
+
+                                    HorizontalLayout {
+                                        padding-left: 10px;
+                                        padding-right: 10px;
+                                        spacing: 8px;
+
+                                        VerticalLayout {
+                                            alignment: center;
+                                            spacing: 2px;
+
+                                            Text {
+                                                text: "Revision " + revision.number;
+                                                font-size: Theme.font-small;
+                                                color: Theme.tx;
+                                            }
+
+                                            Text {
+                                                text: revision.created;
+                                                font-size: Theme.font-meta;
+                                                color: Theme.tx3;
+                                            }
+                                        }
+
+                                        Rectangle {
+                                            horizontal-stretch: 1;
+                                        }
+
+                                        Text {
+                                            text: revision.number == Settings.current-revision ? "Current" : "";
+                                            font-size: Theme.font-meta;
+                                            color: Theme.ok;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             AppButton {
                 kind: ButtonKind.ghost;
                 text: "Discard changes";
@@ -486,6 +596,8 @@ export component SettingsTab {
             Text {
                 horizontal-stretch: 1;
                 text: Settings.note != "" ? Settings.note
+                    : Settings.switching ? "Showing revision " + Settings.viewed-revision + " from " + Settings.viewed-created + "."
+                    : Settings.dirty && Settings.viewed-revision != Settings.current-revision ? "Unsaved changes, based on revision " + Settings.viewed-revision
                     : Settings.dirty ? "Unsaved changes"
                     : root.item.apply-error != "" ? root.item.apply-error : Settings.notice;
                 color: Settings.note != "" || (!Settings.dirty && root.item.apply-error != "") ? Theme.bad : Theme.tx2;
@@ -497,8 +609,9 @@ export component SettingsTab {
 
             AppButton {
                 kind: ButtonKind.primary;
-                text: Settings.save-kind == SaveKind.reboot ? "Save and reboot"
-                    : Settings.save-kind == SaveKind.restart-agent ? "Save and restart agent" : "Save";
+                property <string> verb: Settings.switching ? "Use revision " + Settings.viewed-revision : "Save";
+                text: Settings.save-kind == SaveKind.reboot ? verb + " and reboot"
+                    : Settings.save-kind == SaveKind.restart-agent ? verb + " and restart agent" : verb;
                 icon: Settings.save-kind == SaveKind.save ? @image-url("") : @image-url("icons/refresh.svg");
                 enabled: Settings.can-save && (Settings.save-kind == SaveKind.save || root.item.transition == "");
                 clicked => {

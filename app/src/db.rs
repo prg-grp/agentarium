@@ -5,10 +5,11 @@
 //! the queries there are small and rare. The data plane writes the observations on a
 //! thread of its own, through a connection from `open_writer` (see observer.rs).
 //!
-//! Each saved configuration is a revision. The latest revision stays editable
-//! while it is pending (never booted); the first boot that uses it freezes it,
-//! so the configuration of every run stays on record. A snapshot freezes the revision it
-//! links as well, so restoring it brings back exactly that configuration.
+//! Each saved configuration is a revision. The instance's current revision, the one its
+//! next boot uses, stays editable while it is pending (never booted); the first boot that
+//! uses it freezes it, so the configuration of every run stays on record. A snapshot freezes
+//! the revision it links as well, so restoring it brings back exactly that configuration.
+//! Any revision can be made the current one again.
 //!
 //! Environment variables are stored encrypted (AES-256-GCM). The key is created on the
 //! first start and kept in the user's login keychain; every Mac has its own.
@@ -64,6 +65,13 @@ pub struct AgentRun {
     pub ended: Option<String>,
 }
 
+/// A configuration revision, for Settings' revision picker.
+pub struct RevisionEntry {
+    pub number: i64,
+    /// When it was created, local, e.g. "Nov 13, 2026, 14:03".
+    pub created: String,
+}
+
 /// A snapshot of an instance's disk, with the revision restoring it brings back.
 pub struct Snapshot {
     pub id: String,
@@ -82,7 +90,7 @@ pub struct Instance {
     /// The guest kernel the disk was cloned for (`guest::kernel_path`): the disk's kernel
     /// modules match only that kernel.
     pub kernel: String,
-    /// The launch command of the latest revision.
+    /// The launch command of the current revision.
     pub command: String,
     /// Whether a provisioning run succeeded on the disk; until then, starting the
     /// instance provisions it first.
@@ -401,9 +409,10 @@ impl Db {
         })
     }
 
-    pub fn latest_revision(&self, instance_id: &str) -> Result<Revision> {
+    /// The revision the instance's next boot uses.
+    pub fn current_revision(&self, instance_id: &str) -> Result<Revision> {
         Ok(self.conn.query_row(
-            &format!("{REVISION_QUERY} ORDER BY revision DESC LIMIT 1"),
+            &format!("{REVISION_QUERY} AND revision = {CURRENT}"),
             [instance_id],
             |row| revision_from_row(row, &self.cipher),
         )?)
@@ -415,6 +424,32 @@ impl Db {
             params![instance_id, number],
             |row| revision_from_row(row, &self.cipher),
         )?)
+    }
+
+    /// The instance's revisions, newest first.
+    pub fn revisions(&self, instance_id: &str) -> Result<Vec<RevisionEntry>> {
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT revision, {CREATED_LOCAL} FROM instance_revisions
+             WHERE instance_id = ?1 ORDER BY created_at DESC, revision DESC"
+        ))?;
+        let revisions = statement
+            .query_map([instance_id], |row| {
+                Ok(RevisionEntry {
+                    number: row.get(0)?,
+                    created: row.get(1)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(revisions)
+    }
+
+    /// Makes `revision` the one the instance's next boot uses.
+    pub fn set_current_revision(&self, instance_id: &str, revision: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE instances SET current_revision = ?2 WHERE id = ?1",
+            params![instance_id, revision],
+        )?;
+        Ok(())
     }
 
     pub fn rename_instance(&self, id: &str, name: &str) -> Result<()> {
@@ -444,20 +479,28 @@ impl Db {
         Ok(())
     }
 
-    /// Saves `config` for the next boot: into the pending revision if there is
-    /// one, otherwise into a new revision. Returns the revision number.
+    /// Saves `config` for the next boot: into the current revision while it is pending,
+    /// otherwise into a new revision, which becomes the current one. Returns the revision
+    /// number.
     pub fn save_config(&self, instance_id: &str, config: &Config) -> Result<i64> {
         let tx = self.conn.unchecked_transaction()?;
-        let (latest, frozen): (i64, bool) = tx.query_row(
+        let (current, frozen, next): (i64, bool, i64) = tx.query_row(
             &format!(
-                "SELECT revision, booted_at IS NOT NULL OR {SNAPSHOTTED} FROM instance_revisions
-                 WHERE instance_id = ?1 ORDER BY revision DESC LIMIT 1"
+                "SELECT revision, booted_at IS NOT NULL OR {SNAPSHOTTED},
+                     (SELECT max(revision) + 1 FROM instance_revisions WHERE instance_id = ?1)
+                 FROM instance_revisions WHERE instance_id = ?1 AND revision = {CURRENT}"
             ),
             [instance_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
-        let number = if frozen { latest + 1 } else { latest };
+        let number = if frozen { next } else { current };
         put_revision(&tx, &self.cipher, instance_id, number, config)?;
+        if number != current {
+            tx.execute(
+                "UPDATE instances SET current_revision = ?2 WHERE id = ?1",
+                params![instance_id, number],
+            )?;
+        }
         tx.commit()?;
         Ok(number)
     }
@@ -546,15 +589,10 @@ impl Db {
 
     /// The instance's snapshots, newest first.
     pub fn snapshots(&self, instance_id: &str) -> Result<Vec<Snapshot>> {
-        let mut statement = self.conn.prepare(
-            "SELECT id, name, revision,
-                 -- SQLite's strftime has no month names.
-                 substr('JanFebMarAprMayJunJulAugSepOctNovDec',
-                     strftime('%m', created_at / 1000, 'unixepoch', 'localtime') * 3 - 2, 3)
-                 || strftime(' %d, %Y, %H:%M', created_at / 1000, 'unixepoch', 'localtime'),
-                 disk_path
-             FROM snapshots WHERE instance_id = ?1 ORDER BY created_at DESC, id DESC",
-        )?;
+        let mut statement = self.conn.prepare(&format!(
+            "SELECT id, name, revision, {CREATED_LOCAL}, disk_path
+             FROM snapshots WHERE instance_id = ?1 ORDER BY created_at DESC, id DESC"
+        ))?;
         let snapshots = statement
             .query_map([instance_id], |row| {
                 Ok(Snapshot {
@@ -616,9 +654,18 @@ impl Db {
 
 const INSTANCE_QUERY: &str = "SELECT i.id, i.name, i.disk_path,
     (SELECT r.command FROM instance_revisions r WHERE r.instance_id = i.id
-     ORDER BY r.revision DESC LIMIT 1),
+     AND r.revision = i.current_revision),
     i.provisioned_at IS NOT NULL, i.kernel, i.autostart
     FROM instances i";
+
+/// The current revision's number of the instance `?1`.
+const CURRENT: &str = "(SELECT current_revision FROM instances WHERE id = ?1)";
+
+/// `created_at` as local time, e.g. "Nov 13, 2026, 14:03". SQLite's strftime has no month
+/// names.
+const CREATED_LOCAL: &str = "substr('JanFebMarAprMayJunJulAugSepOctNovDec',
+        strftime('%m', created_at / 1000, 'unixepoch', 'localtime') * 3 - 2, 3)
+    || strftime(' %d, %Y, %H:%M', created_at / 1000, 'unixepoch', 'localtime')";
 
 /// Whether a snapshot links the revision of `instance_revisions` in the current row.
 const SNAPSHOTTED: &str = "EXISTS (SELECT 1 FROM snapshots s

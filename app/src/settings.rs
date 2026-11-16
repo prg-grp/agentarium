@@ -1,10 +1,15 @@
 //! The Settings tab: the shown instance's configuration. See design/settings-pending.md.
 //!
-//! Edits stay here until the user saves: Save writes them into the pending revision (a new
-//! one if the latest was booted), renames the instance and stores its autostart flag; while the instance runs, it also
+//! Edits stay here until the user saves: Save writes them into the current revision while
+//! it is pending (a new one if it was booted), renames the instance and stores its
+//! autostart flag; while the instance runs, it also
 //! applies them to the running VM where it can (`VmControl::apply`), restarting the agent or
 //! rebooting when the edits need that (`SaveKind`). The footer then says what happened. The
 //! UI's `Settings` global shows the edits; every edit goes through a callback.
+//!
+//! The revision picker loads another revision's configuration as edits. Saved unchanged,
+//! that revision becomes the current one (`Db::set_current_revision`), applied like any
+//! save; edited, it is saved like any other edits.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -18,15 +23,23 @@ use crate::editor::{
     guest_path_errors, pick_folder, remove, working_directory_error,
 };
 use crate::vm::BootMode;
-use crate::{AppWindow, InstanceItem, SaveKind, Settings};
+use crate::{AppWindow, InstanceItem, RevisionItem, SaveKind, Settings};
 
 /// The shown instance: what is saved, and the edits.
 struct Shown {
     id: String,
     saved_name: String,
     saved_autostart: bool,
-    /// The latest revision's configuration.
+    /// The current revision: the one the next boot uses.
+    current: i64,
+    /// The current revision's configuration.
     saved: Config,
+    /// The instance's revisions, newest first.
+    revisions: Vec<db::RevisionEntry>,
+    /// The revision the edits started from: the current one, unless another was picked.
+    viewing: i64,
+    /// Its configuration.
+    viewed: Config,
     /// The disk's current size in GiB, at least `DISK_MIN_GB`: disks only grow.
     min_disk_gb: u32,
     name: String,
@@ -180,9 +193,13 @@ impl SettingsEditor {
                 e.name = e.saved_name.clone();
                 e.autostart = e.saved_autostart;
                 e.config = e.saved.clone();
+                e.viewing = e.current;
+                e.viewed = e.saved.clone();
             });
             s.show_fields();
         });
+        let s = this.clone();
+        g.on_pick_revision(move |index| s.pick_revision(index));
         let s = this.clone();
         g.on_save(move || s.save());
 
@@ -199,15 +216,23 @@ impl SettingsEditor {
         } else {
             let load = || -> db::Result<Shown> {
                 let instance = self.db.instance(id)?;
-                let saved = self.db.latest_revision(id)?.config;
+                let min_disk_gb = (std::fs::metadata(&instance.disk_path)?
+                    .len()
+                    .div_ceil(1 << 30) as u32)
+                    .max(db::DISK_MIN_GB);
+                let current = self.db.current_revision(id)?;
+                let mut saved = current.config;
+                // An older revision may have had a smaller disk; disks never shrink.
+                saved.disk_gb = saved.disk_gb.max(min_disk_gb);
                 Ok(Shown {
                     id: id.into(),
                     saved_name: instance.name.clone(),
                     saved_autostart: instance.autostart,
-                    min_disk_gb: (std::fs::metadata(&instance.disk_path)?
-                        .len()
-                        .div_ceil(1 << 30) as u32)
-                        .max(db::DISK_MIN_GB),
+                    current: current.number,
+                    revisions: self.db.revisions(id)?,
+                    viewing: current.number,
+                    viewed: saved.clone(),
+                    min_disk_gb,
                     name: instance.name,
                     autostart: instance.autostart,
                     config: saved.clone(),
@@ -231,6 +256,46 @@ impl SettingsEditor {
         self.refresh();
     }
 
+    /// Loads another revision's configuration as edits, unless the shown configuration
+    /// has edits of its own; the name and autostart flag keep theirs.
+    fn pick_revision(&self, index: i32) {
+        let picked = {
+            let shown = self.shown.borrow();
+            let Some(e) = shown.as_ref() else {
+                return;
+            };
+            let Some(entry) = usize::try_from(index).ok().and_then(|i| e.revisions.get(i)) else {
+                return;
+            };
+            if cleaned(&e.config) != e.viewed {
+                return;
+            }
+            self.db.revision(&e.id, entry.number).map(|mut revision| {
+                revision.config.disk_gb = revision.config.disk_gb.max(e.min_disk_gb);
+                revision
+            })
+        };
+        match picked {
+            Ok(revision) => {
+                self.edit(|e| {
+                    e.viewing = revision.number;
+                    e.config = revision.config.clone();
+                    e.viewed = revision.config;
+                });
+                self.show_fields();
+            }
+            Err(error) => self.show_error(format!("Couldn't read the revision: {error}")),
+        }
+    }
+
+    /// Shows why saving or picking a revision failed, until the next edit.
+    fn show_error(&self, error: String) {
+        if let Some(shown) = self.shown.borrow_mut().as_mut() {
+            shown.save_error = error;
+        }
+        self.refresh();
+    }
+
     fn edit(&self, change: impl FnOnce(&mut Shown)) {
         if let Some(shown) = self.shown.borrow_mut().as_mut() {
             change(shown);
@@ -240,7 +305,8 @@ impl SettingsEditor {
         self.refresh();
     }
 
-    /// Puts the single values into their fields, which then keep them while the user types.
+    /// Puts the single values into their fields, which then keep them while the user types,
+    /// and shows the revisions.
     fn show_fields(&self) {
         let Some(ui) = self.ui.upgrade() else {
             return;
@@ -260,6 +326,25 @@ impl SettingsEditor {
         g.set_memory_gb((c.memory_mib / 1024) as i32);
         g.set_min_disk_gb(e.min_disk_gb as i32);
         g.set_disk_gb(c.disk_gb as i32);
+
+        let revisions: Vec<RevisionItem> = e
+            .revisions
+            .iter()
+            .map(|revision| RevisionItem {
+                number: revision.number as i32,
+                created: revision.created.as_str().into(),
+            })
+            .collect();
+        g.set_revisions(ModelRc::new(VecModel::from(revisions)));
+        g.set_current_revision(e.current as i32);
+        g.set_viewed_revision(e.viewing as i32);
+        g.set_viewed_created(
+            e.revisions
+                .iter()
+                .find(|revision| revision.number == e.viewing)
+                .map_or("", |revision| revision.created.as_str())
+                .into(),
+        );
     }
 
     /// Shows the lists, the checks, and whether and how the edits can be saved.
@@ -281,11 +366,16 @@ impl SettingsEditor {
         g.set_network_allow_local(c.network_allow_local);
         self.lists.show(c);
 
+        let unchanged = cleaned(c) == e.viewed;
+        let switching = e.viewing != e.current && unchanged;
         let dirty = e.name.trim() != e.saved_name
             || e.autostart != e.saved_autostart
-            || cleaned(c) != e.saved;
+            || cleaned(c) != e.saved
+            || switching;
         let check = check(e, name_error);
-        let kind = save_kind(c, self.control.live(&e.id));
+        let kind = save_kind(c, e.min_disk_gb, self.control.live(&e.id));
+        g.set_switching(switching);
+        g.set_can_pick_revision(unchanged);
         g.set_dirty(dirty);
         g.set_notice(e.notice.into());
         g.set_save_kind(kind);
@@ -309,16 +399,17 @@ impl SettingsEditor {
         );
     }
 
-    /// Saves the edits and applies them to the running instance, then restarts its agent
-    /// or reboots it in agent mode if the edits need that (`save_kind`).
+    /// Saves the edits, or switches to the picked revision if they are its configuration
+    /// unchanged, and applies them to the running instance, then restarts its agent or
+    /// reboots it in agent mode if they need that (`save_kind`).
     fn save(&self) {
-        let (id, name, autostart, config, rename, write, kind) = {
+        let (id, name, autostart, config, rename, switch, write, kind) = {
             let shown = self.shown.borrow();
             let Some(e) = shown.as_ref() else {
                 return;
             };
             let name_error = editor::name_error(&self.instances, &e.name, &e.id);
-            let kind = save_kind(&e.config, self.control.live(&e.id));
+            let kind = save_kind(&e.config, e.min_disk_gb, self.control.live(&e.id));
             match check(e, name_error) {
                 Ok(None) => {}
                 Ok(Some(_)) if kind != SaveKind::Reboot => {}
@@ -327,11 +418,21 @@ impl SettingsEditor {
             let name = e.name.trim().to_owned();
             let config = cleaned(&e.config);
             let rename = name != e.saved_name;
-            let write = config != e.saved;
+            let switch = (e.viewing != e.current && config == e.viewed).then_some(e.viewing);
+            let write = switch.is_none() && config != e.saved;
             let autostart = (e.autostart != e.saved_autostart).then_some(e.autostart);
-            (e.id.clone(), name, autostart, config, rename, write, kind)
+            (
+                e.id.clone(),
+                name,
+                autostart,
+                config,
+                rename,
+                switch,
+                write,
+                kind,
+            )
         };
-        if !rename && !write && autostart.is_none() {
+        if !rename && switch.is_none() && !write && autostart.is_none() {
             return;
         }
 
@@ -342,6 +443,10 @@ impl SettingsEditor {
             if let Some(autostart) = autostart {
                 self.db.set_autostart(&id, autostart)?;
             }
+            if let Some(revision) = switch {
+                self.db.set_current_revision(&id, revision)?;
+                return Ok(Some(revision));
+            }
             if write {
                 return Ok(Some(self.db.save_config(&id, &config)?));
             }
@@ -350,8 +455,7 @@ impl SettingsEditor {
         let revision = match saved {
             Ok(revision) => revision,
             Err(error) => {
-                return self
-                    .edit(|e| e.save_error = format!("Couldn't save the settings: {error}"));
+                return self.show_error(format!("Couldn't save the settings: {error}"));
             }
         };
 
@@ -427,14 +531,16 @@ fn check(e: &Shown, name_error: &'static str) -> Result<Option<String>, &'static
 /// What Save does with `config` beyond saving it, given the running boot's mode and the
 /// configuration in effect (`VmControl::live`): apply it, apply it and restart the agent for
 /// new launch settings or environment, or reboot for new processors, memory or disk size.
-/// Without a running boot that takes settings, it only saves.
-fn save_kind(config: &Config, live: Option<(BootMode, Config)>) -> SaveKind {
+/// Without a running boot that takes settings, it only saves. The disk needs a reboot only
+/// to grow beyond its current size (`disk_gb`), which can be larger than the running
+/// revision says.
+fn save_kind(config: &Config, disk_gb: u32, live: Option<(BootMode, Config)>) -> SaveKind {
     let Some((mode, active)) = live else {
         return SaveKind::Save;
     };
     let config = cleaned(config);
-    if (config.cpus, config.memory_mib, config.disk_gb)
-        != (active.cpus, active.memory_mib, active.disk_gb)
+    if (config.cpus, config.memory_mib) != (active.cpus, active.memory_mib)
+        || config.disk_gb > active.disk_gb.max(disk_gb)
     {
         SaveKind::Reboot
     } else if mode == BootMode::Agent

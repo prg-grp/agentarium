@@ -210,3 +210,10 @@ export struct SnapshotItem {
     // The configuration revision restoring it brings back.
     revision: int,
 }
+
+// A configuration revision in Settings' revision picker (src/settings.rs), newest first.
+export struct RevisionItem {
+    number: int,
+    // When it was created, local: "Nov 13, 2026, 14:03".
+    created: string,
+}

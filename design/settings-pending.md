@@ -19,7 +19,7 @@ Resources            │ api.anthropic.com      Exact name                      
                      │ ⊘ Denied
                      │ pastebin.com           Includes subdomains                         ×
 ──────────────────────────────────────────────────────────────────────────────────────────────────
-[Discard changes]                          Saved and applied to the running instance.   [Save]
+[Revision 4 ▾] [Discard changes]           Saved and applied to the running instance.   [Save]
 ```
 
 There is no pending-changes bar, tab label or per-section change count: Save puts everything into effect itself (applying, restarting the agent or rebooting), and the footer says what it did.
@@ -43,7 +43,7 @@ There is no pending-changes bar, tab label or per-section change count: Save put
   - "Save": everything edited applies at once, or the instance isn't running (or is still starting or provisioning), so the edits are only saved.
   - "Save and restart agent" (refresh icon): the edits include launch settings or environment variables; the agent restarts with them, the VM keeps running.
   - "Save and reboot" (refresh icon): the edits include processors, memory or disk size; the instance reboots in agent mode.
-- Save writes the edits into the pending revision, or a new one if the latest was booted. While an agent or maintenance boot runs, Save also applies them to it:
+- Save writes the edits into the current revision while it is pending, or into a new revision, which becomes the current one, if it was booted or a snapshot links it. While an agent or maintenance boot runs, Save also applies them to it:
   - **Live:** the network rules and settings (new connections and lookups; open connections stay), the shared folders (mounted or unmounted in the guest right away), and the forwarded ports.
   - **At the agent's next start:** the launch settings and environment variables. New Terminal shells get the new environment right away.
   - **At the next boot:** processors, memory and disk size.
@@ -60,4 +60,15 @@ There is no pending-changes bar, tab label or per-section change count: Save put
 - "Save and restart agent" and "Save and reboot" are disabled while a start, stop or restart is in progress.
 - Validation follows the creation steps: invalid values block saving, with "Fix the marked fields to save." in `bad`. A shared folder that no longer exists allows Save (it isn't shared until it is back) but blocks "Save and reboot", with the reason in the footer.
 - Selecting another instance drops unsaved edits; switching tabs keeps them.
+
+## Revisions
+
+Every saved configuration is a revision; the current one is what the next boot uses, and what Settings shows. Any revision can be made the current one again.
+
+- The footer starts with a neutral button "Revision N  ▾", N being the revision shown. It is disabled while there are edits (discard them to pick another revision) and while there is only one revision.
+- Its popover (`#1C2028`, 1 px `line2`, 10 px radius, 360 px, opening upwards, scrolling beyond seven rows) is headed "Configuration revisions" (`tx3` 12 px). Rows, newest first by creation: "Revision N" in `tx`, the creation date in `tx3` ("Nov 13, 2026, 14:03"), and "Current" in `ok` on the current one. The shown revision is on `#232A38`.
+- Picking a revision loads its settings into the page as edits; the name and "Start with Agentarium" aren't part of a revision and keep their values. Picking the current one goes back to it, like "Discard changes".
+- Unchanged, the footer says "Showing revision N from <date>." and the save button makes it the current revision, without a new revision: "Use revision N", "Use revision N and restart agent" or "Use revision N and reboot", by the same rules as Save. The footer then says what happened as after a save.
+- Edited, it is "Unsaved changes, based on revision N", and Save saves the edits like any others, into a new revision.
+- A revision from before the disk grew shows the disk's current size: disks never shrink.
 - The configuration each boot started with is stored, along with the revisions applied while it ran. When during a boot each revision applied isn't recorded.

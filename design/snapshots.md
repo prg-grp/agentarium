@@ -1,6 +1,6 @@
 # Snapshots tab
 
-Snapshots of an instance's disk, each with the configuration revision that was the latest when it was taken. Restoring one brings back both. Frame: [app-shell.md](app-shell.md); the tab sits between Logs and Settings.
+Snapshots of an instance's disk, each with the configuration revision that was the current one when it was taken. Restoring one brings back both. Frame: [app-shell.md](app-shell.md); the tab sits between Logs and Settings.
 
 ## Layout
 
@@ -35,7 +35,7 @@ Nov 12, 2026, 09:41 Â· revision 1                                   [Cancel] [âŸ
 ## Behavior
 
 - A snapshot is an APFS clone of the disk: instant, and it takes space on the Mac only as the instance's disk and the snapshot drift apart.
-- It links the latest saved revision, which then stays as it is: the next save in Settings goes into a new revision.
-- Restoring replaces the disk with a clone of the snapshot and saves the linked revision's configuration as the instance's configuration for the next boot. Settings shows it right away; unsaved edits there are dropped. The instance's name and its other snapshots stay.
+- It links the current revision, which then stays as it is: the next save in Settings goes into a new revision.
+- Restoring replaces the disk with a clone of the snapshot and makes the linked revision the current one, for the next boot; no new revision is created. Settings shows it right away; unsaved edits there are dropped. The instance's name and its other snapshots stay.
 - After a successful provisioning run, a snapshot named "Freshly provisioned" is taken before the agent starts, unless it is turned off in [preferences.md](preferences.md). A failed snapshot doesn't keep the agent from starting.
 - Deleting the instance deletes its snapshots ([delete-confirmation.md](delete-confirmation.md)).

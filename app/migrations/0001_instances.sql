@@ -9,11 +9,14 @@ CREATE TABLE instances (
     provisioned_at INTEGER,                         -- NULL until a provisioning run succeeded
     position   INTEGER NOT NULL DEFAULT 0,          -- the sidebar's order, ascending; new instances go first
     autostart  INTEGER NOT NULL DEFAULT 0 CHECK (autostart IN (0, 1)), -- started in agent mode when the app opens
+    current_revision INTEGER NOT NULL DEFAULT 1,    -- the revision the next boot uses, which Settings edits
     created_at INTEGER NOT NULL DEFAULT (CAST(unixepoch('subsec') * 1000 AS INTEGER))
 ) STRICT;
 
--- A revision is pending, and still editable, while booted_at is NULL and no snapshot links
--- it. The first boot that uses it, or the first snapshot taken with it, freezes it.
+-- A revision is pending while booted_at is NULL and no snapshot links it; Settings edits
+-- the current one (instances.current_revision) in place while it is pending. The first
+-- boot that uses it, or the first snapshot taken with it, freezes it. Switching to another
+-- revision leaves a pending one as it is.
 CREATE TABLE instance_revisions (
     instance_id       TEXT NOT NULL REFERENCES instances(id) ON DELETE CASCADE,
     revision          INTEGER NOT NULL,             -- 1, 2, … per instance
