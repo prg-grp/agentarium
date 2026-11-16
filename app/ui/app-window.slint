@@ -299,12 +299,71 @@ export component AppWindow inherits Window {
                                     }
                                 }
 
+                                // Right-click acts on this row's instance without selecting it. The
+                                // row's TouchArea takes every press, so it opens the menu itself.
+                                row-menu := ContextMenuArea {
+                                    x: 0;
+                                    y: 0;
+                                    width: parent.width;
+                                    height: parent.height;
+                                    // The draft has no stored instance to act on.
+                                    enabled: !draft;
+
+                                    Menu {
+                                        MenuItem {
+                                            title: "Start";
+                                            enabled: item.state == InstanceState.stopped;
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.start);
+                                            }
+                                        }
+
+                                        MenuItem {
+                                            title: "Stop";
+                                            enabled: item.state != InstanceState.stopped;
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.stop);
+                                            }
+                                        }
+
+                                        MenuItem {
+                                            title: "Boot in maintenance";
+                                            enabled: item.state == InstanceState.stopped;
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.boot-maintenance);
+                                            }
+                                        }
+
+                                        MenuItem {
+                                            title: "Restart";
+                                            enabled: item.state != InstanceState.stopped && item.transition == "";
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.restart-agent);
+                                            }
+                                        }
+
+                                        MenuSeparator { }
+
+                                        MenuItem {
+                                            title: "Delete";
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.delete);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 item-touch := TouchArea {
                                     mouse-cursor: pointer;
                                     clicked => {
                                         root.show-preferences = false;
                                         root.selected-index = index;
                                         root.current-tab = 0;
+                                    }
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.right && !draft {
+                                            row-menu.show({ x: self.mouse-x, y: self.mouse-y });
+                                        }
                                     }
                                 }
 
