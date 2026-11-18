@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agentarium: run coding agents in their own Linux VM</title>
+<meta name="description" content="Agentarium is a Mac app that runs each AI coding agent in its own persistent Linux microVM, with only the folders and network access you grant, and records what it did.">
+<meta property="og:title" content="Agentarium">
+<meta property="og:description" content="Run coding agents in their own Linux VM. See everything they did.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="assets/app-icon.png">
+<link rel="icon" href="assets/app-icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/app-icon.png">
+<link rel="preload" href="assets/fonts/rubik-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<a class="btn btn--sm skip" href="#main">Skip to content</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M3 7l9 4 9-4M12 11v10"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-ban" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.7 5.7l12.6 12.6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5L20 7"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></symbol>
+    <symbol id="i-pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="1"/><path d="M8 11V7a4 4 0 018 0v4"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v12M6 11l6 6 6-6M4 20h16"/></symbol>
+    <symbol id="i-gh" viewBox="0 0 24 24"><path d="M9 19c-4 1.4-4-2-6-2.5M15 21v-3.5a3 3 0 00-.9-2.4c3-.3 6.1-1.5 6.1-6.7a5.2 5.2 0 00-1.4-3.6 4.8 4.8 0 00-.1-3.6s-1.1-.3-3.7 1.4a12.7 12.7 0 00-6.6 0C5.8.9 4.7 1.2 4.7 1.2a4.8 4.8 0 00-.1 3.6A5.2 5.2 0 003.2 8.4c0 5.2 3.1 6.4 6.1 6.7a3 3 0 00-.9 2.4V21"/></symbol>
+    <symbol id="i-dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+    <symbol id="i-ring" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path d="M14 6a4 4 0 00-5 5l-5 5 3 3 5-5a4 4 0 005-5l-2 2-2-1-1-2z"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17v.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 6h6l2 2h10v11H3z"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M5 8l4 4-4 4M12 16h7"/><rect x="2" y="3" width="20" height="18" rx="1"/></symbol>
+    <symbol id="i-power" viewBox="0 0 24 24"><path d="M12 3v9M6.3 6.3a8 8 0 1011.4 0"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2-5 4 10 2-5h6"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 10-2.3 5.7M20 4v7h-7"/></symbol>
+    <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  </defs>
+</svg>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="logo" href="#top" aria-label="Agentarium home">
+      <img src="assets/app-icon.svg" alt="" width="40" height="40">
+      <b>Agentarium</b><small>a GuardiAgent project</small>
+    </a>
+    <nav aria-label="Main">
+      <ul>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#how">How it works</a></li>
+        <li><a href="#research">Research</a></li>
+        <li><a href="https://github.com/prg-grp/agentarium">GitHub</a></li>
+      </ul>
+    </nav>
+    <a class="btn btn--sm" href="#start">Download</a>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" id="top" aria-labelledby="hero-title">
+  <div class="confetti" aria-hidden="true">
+    <svg class="far c-squiggle" style="right:4%;top:56px" width="150" height="60" viewBox="0 0 150 60"><path d="M4 30 Q 22 4 40 30 T 76 30 T 112 30 T 148 30" fill="none" stroke="#000" stroke-width="5" stroke-linecap="round"/></svg>
+    <svg class="far c-tri" style="right:14%;top:190px" width="74" height="66" viewBox="0 0 74 66"><path d="M37 4 L70 62 L4 62 Z" fill="#FF9A1F" stroke="#000" stroke-width="3" stroke-linejoin="round"/></svg>
+    <svg class="c-half" style="right:5%;top:300px" width="96" height="48" viewBox="0 0 96 48"><path d="M2 46 A 46 46 0 0 1 94 46 Z" fill="#00E1FF" stroke="#000" stroke-width="3"/></svg>
+    <svg class="far c-dot" style="right:24%;top:44px" width="40" height="40" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#FF2E93" stroke="#000" stroke-width="3"/></svg>
+    <svg class="far c-hatch" style="right:2%;top:430px" width="90" height="90" viewBox="0 0 90 90"><g stroke="#000" stroke-width="5" stroke-linecap="round"><path d="M10 10l14 14M34 10l14 14M58 10l14 14M10 34l14 14M34 34l14 14M58 34l14 14"/></g></svg>
+  </div>
+  <div class="wrap">
+    <h1 id="hero-title"><span>Run coding agents in their own Linux VM.</span> <span>See everything they did.</span></h1>
+    <p class="lead">Agentarium gives each agent a persistent microVM on your Mac, with only the folders and network access you grant. An eBPF observer records the programs it runs, the files it changes and the connections it makes.</p>
+    <div class="actions">
+      <a class="btn btn--go" href="https://github.com/prg-grp/agentarium/releases/latest/download/Agentarium-stable-Setup.pkg"><svg class="i" aria-hidden="true"><use href="#i-down"/></svg>Download for macOS</a>
+      <a class="btn btn--ghost" href="https://github.com/prg-grp/agentarium"><svg class="i" aria-hidden="true"><use href="#i-gh"/></svg>View on GitHub</a>
+    </div>
+    <p class="note">Apple silicon, macOS 26 or later. Free and open source under AGPL-3.0. <a href="https://github.com/prg-grp/agentarium/releases">All releases</a></p>
+    <div class="presets">
+      <span>Ready for</span>
+      <ul class="chips">
+        <li class="chip">Claude Code</li><li class="chip">Codex</li><li class="chip">Antigravity CLI</li><li class="chip">GitHub Copilot CLI</li><li class="chip">OpenCode</li><li class="chip">OpenClaw</li><li class="chip">Hermes Agent</li><li class="chip">Agent Canvas</li><li class="chip chip--pre">Custom agent</li>
+      </ul>
+    </div>
+
+    <figure class="frame" id="frame">
+      <svg class="leaders" aria-hidden="true"></svg>
+      <a class="shot" href="assets/shots/activity-all-events.webp" title="Open the full-size screenshot">
+        <img src="assets/shots/activity-all-events.webp" width="1280" height="800" alt="The Agentarium window: a sidebar of instances, and the Activity tab of the running instance customer-ux-study, listing network connections, a DNS lookup and file writes made by Claude Code, with monitoring complete for this run.">
+      </a>
+      <div class="notes">
+        <p class="anno" data-y="0.2975"><span class="chip">Monitoring complete</span><br>Each run says whether monitoring was complete. Lost events are reported, not hidden.</p>
+        <p class="anno" data-y="0.346"><span class="chip chip--go"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg>Allowed</span><br>Every connection, with the domains it may belong to and what the Mac decided.</p>
+        <p class="anno" data-y="0.511"><span class="chip">Recorded</span><br>File writes, renames and reads, with the process that made them.</p>
+      </div>
+      <figcaption><b>Activity</b>A Claude Code session, recorded from outside the agent. Click the picture for full size.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="sec features" id="features" aria-labelledby="feat-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="feat-title">One VM per agent, rules it can't change, a record of what it did</h2>
+      <p>An instance is a Linux virtual machine on your Mac with its own disk. The agent runs inside it and sees only the folders and domains you allow.</p>
+    </div>
+    <div class="feats">
+      <article class="win feat">
+        <div class="win-bar"><span>New instance: shared folders</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
+        <a class="crop" href="assets/shots/shared-folders.webp" title="Open the full-size screenshot"><img src="assets/shots/shared-folders.webp" width="1004" height="368" loading="lazy" alt="Shared folders in the New instance flow: ~/Development shared read and write, with the warning that changes modify these host files immediately, and ~/Documents shared read only."></a>
+        <div class="win-body">
+          <h3><svg class="i" aria-hidden="true"><use href="#i-box"/></svg>Isolate</h3>
+          <p>Each agent instance runs in its own persistent Linux microVM, built on Apple's Virtualization.framework, with its own disk. Your Mac's files stay out of reach unless you share a folder.</p>
+          <p>Share up to 16 folders, read only or read and write. The Mac enforces it, so root inside the VM can't lift it.</p>
+        </div>
+      </article>
+      <article class="win feat">
+        <div class="win-bar"><span>New instance: network</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
+        <a class="crop" href="assets/shots/network-rules.webp" title="Open the full-size screenshot"><img src="assets/shots/network-rules.webp" width="706" height="494" loading="lazy" alt="Network settings in the New instance flow: destinations not listed are denied, your Mac and local network are blocked, anthropic.com and github.com are allowed, pastebin.com is denied, and port 8080 is forwarded."></a>
+        <div class="win-body">
+          <h3><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Limit</h3>
+          <p>Allow or deny domains and addresses per instance. Destinations you don't list are denied, and your Mac and local network are blocked by default.</p>
+          <p>Rules are enforced on the Mac, outside the VM, so the agent can't turn them off. Forward only the ports it needs and set its environment variables.</p>
+        </div>
+      </article>
+      <article class="win feat">
+        <div class="win-bar"><span>customer-ux-study: activity</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
+        <a class="crop" href="assets/shots/activity-commands.webp" title="Open the full-size screenshot"><img src="assets/shots/activity-commands.webp" width="1004" height="425" loading="lazy" alt="The Commands view of the Activity tab: the claude process with the files it changed and read, grouped by folder, and monitoring complete for this run."></a>
+        <div class="win-body">
+          <h3><svg class="i" aria-hidden="true"><use href="#i-eye"/></svg>Observe</h3>
+          <p>An eBPF observer in the guest records program runs with their arguments, privilege changes, file changes and connections. The Mac adds DNS lookups and every allowed or blocked flow.</p>
+          <p>Each run says whether monitoring was complete. When events are lost, it tells you.</p>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="sec how" id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="how-title">From empty Mac to a boxed agent</h2>
+      <p>Creating an instance takes a few choices. Agentarium handles the virtual machine.</p>
+    </div>
+    <figure class="frame frame--solo" id="recording">
+      <a class="shot rec" href="assets/shots/create-and-start.gif" title="Open the recording">
+        <img src="assets/shots/create-and-start-poster.webp" data-poster="assets/shots/create-and-start-poster.webp" data-gif="assets/shots/create-and-start.gif" width="1280" height="800" loading="lazy" alt="Screen recording: the New instance flow with harness, agent, shared folders, network and review steps, then Create and start, provisioning, and the agent session opening.">
+      </a>
+      <figcaption><b>Recording</b>Creating, provisioning and starting an instance. <button class="btn btn--sm rec-btn" type="button" aria-pressed="false" aria-controls="recording" hidden>Play recording</button></figcaption>
+    </figure>
+    <ol class="steps">
+      <li class="win step">
+        <div class="win-bar"><span>Step 1</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="step-grid">
+          <a class="crop" href="assets/shots/step-harness.webp" title="Open the full-size screenshot"><img src="assets/shots/step-harness.webp" width="620" height="324" loading="lazy" alt="The Harness step: a name for the instance and the list of presets, Claude Code selected, down to Custom agent."></a>
+          <div class="win-body"><span class="num" aria-hidden="true">1</span><h3>Pick an agent</h3><p>Name the instance and choose a preset. A preset installs a known agent and allows the domains it needs. Or bring your own provisioning script and command as a custom agent.</p></div>
+        </div>
+      </li>
+      <li class="win step step--flip">
+        <div class="win-bar"><span>Step 2</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="step-grid">
+          <a class="crop" href="assets/shots/step-review.webp" title="Open the full-size screenshot"><img src="assets/shots/step-review.webp" width="818" height="245" loading="lazy" alt="The review of shared folders and network: no shared folders, unlisted destinations denied, Mac and local network blocked, and the Claude Code domains allowed."></a>
+          <div class="win-body"><span class="num" aria-hidden="true">2</span><h3>Share folders, set rules</h3><p>Choose the folders the agent may see and the domains it may reach. Presets start with their own domains allowed and everything else denied.</p></div>
+        </div>
+      </li>
+      <li class="win step">
+        <div class="win-bar"><span>Step 3</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="step-grid">
+          <a class="crop" href="assets/shots/step-start.webp" title="Open the full-size screenshot"><img src="assets/shots/step-start.webp" width="750" height="343" loading="lazy" alt="Resources and start options on the review step: 2 processors, 4 GB memory, 16 GB disk, Start with Agentarium off, and the Create and Create and start buttons."></a>
+          <div class="win-body"><span class="num" aria-hidden="true">3</span><h3>Create and start</h3><p>Check processors, memory and disk, then Create and start. Starting runs the provisioning script once as root, then the agent. Agentarium keeps a "Freshly provisioned" snapshot.</p></div>
+        </div>
+      </li>
+      <li class="win step step--flip">
+        <div class="win-bar"><span>Step 4</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="step-grid">
+          <a class="crop" href="assets/shots/step-agent.webp" title="Open the full-size screenshot"><img src="assets/shots/step-agent.webp" width="650" height="615" loading="lazy" alt="The Agent tab of a running instance: the Claude Code welcome screen inside the instance."></a>
+          <div class="win-body"><span class="num" aria-hidden="true">4</span><h3>Work, then check</h3><p>The agent's session opens in the Agent tab. Afterwards, Activity shows what it ran, changed and contacted.</p></div>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<section class="sec box" aria-labelledby="box-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="box-title">Also in the box</h2>
+      <p>The tools you need around an agent, without leaving the app.</p>
+    </div>
+    <div class="grid3">
+      <article class="win"><div class="win-bar"><span>Boot modes</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-power"/></svg>Agent, maintenance, provision</h3>
+        <p>Agent mode runs the agent. Maintenance gives you a root shell for installing software or changing the instance, for one boot only. Provision runs the setup script.</p>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Snapshots</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-layers"/></svg>Go back to a known state</h3>
+        <p>Create, restore and delete snapshots of a stopped instance. They're instant clones of its disk and configuration.</p>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Terminal</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-terminal"/></svg>A shell in every instance</h3>
+        <p>The agent's session and extra login shells, embedded in the app, with 100,000 lines of scrollback.</p>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Status</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-pulse"/></svg>Three separate readings</h3>
+        <p>Virtual machine, agent and monitoring each report their own state, next to live processor and memory use.</p>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Resources</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-cpu"/></svg>Sized per instance</h3>
+        <p>Set processors, memory and disk for each instance. Disks can grow later, never shrink.</p>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Updates</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <h3><svg class="i" aria-hidden="true"><use href="#i-refresh"/></svg>Signed and notarized</h3>
+        <p>Updates download in the background and install on "Restart to update". Choose Stable or Dev builds.</p>
+      </div></article>
+    </div>
+  </div>
+</section>
+
+<section class="sec records" aria-labelledby="rec-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="rec-title">What it records, and what it doesn't</h2>
+      <p>Activity states what was recorded, never what the agent intended. Here is exactly what that covers.</p>
+    </div>
+    <div class="grid2">
+      <article class="win"><div class="win-bar"><span>Recorded in agent mode</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <ul>
+          <li><span class="mark mark--yes" aria-hidden="true"><svg class="i"><use href="#i-check"/></svg></span>Program runs, with arguments, working directory and exit code</li>
+          <li><span class="mark mark--yes" aria-hidden="true"><svg class="i"><use href="#i-check"/></svg></span>Privilege changes</li>
+          <li><span class="mark mark--yes" aria-hidden="true"><svg class="i"><use href="#i-check"/></svg></span>File opens, writes, creates, renames and deletes</li>
+          <li><span class="mark mark--yes" aria-hidden="true"><svg class="i"><use href="#i-check"/></svg></span>TCP and UDP connections</li>
+          <li><span class="mark mark--yes" aria-hidden="true"><svg class="i"><use href="#i-check"/></svg></span>From the Mac: DNS lookups and each allowed or blocked flow, with the rule that decided it</li>
+        </ul>
+      </div></article>
+      <article class="win"><div class="win-bar"><span>Not recorded</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+        <ul>
+          <li><span class="mark mark--no" aria-hidden="true"><svg class="i"><use href="#i-x"/></svg></span>Environment variables, program output and file contents</li>
+          <li><span class="mark mark--no" aria-hidden="true"><svg class="i"><use href="#i-x"/></svg></span>What you do in the Terminal tab's shells</li>
+          <li><span class="mark mark--no" aria-hidden="true"><svg class="i"><use href="#i-x"/></svg></span>Maintenance and provision boots</li>
+          <li><span class="mark mark--no" aria-hidden="true"><svg class="i"><use href="#i-x"/></svg></span>Traffic through forwarded ports</li>
+        </ul>
+      </div></article>
+    </div>
+    <div class="fineprint">
+      <p>Agentarium has no account and no hosted backend. The app itself contacts GitHub only for updates and the Linux guest image. Agents reach whatever your rules allow, such as their AI provider.</p>
+      <p>Events from inside the VM are evidence of what happened, not a tamper-proof audit trail.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec start" id="start" aria-labelledby="start-title">
+  <div class="wrap start-grid">
+    <div>
+      <h2 id="start-title">Get Agentarium</h2>
+      <p class="lead">Install the signed package, open the app and create your first instance. On first launch it downloads a Linux kernel and root filesystem, a few hundred megabytes.</p>
+      <div class="actions">
+        <a class="btn btn--go" href="https://github.com/prg-grp/agentarium/releases/latest/download/Agentarium-stable-Setup.pkg"><svg class="i" aria-hidden="true"><use href="#i-down"/></svg>Download for macOS</a>
+      </div>
+      <p class="more"><a href="https://github.com/prg-grp/agentarium/releases/latest/download/Agentarium-stable-Portable.zip">Portable .zip</a><a href="https://github.com/prg-grp/agentarium/releases">All releases and dev builds</a><a href="https://github.com/prg-grp/agentarium">Source code</a></p>
+    </div>
+    <article class="win req"><div class="win-bar"><span>System requirements</span><span class="ctl" aria-hidden="true"><i></i></span></div><div class="win-body">
+      <dl>
+        <dt>Mac</dt><dd>Apple silicon</dd>
+        <dt>macOS</dt><dd>26 or later</dd>
+        <dt>Disk</dt><dd>An APFS volume. Each instance starts with a 16 GB disk, which you can change.</dd>
+        <dt>Licence</dt><dd>AGPL-3.0 or later, free and open source</dd>
+      </dl>
+    </div></article>
+  </div>
+</section>
+
+<section class="sec research" id="research" aria-labelledby="res-title">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 id="res-title">From research to product</h2>
+      <p>Agentarium builds on two papers from the Programming Group at the University of St.Gallen.</p>
+    </div>
+    <div class="grid2">
+      <article class="win paper">
+        <div class="win-bar"><span>AgentBound</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="win-body">
+          <div class="meta"><span class="chip chip--venue">ACM FSE 2026</span><span class="chip">Peer-reviewed</span></div>
+          <h3>AgentBound: Securing Execution Boundaries of AI Agents</h3>
+          <p>Least-privilege permission manifests and a sandbox for MCP servers.</p>
+          <p class="took"><b>In Agentarium</b>Folder access you grant per instance, and network rules enforced on the host.</p>
+          <p class="links"><a href="https://doi.org/10.1145/3808103">DOI 10.1145/3808103</a><a href="https://arxiv.org/abs/2510.21236">arXiv 2510.21236</a><a href="https://arxiv.org/pdf/2510.21236">PDF</a></p>
+          <details class="bib"><summary>BibTeX</summary><div class="code"><pre><span class="k">@inproceedings</span>{buehler2026AgentBound,
+  <span class="f">title</span> = {{{AgentBound}}: {{Securing}} Execution Boundaries of {{AI}} Agents},
+  <span class="f">booktitle</span> = {Proceedings of the 34th {{ACM}} Joint European Software Engineering
+               Conference and Symposium on the Foundations of Software Engineering ({{FSE}})},
+  <span class="f">author</span> = {Bühler, Christoph and Biagiola, Matteo and Di Grazia, Luca and Salvaneschi, Guido},
+  <span class="f">date</span> = {2026-07},
+  <span class="f">doi</span> = {10.1145/3808103}
+}</pre></div></details>
+        </div>
+      </article>
+      <article class="win paper">
+        <div class="win-bar"><span>AgentSpy</span><span class="ctl" aria-hidden="true"><i></i></span></div>
+        <div class="win-body">
+          <div class="meta"><span class="chip chip--venue">arXiv 2610.06001</span><span class="chip chip--pre">Preprint</span></div>
+          <h3>AgentSpy: Making AI Agent Behavior Observable</h3>
+          <p>Runs the agent in a microVM and records system calls and network activity from outside the agent.</p>
+          <p class="took"><b>In Agentarium</b>The VM-per-agent model and the eBPF activity record.</p>
+          <p class="links"><a href="https://arxiv.org/abs/2610.06001">arXiv 2610.06001</a><a href="https://arxiv.org/pdf/2610.06001">PDF</a></p>
+          <details class="bib"><summary>BibTeX</summary><div class="code"><pre><span class="k">@misc</span>{buehler2026AgentSpy,
+  <span class="f">title</span> = {{AgentSpy}: Making {AI} Agent Behavior Observable},
+  <span class="f">author</span> = {Bühler, Christoph and Biagiola, Matteo and Di Grazia, Luca and Salvaneschi, Guido},
+  <span class="f">year</span> = {2026},
+  <span class="f">eprint</span> = {2610.06001},
+  <span class="f">archivePrefix</span> = {arXiv}
+}</pre></div></details>
+        </div>
+      </article>
+    </div>
+    <p class="authors">Christoph Bühler, Matteo Biagiola, Luca Di Grazia, Guido Salvaneschi</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="confetti" aria-hidden="true">
+    <svg class="far" style="right:6%;top:40px" width="120" height="48" viewBox="0 0 150 60"><path d="M4 30 Q 22 4 40 30 T 76 30 T 112 30 T 148 30" fill="none" stroke="#FFF2B8" stroke-width="5" stroke-linecap="round"/></svg>
+    <svg class="far" style="right:22%;top:24px" width="30" height="30" viewBox="0 0 40 40"><circle cx="20" cy="20" r="16" fill="#FF2E93" stroke="#FFF" stroke-width="3"/></svg>
+  </div>
+  <div class="wrap">
+    <div class="brand">
+      <p class="big">Agentarium</p>
+      <p class="tag">A GuardiAgent project. Run coding agents in their own Linux VM, and see everything they did.</p>
+    </div>
+    <div>
+      <h4>Made by</h4>
+      <ul><li>GuardiAgent</li><li>Programming Group</li><li>University of St.Gallen</li></ul>
+    </div>
+    <div>
+      <h4>Links</h4>
+      <ul>
+        <li><a href="https://github.com/prg-grp/agentarium">GitHub</a></li>
+        <li><a href="https://github.com/prg-grp/agentarium/releases">Releases</a></li>
+        <li><a href="https://github.com/prg-grp/agentarium/blob/main/LICENSE">Licence: AGPL-3.0 or later</a></li>
+        <li><a href="mailto:info@guardiagent.com">info@guardiagent.com</a></li>
+      </ul>
+    </div>
+    <p class="legal">© 2026 GuardiAgent. Agentarium is free software under the GNU Affero General Public License v3.0 or later.</p>
+  </div>
+</footer>
+
+<script src="assets/vendor/gsap.min.js" defer></script>
+<script src="assets/vendor/ScrollTrigger.min.js" defer></script>
+<script src="assets/site.js" defer></script>
+</body>
+</html>

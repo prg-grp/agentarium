@@ -19,6 +19,7 @@ ARCHITECTURE.md file describes the overall architecture of the application and i
 - scripts: contains hack scripts and helpers
 - vms: contains related resources for the microVMs such as custom kernels and root file systems
 - app: contains the main application for agent toolbox
+- pages: the static product website (plain HTML, CSS and vendored GSAP, no build step), deployed to GitHub Pages by `.github/workflows/pages.yml`. Read `pages/README.md` before changing it. Commit site changes as `docs(pages): ...`.
 
 Committing in this repository adheres to [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/). Commits must adhere to it because otherwise, release-please will not pick the changes up and create a new version. Release management is done via [release-please](https://github.com/googleapis/release-please).
 
