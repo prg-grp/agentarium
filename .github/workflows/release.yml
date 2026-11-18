@@ -14,6 +14,10 @@ name: release
 on:
   push:
     branches: [main]
+    # The product site deploys through pages.yml; site-only pushes don't touch releases.
+    paths-ignore:
+      - "pages/**"
+      - ".github/workflows/pages.yml"
   workflow_dispatch:
 
 permissions:
