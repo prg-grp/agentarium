@@ -12,11 +12,11 @@ import { Creation, CreateInstance } from "create-instance.slint";
 import { Deletion, DeleteDialog } from "delete-dialog.slint";
 import { Settings, SettingsTab } from "settings.slint";
 import { Snapshots, SnapshotsTab } from "snapshots.slint";
-import { Updates, UpdateState, VmDefaults, PreferencesView } from "preferences.slint";
+import { Updates, UpdateState, VmDefaults, Power, PreferencesView } from "preferences.slint";
 import { GuestImage, GuestState, GuestDownloadDialog } from "guest-download.slint";
 import { LicensesWindow, LicenseGroup, LicensedCrate } from "licenses.slint";
 
-export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, VmDefaults, Snapshots, SnapshotItem, RevisionItem, LicensesWindow, LicenseGroup, LicensedCrate }
+export { Tone, InstanceState, InstanceAction, SaveKind, StatusReading, Usage, InstanceItem, TermRun, TermLine, TerminalSession, PresetRow, EnvRow, MountRow, LayoutRow, RuleRow, ForwardRow, ForwardItem, CreateIssue, Creation, Deletion, Settings, Activity, ActivityRow, DetailField, DetailEntry, RunItem, DetailItem, DetailSection, GuestImage, GuestState, Updates, UpdateState, VmDefaults, Power, Snapshots, SnapshotItem, RevisionItem, LicensesWindow, LicenseGroup, LicensedCrate }
 
 export component AppWindow inherits Window {
     in property <[InstanceItem]> instances;

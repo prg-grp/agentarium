@@ -24,6 +24,7 @@ data_plane = { path = "../data_plane" }
 dispatch2 = "0.3"
 etherparse = "0.21.0"
 futures = "0.3.34"
+keepawake = "0.6.1"
 libc = "0.2"
 netstack-smoltcp = "0.2.5"
 objc2 = "0.6"
