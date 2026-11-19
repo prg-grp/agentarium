@@ -90,14 +90,14 @@
     <figure class="frame" id="frame">
       <svg class="leaders" aria-hidden="true"></svg>
       <a class="shot" href="assets/shots/activity-all-events.webp" title="Open the full-size screenshot">
-        <img src="assets/shots/activity-all-events.webp" width="1280" height="800" alt="The Agentarium window: a sidebar of instances, and the Activity tab of the running instance customer-ux-study, listing network connections, a DNS lookup and file writes made by Claude Code, with monitoring complete for this run.">
+        <img src="assets/shots/activity-all-events.webp" width="1280" height="800" alt="The Agentarium window: a sidebar of instances, and the All events view of the Activity tab for the running instance OpenClaw, listing git runs with their exit codes and the files they read, with monitoring complete for this run.">
       </a>
       <div class="notes">
         <p class="anno" data-y="0.2975"><span class="chip">Monitoring complete</span><br>Each run says whether monitoring was complete. Lost events are reported, not hidden.</p>
-        <p class="anno" data-y="0.346"><span class="chip chip--go"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg>Allowed</span><br>Every connection, with the domains it may belong to and what the Mac decided.</p>
-        <p class="anno" data-y="0.511"><span class="chip">Recorded</span><br>File writes, renames and reads, with the process that made them.</p>
+        <p class="anno" data-y="0.346"><span class="chip">Recorded</span><br>File reads and changes, with the process that made them.</p>
+        <p class="anno" data-y="0.456"><span class="chip chip--stop">exit 128</span><br>Every program run, with its arguments and exit code.</p>
       </div>
-      <figcaption><b>Activity</b>A Claude Code session, recorded from outside the agent. Click the picture for full size.</figcaption>
+      <figcaption><b>Activity</b>An OpenClaw session, recorded from outside the agent. Click the picture for full size.</figcaption>
     </figure>
   </div>
 </section>
@@ -111,7 +111,7 @@
     <div class="feats">
       <article class="win feat">
         <div class="win-bar"><span>New instance: shared folders</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
-        <a class="crop" href="assets/shots/shared-folders.webp" title="Open the full-size screenshot"><img src="assets/shots/shared-folders.webp" width="1004" height="368" loading="lazy" alt="Shared folders in the New instance flow: ~/Development shared read and write, with the warning that changes modify these host files immediately, and ~/Documents shared read only."></a>
+        <a class="crop" href="assets/shots/shared-folders.webp" title="Open the full-size screenshot"><img src="assets/shots/shared-folders.webp" width="1004" height="368" loading="lazy" alt="Shared folders in the New instance flow: ~/Documents shared read only, ~/Development/agent-toolbox shared read and write with the warning that changes modify these host files immediately, and where both appear under ~/workspace inside the instance."></a>
         <div class="win-body">
           <h3><svg class="i" aria-hidden="true"><use href="#i-box"/></svg>Isolate</h3>
           <p>Each agent instance runs in its own persistent Linux microVM, built on Apple's Virtualization.framework, with its own disk. Your Mac's files stay out of reach unless you share a folder.</p>
@@ -120,7 +120,7 @@
       </article>
       <article class="win feat">
         <div class="win-bar"><span>New instance: network</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
-        <a class="crop" href="assets/shots/network-rules.webp" title="Open the full-size screenshot"><img src="assets/shots/network-rules.webp" width="706" height="494" loading="lazy" alt="Network settings in the New instance flow: destinations not listed are denied, your Mac and local network are blocked, anthropic.com and github.com are allowed, pastebin.com is denied, and port 8080 is forwarded."></a>
+        <a class="crop" href="assets/shots/network-rules.webp" title="Open the full-size screenshot"><img src="assets/shots/network-rules.webp" width="706" height="500" loading="lazy" alt="Network settings in the New instance flow: destinations not listed are denied, your Mac and local network are blocked, api.anthropic.com, claude.ai, statsig.anthropic.com and mcp-proxy.anthropic.com are allowed, pastebin.org is denied, and no ports are forwarded yet."></a>
         <div class="win-body">
           <h3><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Limit</h3>
           <p>Allow or deny domains and addresses per instance. Destinations you don't list are denied, and your Mac and local network are blocked by default.</p>
@@ -128,8 +128,8 @@
         </div>
       </article>
       <article class="win feat">
-        <div class="win-bar"><span>customer-ux-study: activity</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
-        <a class="crop" href="assets/shots/activity-commands.webp" title="Open the full-size screenshot"><img src="assets/shots/activity-commands.webp" width="1004" height="425" loading="lazy" alt="The Commands view of the Activity tab: the claude process with the files it changed and read, grouped by folder, and monitoring complete for this run."></a>
+        <div class="win-bar"><span>guardiagent: activity</span><span class="ctl" aria-hidden="true"><i></i><i></i></span></div>
+        <a class="crop" href="assets/shots/activity-commands.webp" title="Open the full-size screenshot"><img src="assets/shots/activity-commands.webp" width="1004" height="425" loading="lazy" alt="The Commands view of the Activity tab: the claude command with the files it created, renamed and deleted, and monitoring complete for this run."></a>
         <div class="win-body">
           <h3><svg class="i" aria-hidden="true"><use href="#i-eye"/></svg>Observe</h3>
           <p>An eBPF observer in the guest records program runs with their arguments, privilege changes, file changes and connections. The Mac adds DNS lookups and every allowed or blocked flow.</p>
@@ -163,14 +163,14 @@
       <li class="win step step--flip">
         <div class="win-bar"><span>Step 2</span><span class="ctl" aria-hidden="true"><i></i></span></div>
         <div class="step-grid">
-          <a class="crop" href="assets/shots/step-review.webp" title="Open the full-size screenshot"><img src="assets/shots/step-review.webp" width="818" height="245" loading="lazy" alt="The review of shared folders and network: no shared folders, unlisted destinations denied, Mac and local network blocked, and the Claude Code domains allowed."></a>
+          <a class="crop" href="assets/shots/step-review.webp" title="Open the full-size screenshot"><img src="assets/shots/step-review.webp" width="910" height="290" loading="lazy" alt="The review of shared folders and network: ~/Documents read only and ~/Development/agent-toolbox read and write, unlisted destinations denied, Mac and local network blocked, the Claude Code domains allowed, pastebin.org denied, and no forwarded ports."></a>
           <div class="win-body"><span class="num" aria-hidden="true">2</span><h3>Share folders, set rules</h3><p>Choose the folders the agent may see and the domains it may reach. Presets start with their own domains allowed and everything else denied.</p></div>
         </div>
       </li>
       <li class="win step">
         <div class="win-bar"><span>Step 3</span><span class="ctl" aria-hidden="true"><i></i></span></div>
         <div class="step-grid">
-          <a class="crop" href="assets/shots/step-start.webp" title="Open the full-size screenshot"><img src="assets/shots/step-start.webp" width="750" height="343" loading="lazy" alt="Resources and start options on the review step: 2 processors, 4 GB memory, 16 GB disk, Start with Agentarium off, and the Create and Create and start buttons."></a>
+          <a class="crop" href="assets/shots/step-start.webp" title="Open the full-size screenshot"><img src="assets/shots/step-start.webp" width="750" height="360" loading="lazy" alt="Resources and start options on the review step: 2 processors, 4 GB memory, 16 GB disk, Start with Agentarium off, and the Back, Create and Create and start buttons."></a>
           <div class="win-body"><span class="num" aria-hidden="true">3</span><h3>Create and start</h3><p>Check processors, memory and disk, then Create and start. Starting runs the provisioning script once as root, then the agent. Agentarium keeps a "Freshly provisioned" snapshot.</p></div>
         </div>
       </li>

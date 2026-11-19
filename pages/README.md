@@ -14,8 +14,8 @@ pages/
     vendor/           GSAP 3.13.0 and ScrollTrigger, unmodified (standard GSAP license)
     fonts/            Rubik and VT323, latin subsets (SIL Open Font License)
     app-icon.svg/png  copied from app/ui/
-    shots/            app screenshots (WebP), full windows and crops, and the
-                      create-and-start recording (GIF plus a WebP poster frame)
+    shots/            app screenshots (2x WebP), full windows and crops, and the
+                      create-and-start recording (GIF plus a WebP poster frame, 1x)
 ```
 
 ## Preview locally
@@ -35,7 +35,7 @@ The style is "Memphis desktop": 90s Memphis print with 90s desktop windows. The 
 - **Everything has a black outline.** 2px outlines, hard 6px/4px offset shadows, no blur, no gradients, no rounded corners on the site.
 - **Windows hold content.** Feature, step and info boxes are 90s windows with a title bar and decorative controls. Title bars name what's inside in plain words.
 - **Frame the app, never restyle it.** Screenshots sit on a white (hero) or lilac (features) mat inside a black outline. No tint, overlay or extra title bar; the app brings its own window. Each picture links to its full-size file and has alt text describing what it shows.
-- **Screenshots:** capture with ⌘⇧4, Space, Option-click (no macOS shadow), window about 1280 × 800 points, demo data only. Store as WebP in `assets/shots/`; crops come from the full window and are shown at actual size where possible, so 1× text stays readable.
+- **Screenshots:** capture on a Retina screen with ⌘⇧4, Space, Option-click (no macOS shadow), window 1280 × 800 points (2560 × 1600 pixels), demo data only. If a capture has the shadow, crop it to the window and make the corners transparent. Convert to sRGB and store as WebP in `assets/shots/`; crops come from the full window. Give each `img` its `width` and `height` in points (half the pixel size): crops then show at 1× size, so the text matches the app, and stay sharp on Retina screens.
 - **Recordings:** convert screen recordings to GIF cropped to the app window (10 fps, 128-colour palette from `palettegen`, `paletteuse` with `diff_mode=rectangle`) and keep a WebP poster frame. The page shows the poster; the GIF plays only while on screen and only without reduced motion, and a Play/Pause button always controls it.
 - **Notes go beside the app, not on it.** Memphis notes sit on the mat next to the hero screenshot. Each `.anno` has `data-y`, the spot it explains as a fraction of the image height; `site.js` stacks the notes and draws elbow leaders to those spots. Update the fractions when the screenshot changes.
 - **Checkerboard dither means "not observed"** and nothing else.
