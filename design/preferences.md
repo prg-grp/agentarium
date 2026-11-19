@@ -15,7 +15,7 @@ App-wide settings: updates of Agentarium itself, the resources new instances sta
 │                  │ Channel     [ Stable | Dev builds ]                                  │
 │                  │             Every change to Agentarium as soon as it's built, …      │
 │                  │ Status      ✓ Version 1.2.0 is ready to install.                     │
-│                  │ [⟳ Restart to update]  Running instances shut down first.            │
+│                  │ [⟳ Restart to update] Running instances shut down first. [↗ Feedback]│
 │                  │ What's new in 1.2.0                                                  │
 │                  │ ### Features …                                                       │
 │                  ├──────────────────────────────────────────────────────────────────────┤
@@ -46,7 +46,7 @@ App-wide settings: updates of Agentarium itself, the resources new instances sta
 - Rows: label column 120 px in `tx2` 13 px, then the value or control. The version is monospace.
 - Channel: segmented control "Stable" / "Dev builds", with one line below in `tx3` describing the selected channel.
 - Status: `tx2` text while checking, downloading or up to date; a check icon and `ok` text when an update is ready; an alert icon and `bad` text when a check or download failed. While downloading, a 6 px progress track (`raise`, filled `tx2`) sits below the text.
-- Actions: "Restart to update" (primary, refresh icon) only when an update is ready, with "Running instances shut down first." in `tx3`; otherwise "Check now" (neutral), disabled while a check or download runs. Neither shows in development builds.
+- Actions: "Restart to update" (primary, refresh icon) only when an update is ready, with "Running instances shut down first." in `tx3`; otherwise "Check now" (neutral), disabled while a check or download runs. Neither shows in development builds. "Feedback" (neutral, external-link icon) always shows, last in the row, and opens the repository's feedback issue form in the browser with the version filled in.
 - About: the License row shows `AGPL-3.0-or-later` in monospace; below, "Third-party licenses" (neutral) opens [licenses.md](licenses.md) in its own window.
 - "What's new in X" (`tx` / 500) and the release notes (`tx2`, 13 px, plain text) show while the update downloads and once it's ready.
 

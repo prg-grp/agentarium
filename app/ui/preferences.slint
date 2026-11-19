@@ -25,6 +25,8 @@ export global Updates {
     callback check();
     // Shuts the running instances down, then installs the update and relaunches.
     callback restart();
+    // Opens the feedback issue form on GitHub with the version filled in.
+    callback feedback();
 }
 
 // The processors, memory and disk new instances start with. Rust (src/create.rs) owns it.
@@ -197,6 +199,15 @@ export component PreferencesView {
                             color: Theme.tx3;
                             font-size: Theme.font-small;
                             vertical-alignment: center;
+                        }
+
+                        AppButton {
+                            kind: ButtonKind.neutral;
+                            text: "Feedback";
+                            icon: @image-url("icons/external-link.svg");
+                            clicked => {
+                                Updates.feedback();
+                            }
                         }
                     }
 

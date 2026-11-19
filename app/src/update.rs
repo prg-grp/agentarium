@@ -182,6 +182,18 @@ impl Updater {
                 updater.restart();
             }
         });
+        // The issue form in .github/ISSUE_TEMPLATE/feedback.yml, with the version filled
+        // in. `+` (semver build metadata) is the only version character a query string mangles.
+        let weak_ui = ui.as_weak();
+        g.on_feedback(move || {
+            let url = format!(
+                "{REPO_URL}/issues/new?template=feedback.yml&version={}",
+                version().replace('+', "%2B")
+            );
+            if let Some(ui) = weak_ui.upgrade() {
+                ui.invoke_open_url(url.into());
+            }
+        });
 
         let weak = Rc::downgrade(&updater);
         updater
