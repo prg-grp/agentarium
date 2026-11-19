@@ -24,14 +24,14 @@ mod terminal;
 mod update;
 mod vm;
 
-#[cfg(target_os = "macos")]
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::rc::Rc;
 use std::time::Duration;
 
 use slint::winit_030::WinitWindowAccessor;
-use slint::{Model, ModelRc, Timer, VecModel};
+use slint::{Model, ModelRc, SharedString, Timer, VecModel};
 
 use controller::{AfterStop, View, VmControl};
 use db::Db;
@@ -166,19 +166,36 @@ fn main() -> Result<(), Box<dyn Error>> {
     // The Agent tab shows the selected instance's session, the Terminal tab a shell beside
     // it, the Logs tab its boot log; the Activity tab its runs' activity, the Snapshots tab
     // its snapshots, the Settings tab its configuration.
+    // Each instance keeps the tab it was last on while the app runs, so switching back to it
+    // shows that tab again.
+    let tabs: Rc<RefCell<HashMap<SharedString, i32>>> = Rc::default();
     let c = control.clone();
     let s = settings.clone();
     let a = activity.clone();
     let sn = snapshots.clone();
+    let t = tabs.clone();
+    let ui_handle = ui.as_weak();
     ui.on_instance_selected(move |id| {
         c.select(&id);
         s.open(&id);
         a.open(&id);
         sn.open(&id);
+        let tab = t.borrow().get(&id).copied().unwrap_or(0);
+        if let Some(ui) = ui_handle.upgrade() {
+            ui.set_current_tab(tab);
+        }
     });
     let c = control.clone();
     let a = activity.clone();
+    let ui_handle = ui.as_weak();
     ui.on_tab_changed(move |tab| {
+        if let Some(item) = ui_handle.upgrade().and_then(|ui| {
+            usize::try_from(ui.get_selected_index())
+                .ok()
+                .and_then(|row| ui.get_instances().row_data(row))
+        }) {
+            tabs.borrow_mut().insert(item.id, tab);
+        }
         c.set_view(match tab {
             1 => View::Shell,
             4 => View::Log,

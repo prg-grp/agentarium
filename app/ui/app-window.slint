@@ -358,7 +358,6 @@ export component AppWindow inherits Window {
                                     clicked => {
                                         root.show-preferences = false;
                                         root.selected-index = index;
-                                        root.current-tab = 0;
                                     }
                                     pointer-event(event) => {
                                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.right && !draft {
