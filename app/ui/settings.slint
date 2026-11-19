@@ -17,6 +17,9 @@ export global Settings {
     in-out property <string> working-directory;
     // Shown and edited only until provisioning has succeeded.
     in-out property <string> script;
+    // Agent mode: run around each start of the agent.
+    in-out property <string> startup-script;
+    in-out property <string> teardown-script;
     in-out property <int> cpus;
     in-out property <int> memory-gb;
     in-out property <int> disk-gb;
@@ -73,6 +76,8 @@ export global Settings {
     callback move-argument(from: int, to: int);
     callback set-working-directory(directory: string);
     callback set-script(script: string);
+    callback set-startup-script(script: string);
+    callback set-teardown-script(script: string);
     callback add-env();
     callback edit-env(index: int, name: string, value: string);
     callback remove-env(index: int);
@@ -325,6 +330,64 @@ export component SettingsTab {
                             }
                             set-working-directory(directory) => {
                                 Settings.set-working-directory(directory);
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Startup script";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            Text {
+                                text: "Sourced as ubuntu before each start of the agent, with your environment variables set. What it exports reaches the agent and new terminals. If it fails, the agent doesn't start.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+
+                            TextEdit {
+                                height: 160px;
+                                text <=> Settings.startup-script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                wrap: no-wrap;
+                                accessible-label: "Startup script";
+                                edited(text) => {
+                                    Settings.set-startup-script(text);
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Teardown script";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            Text {
+                                text: "Runs as ubuntu with the agent's environment after each exit of the agent and before the instance stops.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+
+                            TextEdit {
+                                height: 160px;
+                                text <=> Settings.teardown-script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                wrap: no-wrap;
+                                accessible-label: "Teardown script";
+                                edited(text) => {
+                                    Settings.set-teardown-script(text);
+                                }
                             }
                         }
 

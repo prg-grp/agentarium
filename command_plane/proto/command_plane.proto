@@ -34,6 +34,10 @@
 // with Updated once the shared folders follow it. Shared folders and forwarded ports change
 // at once; the launch settings and environment apply from the agent's next start (and to
 // new shells), which RestartAgent brings about without rebooting.
+//
+// In agent mode the launch settings may carry a startup and a teardown script, which the
+// supervisor runs around each start of the agent (see Launch). On Stop it ends the agent
+// and runs the teardown script before powering off.
 syntax = "proto3";
 
 package agent_toolbox.command_plane.v1;
@@ -126,6 +130,15 @@ message Launch {
   string command = 1;
   repeated string arguments = 2;
   string working_directory = 3;
+  // Bash, sourced as the unprivileged user before each start of the agent, in the agent's
+  // cgroup, with the session environment and in the working directory. Its environment
+  // when it ends becomes the agent's (and that of the teardown script and new shells). If
+  // it fails, the agent isn't started; it is tried again after a delay. Empty: none.
+  string startup_script = 4;
+  // Bash, run like the startup script after each exit of the agent, with the environment
+  // the agent had, and on Stop before the guest powers off. Its failure is only reported.
+  // Empty: none.
+  string teardown_script = 5;
 }
 
 message EnvVar {

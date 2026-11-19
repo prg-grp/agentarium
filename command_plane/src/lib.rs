@@ -27,7 +27,7 @@ pub const SHELL_PORT: u32 = 703;
 /// Sent in `Hello`; the app refuses a supervisor that speaks another version. The app and
 /// the guest binaries ship together, so they only differ when a development build's guest
 /// binaries are stale.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// How many shared folders an agent or maintenance boot can have at once. Each folder gets
 /// a virtio-fs device (a slot) of its own, as replacing a device's share invalidates every

@@ -18,6 +18,9 @@ export global Creation {
     in-out property <string> script;
     in-out property <string> command;
     in-out property <string> working-directory;
+    // Run around each start of the agent; empty by default.
+    in-out property <string> startup-script;
+    in-out property <string> teardown-script;
     in-out property <int> cpus;
     in-out property <int> memory-gb;
     in-out property <int> disk-gb;
@@ -60,6 +63,7 @@ export global Creation {
     // Read-back on Review
     in property <string> review-runs;
     in property <string> review-script;
+    in property <string> review-hooks;
     in property <string> review-allowed;
     in property <string> review-denied;
     in property <string> review-forwards;
@@ -79,6 +83,8 @@ export global Creation {
     callback edit-argument(index: int, argument: string);
     callback move-argument(from: int, to: int);
     callback set-working-directory(directory: string);
+    callback set-startup-script(script: string);
+    callback set-teardown-script(script: string);
     callback add-env();
     callback edit-env(index: int, name: string, value: string);
     callback remove-env(index: int);
@@ -513,6 +519,55 @@ export component CreateInstance {
                     }
 
                     Section {
+                        title: "Startup and teardown";
+                        description: "Optional bash scripts, run as ubuntu with your environment variables set. The startup script is sourced before each start of the agent: what it exports reaches the agent, and if it fails, the agent doesn't start. The teardown script runs after each exit of the agent and before the instance stops.";
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Startup script";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            TextEdit {
+                                height: 160px;
+                                text <=> Creation.startup-script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                wrap: no-wrap;
+                                accessible-label: "Startup script";
+                                edited(text) => {
+                                    Creation.set-startup-script(text);
+                                }
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 6px;
+
+                            Text {
+                                text: "Teardown script";
+                                color: Theme.tx2;
+                                font-size: Theme.font-small;
+                            }
+
+                            TextEdit {
+                                height: 160px;
+                                text <=> Creation.teardown-script;
+                                font-family: Theme.mono;
+                                font-size: Theme.font-mono;
+                                wrap: no-wrap;
+                                accessible-label: "Teardown script";
+                                edited(text) => {
+                                    Creation.set-teardown-script(text);
+                                }
+                            }
+                        }
+                    }
+
+                    Section {
                         title: "Environment variables";
                         description: "Visible to the agent and recorded with each run.";
 
@@ -761,6 +816,11 @@ export component CreateInstance {
                             key: "In";
                             value: Creation.working-directory;
                             mono: true;
+                        }
+
+                        KeyValue {
+                            key: "Scripts";
+                            value: Creation.review-hooks;
                         }
                     }
 

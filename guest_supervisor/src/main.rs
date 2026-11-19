@@ -26,6 +26,13 @@
 //! shells get the launch settings and environment when they next start. RestartAgent ends
 //! the agent's cgroup, so the agent starts again with them.
 //!
+//! The launch settings may carry a startup and a teardown script. Before each start of the
+//! agent, the startup script is sourced as `ubuntu` in the agent's cgroup; the environment
+//! it leaves becomes the agent's, and that of the teardown script and new shells. If it
+//! fails, the agent isn't started. After each exit of the agent, the teardown script runs
+//! the same way. On Stop, the supervisor ends the agent and powers off once the teardown
+//! script ended, at most TEARDOWN_TIMEOUT later.
+//!
 //! The supervisor logs with `tracing` to stdout, which systemd sends to the journal and
 //! to the kernel console (`hvc0`, the app's read-only Logs tab). Logs name programs and
 //! variables but never contain argument or variable values or the provisioning script.
@@ -59,8 +66,14 @@ use tracing::{debug, error, info, info_span, warn};
 const SESSION_TTY: &str = "/dev/hvc1";
 /// How long to wait before starting an exited session again.
 const RESTART_DELAY: Duration = Duration::from_secs(2);
-/// Where the provisioning script is written; a tmpfs, gone after the boot.
+/// Where the provisioning, startup and teardown scripts are written; a tmpfs, gone after
+/// the boot.
 const RUN_DIR: &str = "/run/agentarium";
+/// Where the startup script leaves its environment when it ends, NUL-separated.
+const STARTUP_ENV: &str = "/run/agentarium/startup.env";
+/// How long Stop waits for the agent's teardown script before powering off anyway; well
+/// within the app's wait before it stops the VM hard.
+const TEARDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// The mount points the supervisor created on the instance's disk, from any boot, one path
 /// per line; they go again with their folders while they're empty.
 const MOUNT_POINTS: &str = "/var/lib/agentarium/mount-points";
@@ -98,6 +111,11 @@ struct Settings {
     forward_ports: Vec<u32>,
     /// Agent mode: the agent's cgroup, which RestartAgent ends.
     agent_cgroup: Option<PathBuf>,
+    /// Agent mode: the environment the latest startup script left, which new shells get
+    /// instead of `environment`; None without a startup script.
+    agent_environment: Option<Vec<EnvVar>>,
+    /// Agent mode: Stop arrived and the teardown script runs; the agent doesn't start again.
+    stopping: bool,
 }
 
 /// The agent's state during an agent-mode boot, as Status reports it.
@@ -259,9 +277,9 @@ fn relay(connection: File, target: TcpStream) {
 /// Accepts the app's shells in agent mode. Each connection names its terminal size in a
 /// Shell and gets a login shell as `ubuntu` on a pseudo-terminal of its own, in the shell
 /// cgroup, which isn't observed. The connection closes when the shell exits; the shell is
-/// hung up when the app closes the connection. Each shell gets the latest environment and
-/// starts in the latest working directory. `current` holds the latest shell's
-/// pseudo-terminal, for Resize.
+/// hung up when the app closes the connection. Each shell gets the latest environment (the
+/// one the startup script left, if any) and starts in the latest working directory.
+/// `current` holds the latest shell's pseudo-terminal, for Resize.
 fn shell(settings: Current, current: Pty) {
     let listener = match listen(SHELL_PORT) {
         Ok(listener) => listener,
@@ -284,7 +302,8 @@ fn shell(settings: Current, current: Pty) {
         let (environment, directory) = {
             let settings = settings.lock().unwrap();
             (
-                settings.environment.clone(),
+                (settings.agent_environment.clone())
+                    .unwrap_or_else(|| settings.environment.clone()),
                 settings.launch.working_directory.clone(),
             )
         };
@@ -481,8 +500,29 @@ fn serve(
                 warn!(mode = ?start.mode(), "ignoring Start: this boot has already started");
             }
             Some(host_message::Kind::Stop(_)) => {
-                info!("received Stop, powering off");
-                power_off();
+                let mut settings = current.lock().unwrap();
+                // The agent's session returns once all of it has ended, runs the teardown
+                // script and powers off; set before, so it doesn't start the agent again.
+                settings.stopping = true;
+                let cgroup = (settings.agent_cgroup.clone())
+                    .filter(|_| !settings.launch.teardown_script.is_empty());
+                match cgroup.map(|dir| fs::write(dir.join("cgroup.kill"), "1")) {
+                    Some(Ok(())) => {
+                        info!("received Stop, ending the agent to run its teardown script");
+                        thread::spawn(|| {
+                            thread::sleep(TEARDOWN_TIMEOUT);
+                            // Harmless if the guest is already powering off.
+                            power_off();
+                        });
+                    }
+                    ended => {
+                        if let Some(Err(error)) = ended {
+                            warn!(%error, "couldn't end the agent to run its teardown script");
+                        }
+                        info!("received Stop, powering off");
+                        power_off();
+                    }
+                }
             }
             Some(host_message::Kind::Resize(resize)) if resize.shell => {
                 debug!(
@@ -611,7 +651,18 @@ fn run(
                 }
             }
             let command = || current.lock().unwrap().launch.command.clone();
+            // After Stop, the guest powers off instead of starting the agent again.
+            let halt = || {
+                if current.lock().unwrap().stopping {
+                    power_off();
+                    loop {
+                        thread::park();
+                    }
+                }
+            };
+            let procs = cgroup.as_ref().map(|cgroup| &cgroup.procs);
             repeat(tty, command, || {
+                halt();
                 let (launch, environment, generation) = {
                     let settings = current.lock().unwrap();
                     (
@@ -620,6 +671,19 @@ fn run(
                         settings.generation,
                     )
                 };
+                let directory = launch.working_directory.as_str();
+                let environment = match launch.startup_script.as_str() {
+                    "" => environment,
+                    script => match hook(tty, "startup", script, directory, &environment, procs) {
+                        Ok(environment) => environment,
+                        Err(error) => {
+                            halt();
+                            return Err(error);
+                        }
+                    },
+                };
+                current.lock().unwrap().agent_environment =
+                    (!launch.startup_script.is_empty()).then(|| environment.clone());
                 {
                     let mut state = agent.lock().unwrap();
                     state.restarts += u32::from(state.started);
@@ -633,10 +697,10 @@ fn run(
                     "ubuntu",
                     &launch.command,
                     &launch.arguments,
-                    &launch.working_directory,
+                    directory,
                     &environment,
                     true,
-                    cgroup.as_ref().map(|cgroup| &cgroup.procs),
+                    procs,
                 );
                 {
                     let mut state = agent.lock().unwrap();
@@ -649,6 +713,20 @@ fn run(
                     }
                 }
                 report();
+                if !launch.teardown_script.is_empty()
+                    && let Err(error) = hook(
+                        tty,
+                        "teardown",
+                        &launch.teardown_script,
+                        directory,
+                        &environment,
+                        procs,
+                    )
+                {
+                    warn!(%error, "the teardown script failed");
+                    tty.notify(&format!("The teardown script failed: {error}."));
+                }
+                halt();
                 result
             });
         }
@@ -1025,6 +1103,88 @@ fn provision(tty: &Tty, script: &str) -> i32 {
             -1
         }
     }
+}
+
+/// Writes the agent's startup or teardown script (`name`) to the run folder, where only
+/// root can change it, and runs it as `ubuntu` on the session console, like the agent: in
+/// `directory` with `environment`, in the agent's `cgroup`. Fails if it doesn't exit with 0.
+/// The startup script is sourced, so whatever it exports stays: returns the environment it
+/// left (a script that replaced its shell leaves `environment`). The teardown script returns
+/// `environment`.
+fn hook(
+    tty: &Tty,
+    name: &str,
+    script: &str,
+    directory: &str,
+    environment: &[EnvVar],
+    cgroup: Option<&File>,
+) -> io::Result<Vec<EnvVar>> {
+    let path = format!("{RUN_DIR}/{name}.sh");
+    fs::create_dir_all(RUN_DIR)?;
+    fs::write(&path, script)?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+    let startup = name == "startup";
+    let arguments = if startup {
+        // Created anew for the script's user; the run folder is root's, so nothing else
+        // can be put in its place.
+        let account = Account::find("ubuntu")?;
+        let _ = fs::remove_file(STARTUP_ENV);
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(STARTUP_ENV)?;
+        std::os::unix::fs::fchown(&file, Some(account.uid), Some(account.gid))?;
+        // The trap runs on `exit` too, and bash keeps the script's exit status.
+        let wrapper = format!("trap '/usr/bin/env -0 > {STARTUP_ENV}' EXIT; . {path}");
+        vec!["-c".into(), wrapper]
+    } else {
+        vec![path]
+    };
+    info!(
+        script = name,
+        bytes = script.len(),
+        "running the agent's script"
+    );
+    let status = session(
+        tty,
+        "ubuntu",
+        "/bin/bash",
+        &arguments,
+        directory,
+        environment,
+        false,
+        cgroup,
+    )?;
+    if !status.success() {
+        return Err(io::Error::other(format!(
+            "the {name} script {}",
+            ended(status)
+        )));
+    }
+    info!(script = name, "the agent's script finished");
+    let left = if startup {
+        fs::read(STARTUP_ENV)?
+    } else {
+        Vec::new()
+    };
+    if left.is_empty() {
+        return Ok(environment.to_vec());
+    }
+    // Bash's own variables don't belong to the agent.
+    Ok(left
+        .split(|&byte| byte == 0)
+        .filter_map(|entry| {
+            let entry = String::from_utf8_lossy(entry);
+            let (name, value) = entry.split_once('=')?;
+            (!name.is_empty() && !matches!(name, "_" | "SHLVL" | "PWD" | "OLDPWD")).then(|| {
+                EnvVar {
+                    name: name.into(),
+                    value: value.into(),
+                }
+            })
+        })
+        .collect())
 }
 
 /// Runs `program` as `user` on the session console and waits for it. An interactive

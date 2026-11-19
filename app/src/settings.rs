@@ -97,6 +97,12 @@ impl SettingsEditor {
         let s = this.clone();
         g.on_set_script(move |script| s.edit(|e| e.config.provision_script = script.into()));
         let s = this.clone();
+        g.on_set_startup_script(move |script| s.edit(|e| e.config.startup_script = script.into()));
+        let s = this.clone();
+        g.on_set_teardown_script(move |script| {
+            s.edit(|e| e.config.teardown_script = script.into())
+        });
+        let s = this.clone();
         g.on_add_argument(move |argument| {
             s.edit(|e| editor::add_argument(&mut e.config, &argument))
         });
@@ -321,6 +327,8 @@ impl SettingsEditor {
         g.set_autostart(e.autostart);
         g.set_command(c.command.as_str().into());
         g.set_script(c.provision_script.as_str().into());
+        g.set_startup_script(c.startup_script.as_str().into());
+        g.set_teardown_script(c.teardown_script.as_str().into());
         g.set_working_directory(c.working_directory.as_str().into());
         g.set_cpus(c.cpus as i32);
         g.set_memory_gb((c.memory_mib / 1024) as i32);
@@ -547,7 +555,9 @@ fn save_kind(config: &Config, disk_gb: u32, live: Option<(BootMode, Config)>) ->
         && (config.command != active.command
             || config.arguments != active.arguments
             || config.working_directory != active.working_directory
-            || config.environment != active.environment)
+            || config.environment != active.environment
+            || config.startup_script != active.startup_script
+            || config.teardown_script != active.teardown_script)
     {
         SaveKind::RestartAgent
     } else {

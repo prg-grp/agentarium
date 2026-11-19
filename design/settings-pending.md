@@ -39,9 +39,13 @@ There is no pending-changes bar, tab label or per-section change count: Save put
 ## Behavior
 
 - Settings is available from creation on, so settings can be changed before the first run. Until provisioning has succeeded, Agent and launch also shows the provisioning script, editable, with "Runs once as root with internet access before the first start. It can't be changed once provisioning has succeeded."; afterwards the script is gone from Settings. Any script is valid, including an empty one and the unchanged custom template.
+- Agent and launch also shows, always and below the launch fields, two editable monospace script fields, empty by default:
+  - "Startup script" with "Sourced as ubuntu before each start of the agent, with your environment variables set. What it exports reaches the agent and new terminals. If it fails, the agent doesn't start."
+  - "Teardown script" with "Runs as ubuntu with the agent's environment after each exit of the agent and before the instance stops."
+  Changing either one is a launch setting: saving restarts the agent.
 - Edits are not saved automatically. A footer under the page holds "Discard changes" (ghost) and one primary save button, enabled while the edits differ from the saved configuration, with "Unsaved changes" in `tx2` beside them. Its label says what saving does to a running agent or maintenance boot, compared with the configuration in effect:
   - "Save": everything edited applies at once, or the instance isn't running (or is still starting or provisioning), so the edits are only saved.
-  - "Save and restart agent" (refresh icon): the edits include launch settings or environment variables; the agent restarts with them, the VM keeps running.
+  - "Save and restart agent" (refresh icon): the edits include launch settings (startup and teardown scripts included) or environment variables; the agent restarts with them, the VM keeps running.
   - "Save and reboot" (refresh icon): the edits include processors, memory or disk size; the instance reboots in agent mode.
 - Save writes the edits into the current revision while it is pending, or into a new revision, which becomes the current one, if it was booted or a snapshot links it. While an agent or maintenance boot runs, Save also applies them to it:
   - **Live:** the network rules and settings (new connections and lookups; open connections stay), the shared folders (mounted or unmounted in the guest right away), and the forwarded ports.

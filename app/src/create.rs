@@ -134,6 +134,12 @@ impl Creator {
         let c = this.clone();
         g.on_set_script(move |script| c.edit(|d| d.config.provision_script = script.into()));
         let c = this.clone();
+        g.on_set_startup_script(move |script| c.edit(|d| d.config.startup_script = script.into()));
+        let c = this.clone();
+        g.on_set_teardown_script(move |script| {
+            c.edit(|d| d.config.teardown_script = script.into())
+        });
+        let c = this.clone();
         g.on_reset_script(move || {
             c.edit(|d| d.config.provision_script = d.preset.provision_script().into());
             c.show_fields();
@@ -492,6 +498,8 @@ impl Creator {
         g.set_script(c.provision_script.as_str().into());
         g.set_command(c.command.as_str().into());
         g.set_working_directory(c.working_directory.as_str().into());
+        g.set_startup_script(c.startup_script.as_str().into());
+        g.set_teardown_script(c.teardown_script.as_str().into());
         g.set_cpus(c.cpus as i32);
         g.set_memory_gb((c.memory_mib / 1024) as i32);
         g.set_disk_gb(c.disk_gb as i32);
@@ -539,6 +547,18 @@ impl Creator {
         sync(&self.issues, issues);
 
         g.set_review_runs(command_line(c).into());
+        g.set_review_hooks(
+            match (
+                c.startup_script.trim().is_empty(),
+                c.teardown_script.trim().is_empty(),
+            ) {
+                (true, true) => "None",
+                (false, true) => "Startup script",
+                (true, false) => "Teardown script",
+                (false, false) => "Startup and teardown scripts",
+            }
+            .into(),
+        );
         g.set_review_script(match (custom, changed) {
             _ if c.provision_script.trim().is_empty() => "None".into(),
             (true, false) => "Custom agent template".into(),

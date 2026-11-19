@@ -12,6 +12,10 @@ Launch              Command [claude]
 What starts when…   Arguments [--permission-mode ×][acceptEdits ×] [Add argument]
                     Working directory inside the instance [/home/ubuntu/workspace]
 ───────────────────────────────────────────────────────────────────────
+Startup and         Startup script  [                                ]
+teardown            Teardown script [                                ]
+Optional bash…
+───────────────────────────────────────────────────────────────────────
 Environment         [RUST_LOG        ] [info                     ] ×
 variables           [DATABASE_URL    ] [postgres://db.test/billing] ×
 Visible to agent…   + Add variable
@@ -29,6 +33,7 @@ There is no sign-in setting: the agent signs in inside the terminal on its first
   - Arguments shown as tokens (monospace on `raise`, 4 px radius, each with a remove icon), followed by an "Add argument" field. They start with the preset's arguments, if any (OpenClaw: `gateway run --port 18789`; Hermes Agent: `dashboard --no-open --port 9119`). Return adds the typed argument. Arguments form an argv list, not a single string; each is passed as it is.
   - Working directory inside the instance (monospace, max 360 px). Default: `/home/ubuntu/workspace`, the agent user's `~/workspace`, where shared folders are placed by default. A `tx3` hint below the field: "~/workspace is on the instance's own disk. Shared folders go below it by default."
   - Description: "What starts when the instance boots. Runs directly, not through a shell." If shell execution is supported later, it must be an explicit option.
+- **Startup and teardown:** two editable monospace script fields (160 px high), "Startup script" and "Teardown script", each with its label in `tx2` above it. Both start empty; no preset sets them, and switching presets keeps them. Any script is valid, including an empty one. Description: "Optional bash scripts, run as ubuntu with your environment variables set. The startup script is sourced before each start of the agent: what it exports reaches the agent, and if it fails, the agent doesn't start. The teardown script runs after each exit of the agent and before the instance stops." Settings shows the same fields under Agent and launch.
 - **Environment variables:** two-column rows (name 200 px, value flexible, both monospace), each with a remove icon. An "Add variable" ghost button sits below. Description: "Visible to the agent and recorded with each run."
   - Values are stored as they are, in plain text, and passed to the instance as they are. A secret mode (Keychain-backed values) comes later; until then there is no secret detection or warning.
   - Rows left completely empty are dropped on create.
@@ -42,5 +47,5 @@ There is no sign-in setting: the agent signs in inside the terminal on its first
 
 ## Copy
 
-- Section titles: "Launch", "Environment variables"
+- Section titles: "Launch", "Startup and teardown", "Environment variables"
 - Primary button: "Continue to shared folders"

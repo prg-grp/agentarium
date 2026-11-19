@@ -633,6 +633,8 @@ fn run(
                         command: config.command,
                         arguments: config.arguments,
                         working_directory: config.working_directory,
+                        startup_script: config.startup_script,
+                        teardown_script: config.teardown_script,
                     }),
                     environment,
                     mounts: guest_mounts,
@@ -1189,6 +1191,8 @@ impl VmControl {
                     command: config.command.clone(),
                     arguments: config.arguments.clone(),
                     working_directory: config.working_directory.clone(),
+                    startup_script: config.startup_script.clone(),
+                    teardown_script: config.teardown_script.clone(),
                 }),
                 ..Start::default()
             },
@@ -1553,12 +1557,16 @@ impl VmControl {
                                 && (now.command != latest.command
                                     || now.arguments != latest.arguments
                                     || now.working_directory != latest.working_directory
-                                    || now.environment != latest.environment)
+                                    || now.environment != latest.environment
+                                    || now.startup_script != latest.startup_script
+                                    || now.teardown_script != latest.teardown_script)
                             {
                                 now.command = latest.command.clone();
                                 now.arguments = latest.arguments.clone();
                                 now.working_directory = latest.working_directory.clone();
                                 now.environment = latest.environment.clone();
+                                now.startup_script = latest.startup_script.clone();
+                                now.teardown_script = latest.teardown_script.clone();
                             }
                         }
                         _ => run.status_lost = true,

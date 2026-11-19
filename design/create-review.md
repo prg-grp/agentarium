@@ -14,6 +14,7 @@ Harness         Name          billing-service                     Edit
 ──────────────────────────────────────────────────────────────────────
 Agent           Runs       claude --permission-mode acceptEdits   Edit
                 In         /home/ubuntu/workspace
+                Scripts    None
 ──────────────────────────────────────────────────────────────────────
 Shared folders  ~/code/billing-service  ✎ Read and write. Changes     Edit
                                           modify your files immediately.
@@ -41,6 +42,7 @@ Cancel                       [< Back]  [Create]  [▶ Create and start]
 - Each section: title in the 220 px left column, key/value read-back (150 px key column in `tx3`, values in `tx` or monospace), "Edit" link in `acc` on the right that jumps to that step.
 - Writable shares repeat the `warn` direct-write sentence in short form. Without folders: "Folders: None. The agent works on the instance's own disk."
 - Harness shows the preset's name, and for provisioning "Script from the <preset> preset", "Edited script from the <preset> preset", "Custom agent template" (custom agent, unchanged template), "Custom script", or "None" (empty script).
+- Agent's Scripts row says which of the startup and teardown scripts are set: "None", "Startup script", "Teardown script", or "Startup and teardown scripts". The scripts themselves are not repeated.
 - Environment shows variable names only; values are not repeated.
 - **Resources** are only editable here (the "advanced" section from the brief): steppers for processors, memory and disk, plus a `tx3` line with what the Mac has available and that the disk can grow later, but not shrink. Section description: "The virtual machine's processors, memory and disk. The defaults suit most agents. The instance takes memory and disk space from your Mac only as it uses them."
   - Defaults: those set under New instances in [preferences.md](preferences.md); without them, 2 processors and 4 GB of memory, capped at half of the Mac. Claude Code is a Node process and builds inside the instance need memory; the VM takes memory from the Mac only as the guest uses it.

@@ -47,9 +47,10 @@ const NONCE_LEN: usize = 12;
 // append-only: never edit, reorder or delete one that has shipped. Every schema
 // change is a new file. A database newer than the app is refused, not touched.
 fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(include_str!(
-        "../migrations/0001_instances.sql"
-    ))])
+    Migrations::new(vec![
+        M::up(include_str!("../migrations/0001_instances.sql")),
+        M::up(include_str!("../migrations/0002_hook_scripts.sql")),
+    ])
 }
 
 pub struct Db {
@@ -225,6 +226,12 @@ pub struct Config {
     pub port_forwards: Vec<PortForward>,
     /// Bash script run as root in provision mode, before the first agent boot.
     pub provision_script: String,
+    /// Bash script sourced as the agent's user before each start of the agent; what it
+    /// exports reaches the agent. Empty: none.
+    pub startup_script: String,
+    /// Bash script run as the agent's user after each exit of the agent and before the
+    /// instance stops. Empty: none.
+    pub teardown_script: String,
 }
 
 /// Everything but the agent: its command, provisioning script and network rules come
@@ -250,6 +257,8 @@ impl Default for Config {
             network_allow_local: false,
             port_forwards: Vec::new(),
             provision_script: String::new(),
+            startup_script: String::new(),
+            teardown_script: String::new(),
         }
     }
 }
@@ -455,10 +464,11 @@ impl Db {
             "INSERT INTO instance_revisions (instance_id, revision, created_at, booted_at, cpus,
                  memory_mib, disk_gb, command, arguments, working_directory, environment, mounts,
                  network_default, network_rules, network_allow_local, port_forwards,
-                 provision_script)
+                 provision_script, startup_script, teardown_script)
              SELECT ?2, revision, created_at, booted_at, cpus, memory_mib, disk_gb, command,
                  arguments, working_directory, environment, mounts, network_default,
-                 network_rules, network_allow_local, port_forwards, provision_script
+                 network_rules, network_allow_local, port_forwards, provision_script,
+                 startup_script, teardown_script
              FROM instance_revisions WHERE instance_id = ?1",
             [from, id],
         )?;
@@ -743,7 +753,7 @@ const SNAPSHOTTED: &str = "EXISTS (SELECT 1 FROM snapshots s
 
 const REVISION_QUERY: &str = "SELECT revision, cpus, memory_mib, disk_gb, command, arguments,
     working_directory, environment, mounts, network_default, network_rules, network_allow_local,
-    provision_script, port_forwards
+    provision_script, port_forwards, startup_script, teardown_script
     FROM instance_revisions WHERE instance_id = ?1";
 
 fn revision_from_row(row: &Row, cipher: &Aes256Gcm) -> rusqlite::Result<Revision> {
@@ -776,6 +786,8 @@ fn revision_from_row(row: &Row, cipher: &Aes256Gcm) -> rusqlite::Result<Revision
             network_allow_local: row.get(11)?,
             provision_script: row.get(12)?,
             port_forwards: json(row, 13)?,
+            startup_script: row.get(14)?,
+            teardown_script: row.get(15)?,
         },
     })
 }
@@ -813,8 +825,9 @@ fn put_revision(
         &format!(
             "INSERT INTO instance_revisions (instance_id, revision, cpus, memory_mib, disk_gb,
              command, arguments, working_directory, environment, mounts, network_default,
-             network_rules, network_allow_local, provision_script, port_forwards)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+             network_rules, network_allow_local, provision_script, port_forwards, startup_script,
+             teardown_script)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT (instance_id, revision) DO UPDATE SET
              cpus = excluded.cpus, memory_mib = excluded.memory_mib, disk_gb = excluded.disk_gb,
              command = excluded.command, arguments = excluded.arguments,
@@ -823,7 +836,9 @@ fn put_revision(
              network_rules = excluded.network_rules,
              network_allow_local = excluded.network_allow_local,
              provision_script = excluded.provision_script,
-             port_forwards = excluded.port_forwards
+             port_forwards = excluded.port_forwards,
+             startup_script = excluded.startup_script,
+             teardown_script = excluded.teardown_script
          WHERE booted_at IS NULL AND NOT {SNAPSHOTTED}"
         ),
         params![
@@ -842,6 +857,8 @@ fn put_revision(
             config.network_allow_local,
             config.provision_script,
             serde_json::to_string(&config.port_forwards)?,
+            config.startup_script,
+            config.teardown_script,
         ],
     )?;
     Ok(())
