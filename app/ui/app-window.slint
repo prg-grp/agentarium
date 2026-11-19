@@ -344,6 +344,16 @@ export component AppWindow inherits Window {
 
                                         MenuSeparator { }
 
+                                        // Copies the disk, snapshots and settings into a new
+                                        // instance below this one; only while it is stopped.
+                                        MenuItem {
+                                            title: "Duplicate";
+                                            enabled: item.state == InstanceState.stopped;
+                                            activated => {
+                                                root.instance-action(item.id, InstanceAction.duplicate);
+                                            }
+                                        }
+
                                         MenuItem {
                                             title: "Delete";
                                             activated => {

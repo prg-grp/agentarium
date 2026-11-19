@@ -9,7 +9,7 @@ export enum InstanceState { running, agent-exited, maintenance, startup-failed, 
 // or disk size). See save_kind in src/settings.rs.
 export enum SaveKind { save, restart-agent, reboot }
 
-export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, restart-agent, delete }
+export enum InstanceAction { start, stop, boot-maintenance, restart-maintenance, restart-agent, duplicate, delete }
 
 // A preset offered on the Harness step, in the order of Preset::ALL (src/preset.rs).
 export struct PresetRow {

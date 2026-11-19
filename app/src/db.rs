@@ -416,6 +416,68 @@ impl Db {
         })
     }
 
+    /// Stores a copy of the instance `from` as `id`, named `name`, right below it in the
+    /// sidebar's order: its revisions and its snapshots (with new ids), but not its boots.
+    /// The caller has cloned `from`'s folder `dir_from` to `dir_to`; the disk paths are
+    /// moved there.
+    pub fn duplicate_instance(
+        &self,
+        from: &str,
+        id: &str,
+        name: &str,
+        dir_from: &Path,
+        dir_to: &Path,
+    ) -> Result<Instance> {
+        let moved = |path: &Path| -> Result<String> {
+            Ok(dir_to
+                .join(path.strip_prefix(dir_from)?)
+                .to_string_lossy()
+                .into_owned())
+        };
+        let source = self.instance(from)?;
+        let snapshots = self.snapshots(from)?;
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE instances SET position = position + 1
+             WHERE position > (SELECT position FROM instances WHERE id = ?1)",
+            [from],
+        )?;
+        tx.execute(
+            "INSERT INTO instances (id, name, disk_path, kernel, base, provisioned_at, position,
+                 autostart, current_revision)
+             SELECT ?2, ?3, ?4, kernel, base, provisioned_at, position + 1, autostart,
+                 current_revision
+             FROM instances WHERE id = ?1",
+            params![from, id, name, moved(&source.disk_path)?],
+        )?;
+        // The environment stays encrypted with the same key, so it is copied as it is.
+        tx.execute(
+            "INSERT INTO instance_revisions (instance_id, revision, created_at, booted_at, cpus,
+                 memory_mib, disk_gb, command, arguments, working_directory, environment, mounts,
+                 network_default, network_rules, network_allow_local, port_forwards,
+                 provision_script)
+             SELECT ?2, revision, created_at, booted_at, cpus, memory_mib, disk_gb, command,
+                 arguments, working_directory, environment, mounts, network_default,
+                 network_rules, network_allow_local, port_forwards, provision_script
+             FROM instance_revisions WHERE instance_id = ?1",
+            [from, id],
+        )?;
+        for snapshot in &snapshots {
+            tx.execute(
+                "INSERT INTO snapshots (id, instance_id, revision, name, disk_path, created_at)
+                 SELECT ?2, ?3, revision, name, ?4, created_at FROM snapshots WHERE id = ?1",
+                params![
+                    snapshot.id,
+                    uuid::Uuid::now_v7().to_string(),
+                    id,
+                    moved(&snapshot.disk_path)?
+                ],
+            )?;
+        }
+        tx.commit()?;
+        self.instance(id)
+    }
+
     /// The revision the instance's next boot uses.
     pub fn current_revision(&self, instance_id: &str) -> Result<Revision> {
         Ok(self.conn.query_row(

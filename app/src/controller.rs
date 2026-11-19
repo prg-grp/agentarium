@@ -1276,6 +1276,59 @@ impl VmControl {
         }
     }
 
+    /// Copies the stopped instance into a new one right below it in the sidebar, named with
+    /// " clone" appended (again, until the name is free). Its folder is cloned on APFS
+    /// without the logs, so the copy starts with no history; a failure shows in the
+    /// original's terminals and leaves nothing behind.
+    pub fn duplicate(&self, id: &str) {
+        if self.running.borrow().contains_key(id) {
+            return;
+        }
+        let Some((row, source)) = self
+            .instances
+            .iter()
+            .enumerate()
+            .find(|(_, item)| item.id == id)
+        else {
+            return;
+        };
+        let mut name = format!("{} clone", source.name);
+        while self
+            .instances
+            .iter()
+            .any(|item| item.name.to_lowercase() == name.to_lowercase())
+        {
+            name.push_str(" clone");
+        }
+        let new_id = uuid::Uuid::now_v7().to_string();
+        let duplicated = (|| -> db::Result<db::Instance> {
+            let (from, to) = (db::instance_dir(id)?, db::instance_dir(&new_id)?);
+            crate::vm::create_disk(&from, &to)?;
+            if let Err(error) = std::fs::remove_dir_all(to.join("logs"))
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                return Err(error.into());
+            }
+            self.db.duplicate_instance(id, &new_id, &name, &from, &to)
+        })();
+        let instance = match duplicated {
+            Ok(instance) => instance,
+            Err(error) => {
+                if let Ok(dir) = db::instance_dir(&new_id) {
+                    let _ = std::fs::remove_dir_all(dir);
+                }
+                return self.detach(id, &format!("Couldn't duplicate the instance: {error}"));
+            }
+        };
+        self.instances.insert(row + 1, crate::to_item(instance));
+        // The selection stays on the same instance.
+        if let Some(ui) = self.ui.upgrade()
+            && ui.get_selected_index() > row as i32
+        {
+            ui.set_selected_index(ui.get_selected_index() + 1);
+        }
+    }
+
     /// Opens the delete confirmation for the instance, with what deleting it removes.
     pub fn ask_delete(&self, id: &str) {
         let Some(ui) = self.ui.upgrade() else {

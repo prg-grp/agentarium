@@ -244,6 +244,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         InstanceAction::Stop => c.stop(&id, AfterStop::Nothing),
         InstanceAction::RestartMaintenance => c.stop(&id, AfterStop::Boot(BootMode::Maintenance)),
         InstanceAction::RestartAgent => c.stop(&id, AfterStop::Boot(BootMode::Agent)),
+        InstanceAction::Duplicate => c.duplicate(&id),
         InstanceAction::Delete => c.ask_delete(&id),
     });
     let c = control.clone();
