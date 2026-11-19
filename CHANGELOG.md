@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.1.0](https://github.com/prg-grp/agentarium/compare/v1.0.0...v1.1.0) (2026-11-19)
+
+
+### Features
+
+* add feedback button to preferences ([07c095b](https://github.com/prg-grp/agentarium/commit/07c095be2bcb3b8499541cd47c7239d98663d4e7)), closes [#23](https://github.com/prg-grp/agentarium/issues/23)
+* add startup and teardown scripts around the agent ([14d48e3](https://github.com/prg-grp/agentarium/commit/14d48e394fab74fe3b76a5427452ecd4c6945fa4)), closes [#21](https://github.com/prg-grp/agentarium/issues/21)
+* duplicate stopped instances from the sidebar ([cf4025e](https://github.com/prg-grp/agentarium/commit/cf4025e3bf178c744143d5580db244b27e7dc2b7)), closes [#12](https://github.com/prg-grp/agentarium/issues/12)
+* keep the Mac awake while instances run ([78f0c92](https://github.com/prg-grp/agentarium/commit/78f0c92f1894f4aa803510536c219ec21a37be5a)), closes [#16](https://github.com/prg-grp/agentarium/issues/16)
+* remember the selected tab per instance ([8ce2d62](https://github.com/prg-grp/agentarium/commit/8ce2d62063229d0d9e0e4ae11ff20654119e2f59)), closes [#18](https://github.com/prg-grp/agentarium/issues/18)
+
 ## 1.0.0 (2026-11-16)
 
 
