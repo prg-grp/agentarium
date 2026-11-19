@@ -1,4 +1,4 @@
-// Preferences: app updates, snapshots, the guest image and the licenses. See design/preferences.md.
+// Preferences: app updates, snapshots, sleep, the guest image and the licenses. See design/preferences.md.
 
 import { ScrollView } from "std-widgets.slint";
 import { Theme } from "theme.slint";
@@ -41,6 +41,12 @@ export global VmDefaults {
     callback set-cpus(cpus: int);
     callback set-memory(gb: int);
     callback set-disk(gb: int);
+}
+
+// Whether the Mac stays awake while instances run. Rust (src/controller.rs) owns it.
+export global Power {
+    in property <bool> keep-awake;
+    callback set-keep-awake(on: bool);
 }
 
 // A label on the left, its value or control on the right.
@@ -278,6 +284,39 @@ export component PreferencesView {
                                 text: Snapshots.auto-snapshot
                                     ? "New instances get a snapshot named \"Freshly provisioned\" once provisioning succeeds, so you can reset them later."
                                     : "No snapshot is taken automatically.";
+                                color: Theme.tx3;
+                                font-size: Theme.font-small;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                Group {
+                    title: "Sleep";
+                    description: "Instances pause while your Mac sleeps.";
+
+                    Row {
+                        label: "Keep Mac awake";
+                        VerticalLayout {
+                            spacing: 6px;
+                            alignment: start;
+
+                            HorizontalLayout {
+                                alignment: start;
+                                SegmentedControl {
+                                    options: ["On", "Off"];
+                                    selected: Power.keep-awake ? 0 : 1;
+                                    changed(index) => {
+                                        Power.set-keep-awake(index == 0);
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: Power.keep-awake
+                                    ? "While any instance runs, including in maintenance, your Mac doesn't sleep. The display can still turn off."
+                                    : "Your Mac sleeps as usual.";
                                 color: Theme.tx3;
                                 font-size: Theme.font-small;
                                 wrap: word-wrap;

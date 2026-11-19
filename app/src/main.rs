@@ -86,6 +86,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     let c = control.clone();
     ui.global::<GuestImage>().on_quit(move || c.quit());
+    let c = control.clone();
+    ui.global::<Power>()
+        .on_set_keep_awake(move |on| c.set_keep_awake(on));
     let updater = update::Updater::new(&ui, db.clone(), control.clone());
     let licenses = licenses_window::Licenses::default();
     ui.on_open_licenses(move || licenses.open());

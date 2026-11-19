@@ -65,9 +65,13 @@ use crate::snapshots;
 use crate::terminal::{Console, Terminal};
 use crate::vm::{BootMode, SharedFolder, Vm, VmSpec, VmState};
 use crate::{
-    AppWindow, Deletion, ForwardItem, InstanceItem, InstanceState, Snapshots, StatusReading, Tone,
-    Usage,
+    AppWindow, Deletion, ForwardItem, InstanceItem, InstanceState, Power, Snapshots, StatusReading,
+    Tone, Usage,
 };
+
+/// The preference that keeps the Mac awake while instances run ("on") or not ("off", the
+/// default).
+const KEEP_AWAKE_KEY: &str = "keep_awake";
 
 const STOPPED_MESSAGE: &str = "The virtual machine is stopped. Start it to open its console.";
 const SHELL_MESSAGE: &str = "The shell opens when the agent runs.";
@@ -914,6 +918,10 @@ pub struct VmControl {
     size: Cell<(i32, i32)>,
     /// Set once the app is quitting; the event loop ends when all VMs have stopped.
     quitting: Cell<bool>,
+    /// The preference to keep the Mac awake while VMs run.
+    keep_awake: Cell<bool>,
+    /// The power assertion, held while the preference is on and a VM runs.
+    awake: RefCell<Option<keepawake::KeepAwake>>,
 }
 
 impl VmControl {
@@ -928,7 +936,18 @@ impl VmControl {
             view: Cell::new(View::Session),
             size: Cell::new((80, 24)),
             quitting: Cell::new(false),
+            keep_awake: Cell::new(false),
+            awake: RefCell::default(),
         });
+        let keep_awake = control
+            .db
+            .preference(KEEP_AWAKE_KEY)
+            .inspect_err(|error| eprintln!("Couldn't read the keep awake preference: {error}"))
+            .ok()
+            .flatten()
+            .is_some_and(|value| value == "on");
+        control.keep_awake.set(keep_awake);
+        ui.global::<Power>().set_keep_awake(keep_awake);
         CONTROL.set(Rc::downgrade(&control));
         control
     }
@@ -1015,7 +1034,40 @@ impl VmControl {
                 latest: None,
             },
         );
+        self.sync_awake();
         self.show(id, mode, VmState::Starting);
+    }
+
+    /// Saves the preference to keep the Mac awake while VMs run, and applies it right away.
+    pub fn set_keep_awake(&self, on: bool) {
+        if let Err(error) = self
+            .db
+            .set_preference(KEEP_AWAKE_KEY, if on { "on" } else { "off" })
+        {
+            eprintln!("Couldn't save the keep awake preference: {error}");
+        }
+        self.keep_awake.set(on);
+        if let Some(ui) = self.ui.upgrade() {
+            ui.global::<Power>().set_keep_awake(on);
+        }
+        self.sync_awake();
+    }
+
+    /// Holds the power assertion while the preference is on and a VM runs in any mode, and
+    /// releases it otherwise. The display may still sleep.
+    fn sync_awake(&self) {
+        let mut awake = self.awake.borrow_mut();
+        if !self.keep_awake.get() || self.running.borrow().is_empty() {
+            *awake = None;
+        } else if awake.is_none() {
+            *awake = keepawake::Builder::default()
+                .idle(true)
+                .sleep(true)
+                .reason("Agentarium instances are running")
+                .create()
+                .inspect_err(|error| eprintln!("Couldn't keep the Mac awake: {error}"))
+                .ok();
+        }
     }
 
     /// The boot of the instance's VM while it runs.
@@ -1510,6 +1562,7 @@ impl VmControl {
                 let Some(run) = self.running.borrow_mut().remove(id) else {
                     return;
                 };
+                self.sync_awake();
                 if let Err(error) = self.db.end_boot(run.boot) {
                     eprintln!("Couldn't record the end of the boot: {error}");
                 }

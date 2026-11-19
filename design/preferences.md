@@ -1,6 +1,6 @@
 # Preferences
 
-App-wide settings: updates of Agentarium itself, the resources new instances start with, snapshots after provisioning, the guest image, and its licenses. Frame: [app-shell.md](app-shell.md) sidebar; the main area shows this view instead of an instance, with no instance header or tab bar.
+App-wide settings: updates of Agentarium itself, the resources new instances start with, snapshots after provisioning, keeping the Mac awake, the guest image, and its licenses. Frame: [app-shell.md](app-shell.md) sidebar; the main area shows this view instead of an instance, with no instance header or tab bar.
 
 ## Layout
 
@@ -27,6 +27,11 @@ App-wide settings: updates of Agentarium itself, the resources new instances sta
 │                  │ A snapshot keeps an instance's disk and configuration, so you can …  │
 │                  │ After provisioning  [ On | Off ]                                     │
 │                  │             New instances get a snapshot named "Freshly provisioned" │
+│                  ├──────────────────────────────────────────────────────────────────────┤
+│                  │ Sleep                                                                │
+│                  │ Instances pause while your Mac sleeps.                               │
+│                  │ Keep Mac awake  [ On | Off ]                                         │
+│                  │             Your Mac sleeps as usual.                                │
 │                  ├──────────────────────────────────────────────────────────────────────┤
 │                  │ Guest image                                                          │
 │                  │ The Linux kernel and root filesystem that new instances start from.  │
@@ -63,6 +68,8 @@ App-wide settings: updates of Agentarium itself, the resources new instances sta
 - New instances description: "The processors, memory and disk new instances start with. You can change them while creating an instance and later in its settings."
 - Snapshots description: "A snapshot keeps an instance's disk and configuration, so you can return to it from the instance's Snapshots tab."
 - Snapshot lines: "New instances get a snapshot named "Freshly provisioned" once provisioning succeeds, so you can reset them later." / "No snapshot is taken automatically."
+- Sleep description: "Instances pause while your Mac sleeps."
+- Keep awake lines: "While any instance runs, including in maintenance, your Mac doesn't sleep. The display can still turn off." / "Your Mac sleeps as usual."
 - Guest image description: "The Linux kernel and root filesystem that new instances start from. Existing instances keep the one they were created with."
 - About description: "Agentarium is free software under the GNU Affero General Public License v3.0 or later. It's built on open-source crates, each under its own license."
 - Guest source: "From release vX.Y.Z" or "Built locally with make guest".
@@ -73,5 +80,6 @@ App-wide settings: updates of Agentarium itself, the resources new instances sta
 - "Restart to update" stops every running instance gracefully, like quitting, then installs and relaunches.
 - New instances: the resource steppers of [create-review.md](create-review.md) with the same limits and `tx3` line about the Mac. Each change saves at once and applies to the next instance drafted; a draft in progress keeps its values. Until changed, they show the built-in defaults (2 processors and 4 GB, capped at half of the Mac; 16 GB of disk).
 - "After provisioning" (segmented "On" / "Off", default On) decides whether a "Freshly provisioned" snapshot is taken once an instance's provisioning succeeds ([snapshots.md](snapshots.md)). Switching saves it at once; it applies to provisioning runs from then on.
+- "Keep Mac awake" (segmented "On" / "Off", default Off) keeps the Mac from sleeping while at least one instance runs, in any mode (agent, maintenance, provisioning). The display can still turn off. Switching saves it and applies at once, also to instances already running; the Mac may sleep again once the last instance stops.
 - Switching the channel saves it and checks again; an update found for the other channel is dropped. Dev builds also receive stable releases once those are newer. Switching to Stable never downgrades: the install stays on its version until a newer stable release exists.
 - Until the guest image is ready, [guest-download.md](guest-download.md) blocks the whole app, so this view only ever shows the image as ready.
