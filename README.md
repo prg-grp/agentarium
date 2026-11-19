@@ -1,4 +1,4 @@
-# Agent Toolbox
+# Agentarium
 
 A local-only, macOS-first Rust desktop app that runs AI agents (Claude Code first) in
 persistent Virtualization.framework microVMs. Each agent instance has its own VM settings,
@@ -21,6 +21,7 @@ for UI/UX guidelines.
 - `vms/rootfs/` – Dockerfile for the base guest root filesystem, cloned for every instance
 - `vms/provision/` – the presets' provisioning scripts that install an agent harness in an instance, and the custom agent's template
 - `scripts/` – helper scripts (guest kernel download, kernel bindings for the eBPF programs, codesign runner)
+- `pages` – GitHub Pages ([agentarium.guardiagent.com](https://agentarium.guardiagent.com))
 
 ## Development
 
@@ -89,15 +90,4 @@ commits make the changelog, `docs:`, `chore:`, `refactor:` and `ci:` don't.
 - Installed apps update themselves from these releases; the channel (stable or dev builds) is
   chosen in Preferences.
 
-The signing job runs in the GitHub environment `release` with these secrets:
 
-| Secret | Content |
-|---|---|
-| `MACOS_APP_CERT_P12` | Developer ID Application certificate with its private key, `.p12`, base64 |
-| `MACOS_INSTALLER_CERT_P12` | Developer ID Installer certificate with its private key, `.p12`, base64 |
-| `MACOS_CERT_PASSWORD` | Password of both `.p12` files |
-| `ASC_KEY_ID`, `ASC_ISSUER_ID` | App Store Connect API key (role Developer), for notarization |
-| `ASC_KEY_P8` | The API key's `.p8` file content |
-
-The repository needs "Read and write permissions" and "Allow GitHub Actions to create and
-approve pull requests" under Settings → Actions → General. No personal access token is needed.
