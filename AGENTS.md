@@ -26,7 +26,7 @@ Committing in this repository adheres to [conventional commits](https://www.conv
 ## Implementation
 If useful or necessary, use external crates where possible to deliver functionality and features to the app. Rather than reinventing the wheel for each and every functionality. If in doubt, ask the user if a particular crate shall be used or not.
 
-For Migrations, Schema Changes, Protocol Versions and similar: the application is not deployed and productive yet. Until this instruction here is gone, treat the application as dev-only. Thus, you must modify the first sql migration and the protocol versions in protobuf stay at 1. If there are schema changes, notify and instruct the user after the implementation to clean the application directory (make clean-app).
+The application has been deployed as version 1.0.0. Now, all changes in the database schema need to use proper migration scripts. Altough in between stable releases - while creating dev releases - the same migration may be changed. Ask the user if a change in the schema shall generate a new migration or update the latest.
 
 ## Testing and Verification
 If not explicitly requested in a prompt/session, this project does not need the addition of tests. So, no UI/magic tests shall be generated with the exception if specifically requested for a certain feature. This also accounts for general analysis. Checking if the code works shall be done via static analysis as well as local tools such as cargo check or cargo build (preferably cargo check). Along with "no tests": don't run the app to do some verification. Instruct the user how to verify the functionality manually. You are only allowed to run analyzers and build / checks as well as other static analytics tools and formatting tools.
